@@ -1,11 +1,11 @@
 # Eez Funnel - Status
 
-Current phase: PR-000 (local bootstrap verified; remote review pending)
+Current phase: PR-000 (local bootstrap verified; review open)
 Last updated: 2026-10-13
 
 ## Phases
 
-- [ ] PR-000 Bootstrap (local checks verified; PR and hosted CI pending)
+- [ ] PR-000 Bootstrap (local checks verified; PR #1 open; hosted CI pending)
 - [ ] PR-001 xtask
 - [ ] PR-002 Worker + D1 + R2 + KV
 - [ ] PR-003 Schema + seed themes
@@ -41,8 +41,8 @@ The application libraries remain empty. Product behavior, Cloudflare deployment,
 
 ## Blockers
 
-The runtime currently denies api.github.com, so opening the GitHub PR and inspecting hosted CI are blocked. The domain addition is saved in the environment configuration draft. Git read and push access to the selected repository work.
+No local bootstrap blockers. [PR #1](https://github.com/lianihossam-eng/EezFunnels/pull/1) is open; hosted CI was in progress at the last check. GitHub reports the repository as public.
 
 ## Next action
 
-Finish PR-000 remote review after api.github.com access is applied. Then execute PR-001 for the full ci, audit, and deployment automation. No merge or release is authorized by a local check alone.
+Finish PR-000 review and verify hosted CI. Then execute PR-001 for the full ci, audit, and deployment automation. No merge or release is authorized by a local check alone.
