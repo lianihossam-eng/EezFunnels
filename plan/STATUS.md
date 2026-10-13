@@ -8,7 +8,7 @@ Last updated: 2026-10-13
 - [x] PR-000 Bootstrap (merged as PR #1 into `main`)
 - [x] PR-001 xtask (merged as PR #2; merge commit `79d85c7`)
 - [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
-- [ ] PR-003 Schema + seed themes (implementation in progress; no PR opened)
+- [ ] PR-003 Schema + seed themes (PR #4 open; implementation verified locally)
 - [ ] PR-004 Domain model
 - [ ] PR-005 Render engine
 - [ ] PR-006 5 sections
@@ -30,12 +30,13 @@ Last updated: 2026-10-13
 ## Verified locally
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and
-implementation-verified locally. PR-003 implementation is locally
-IMPLEMENTATION_VERIFIED on its source tree: it adds the product D1 schema, five
-seeded themes, typed storage records and repository operations. Its local D1
-smoke covers CRUD and immutable revisions, schema-version rejection,
-conditional publication, the 100-revision limit, and a 100-way publication
-race. Local verification does not establish Cloudflare production readiness.
+implementation-verified locally. PR-003 implementation is
+IMPLEMENTATION_VERIFIED on source commit `5b2abbd1c9cfa6c1d4faf3cb8ee7528ec88a480f`:
+it adds the product D1 schema, five seeded themes, typed storage records and
+repository operations. Its local D1 smoke covers CRUD and immutable revisions,
+schema-version rejection, conditional publication, the 100-revision limit, and
+a 100-way publication race. Local verification does not establish Cloudflare
+production readiness.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for
@@ -66,16 +67,23 @@ race. Local verification does not establish Cloudflare production readiness.
 - `scripts/smoke-pr002.sh` remains unchanged. Its final rerun passed the same
   404/405 cases and the D1/R2/KV probe after one earlier transient missing-log
   assertion; PR-003's regression smoke uses the bounded poll described above.
+- PR-003 is open as PR #4 at
+  https://github.com/lianihossam-eng/EezFunnels/pull/4. Hosted CI succeeded on
+  implementation head `5b2abbd1c9cfa6c1d4faf3cb8ee7528ec88a480f` (run
+  `38424516651`). The evidence-only push will start a new run; merge still
+  requires green CI on that latest PR head and Sol review.
+- A measured final PR-003 smoke increased adopted defunct `workerd` processes
+  from 58 to 60 because this container's PID 1 does not reap them. The smoke
+  left zero live Worker processes and closed port 8787; no zombie entries are
+  hidden by the verification.
 
 ## Blockers
 
 - Cloudflare production binding IDs and credentials are unavailable. No remote
   deployment or production binding check has been run.
-- PR-003 has not been opened. Its clean CI, local smoke, and self-audits have
-  passed; final evidence and the PR handoff remain to be committed.
 
 ## Next action
 
-Commit the PR-003 evidence on `feat/003_schema` and open its PR against `main`.
-Sol review and hosted CI must be green on the exact PR head before merge.
-Continue with PR-004 after PR-003 is merged.
+Commit the PR-003 evidence on `feat/003_schema`. Sol review and hosted CI must
+be green on the exact latest PR #4 head before merge. Continue with PR-004 after
+PR-003 is merged.
