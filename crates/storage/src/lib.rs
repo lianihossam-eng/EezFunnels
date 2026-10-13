@@ -6,6 +6,14 @@ use worker::{Env, Error, Result};
 
 pub mod repository;
 
+pub struct PublicationRegressionObservations {
+    pub unsupported_schema_publish_accepted: bool,
+    pub unsupported_schema_published_revision_id: Option<String>,
+    pub current_revision_noop_accepted: bool,
+    pub publication_baseline_cas_successes: usize,
+    pub distinct_candidate_cas_successes: usize,
+}
+
 pub struct Bindings {
     database: worker::D1Database,
     bucket: worker::Bucket,
@@ -35,7 +43,9 @@ impl Bindings {
         repository::Repository::new(&self.database)
     }
 
-    pub async fn verify_product_repository_round_trip(&self) -> Result<()> {
+    pub async fn verify_product_repository_round_trip(
+        &self,
+    ) -> Result<PublicationRegressionObservations> {
         let result = self.run_product_repository_checks().await;
         let repository = self.repository();
         let funnel_cleanup = repository.delete_funnel("pr003-smoke-funnel").await;
@@ -43,10 +53,10 @@ impl Bindings {
 
         match result {
             Err(error) => Err(error),
-            Ok(()) => {
+            Ok(observations) => {
                 funnel_cleanup?;
                 theme_cleanup?;
-                Ok(())
+                Ok(observations)
             }
         }
     }
@@ -92,9 +102,17 @@ impl Bindings {
         Ok(revision_ids)
     }
 
-    pub async fn publish_race_candidate(&self, revision_id: &str) -> Result<bool> {
+    pub async fn publish_race_candidate(
+        &self,
+        revision_id: &str,
+        expected_published_revision_id: Option<&str>,
+    ) -> Result<bool> {
         self.repository()
-            .publish_revision("pr003-race-funnel", revision_id, None)
+            .publish_revision(
+                "pr003-race-funnel",
+                revision_id,
+                expected_published_revision_id,
+            )
             .await
             .map_err(Into::into)
     }
@@ -113,7 +131,7 @@ impl Bindings {
         Ok(())
     }
 
-    async fn run_product_repository_checks(&self) -> Result<()> {
+    async fn run_product_repository_checks(&self) -> Result<PublicationRegressionObservations> {
         let repository = self.repository();
         let seeded_themes = repository.list_themes().await?;
         let expected_theme_ids = ["bold", "corporate", "elegant", "minimal", "playful"];
@@ -235,6 +253,23 @@ impl Bindings {
                 "persisted unsupported schema version was not refused".to_owned(),
             ));
         }
+        let unsupported_schema_publish_accepted = repository
+            .publish_revision(
+                &created_funnel.id,
+                "pr003-persisted-unsupported-revision",
+                None,
+            )
+            .await?;
+        let unsupported_schema_published_revision_id = repository
+            .get_funnel(&created_funnel.id)
+            .await?
+            .and_then(|funnel| funnel.published_revision_id);
+        let funnel_id = D1Type::Text(&created_funnel.id);
+        self.database
+            .prepare("UPDATE funnels SET published_revision_id = NULL WHERE id = ?")
+            .bind_refs([&funnel_id])?
+            .run()
+            .await?;
         self.database
             .prepare("DELETE FROM revisions WHERE id = ?")
             .bind_refs([&persisted_unsupported_id])?
@@ -313,6 +348,23 @@ impl Bindings {
             ));
         }
 
+        let current_revision_noop_accepted = repository
+            .publish_revision(
+                &created_funnel.id,
+                &first_revision.id,
+                Some(&first_revision.id),
+            )
+            .await?;
+        let pointer_after_noop = repository
+            .get_funnel(&created_funnel.id)
+            .await?
+            .and_then(|funnel| funnel.published_revision_id);
+        if pointer_after_noop.as_deref() != Some(&first_revision.id) {
+            return Err(Error::RustError(
+                "no-op publication changed the published revision".to_owned(),
+            ));
+        }
+
         let second_revision = repository
             .create_revision(&NewRevision {
                 id: "pr003-smoke-revision-2".to_owned(),
@@ -322,14 +374,34 @@ impl Bindings {
                 render_manifest_json: "{}".to_owned(),
             })
             .await?;
-        if !repository
+        let third_revision = repository
+            .create_revision(&NewRevision {
+                id: "pr003-smoke-revision-3".to_owned(),
+                funnel_id: created_funnel.id.clone(),
+                schema_version: 1,
+                data_json: "{\"schema_version\":1,\"sections\":[{\"id\":\"other\"}]}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await?;
+        let first_candidate_won = repository
             .publish_revision(
                 &created_funnel.id,
                 &second_revision.id,
                 Some(&first_revision.id),
             )
-            .await?
-            || repository.get_revision(&first_revision.id).await?.is_none()
+            .await?;
+        let second_candidate_won = repository
+            .publish_revision(
+                &created_funnel.id,
+                &third_revision.id,
+                Some(&first_revision.id),
+            )
+            .await?;
+        let distinct_candidate_cas_successes =
+            usize::from(first_candidate_won) + usize::from(second_candidate_won);
+        let publication_baseline_cas_successes =
+            usize::from(current_revision_noop_accepted) + distinct_candidate_cas_successes;
+        if repository.get_revision(&first_revision.id).await?.is_none()
             || !repository.delete_revision(&first_revision.id).await?
         {
             return Err(Error::RustError(
@@ -380,7 +452,13 @@ impl Bindings {
             return Err(Error::RustError("funnel update mismatch".to_owned()));
         }
 
-        Ok(())
+        Ok(PublicationRegressionObservations {
+            unsupported_schema_publish_accepted,
+            unsupported_schema_published_revision_id,
+            current_revision_noop_accepted,
+            publication_baseline_cas_successes,
+            distinct_candidate_cas_successes,
+        })
     }
 
     async fn verify_values(&self, key: &str, value: &str) -> Result<()> {

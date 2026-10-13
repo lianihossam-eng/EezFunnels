@@ -200,6 +200,28 @@ assert response["revisions"] == "ok"
 assert response["themes"] == "ok"
 assert response["publication"] == "ok"
 assert response["unsupported_schema_version"] == "rejected"
+observed = {
+    "unsupported_schema_publish_accepted": response["unsupported_schema_publish_accepted"],
+    "unsupported_schema_published_revision_id": response[
+        "unsupported_schema_published_revision_id"
+    ],
+    "current_revision_noop_accepted": response["current_revision_noop_accepted"],
+    "publication_baseline_cas_successes": response["publication_baseline_cas_successes"],
+    "distinct_candidate_cas_successes": response["distinct_candidate_cas_successes"],
+}
+print(f"publication_regression_observations={json.dumps(observed, sort_keys=True)}")
+failures = []
+if observed["unsupported_schema_publish_accepted"]:
+    failures.append("unsupported schema version was publishable")
+if observed["unsupported_schema_published_revision_id"] is not None:
+    failures.append("unsupported publication changed the funnel pointer")
+if observed["current_revision_noop_accepted"]:
+    failures.append("re-publishing the current revision was counted as a CAS success")
+if observed["publication_baseline_cas_successes"] != 1:
+    failures.append("a published baseline produced more than one successful CAS")
+if observed["distinct_candidate_cas_successes"] != 1:
+    failures.append("distinct candidates did not produce exactly one winner")
+assert not failures, failures
 assert response["correlation_id"] == "pr003-smoke-products"
 assert response["publication_race_funnel_id"] == "pr003-race-funnel"
 assert len(response["publication_race_revision_ids"]) == 100
@@ -248,6 +270,48 @@ with urllib.request.urlopen(request, timeout=30) as response:
     status = json.load(response)
 assert status["published_revision_id"] == winners[0], (status, winners)
 assert status["correlation_id"] == "pr003-race-status", status
+baseline_revision_id = winners[0]
+baseline_candidates = [revision_id for revision_id in revision_ids if revision_id != baseline_revision_id][:2]
+assert len(baseline_candidates) == 2, baseline_candidates
+
+def publish_from_baseline(index, revision_id):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:8787/__local/publication-race?revision_id={revision_id}&expected_published_revision_id={baseline_revision_id}",
+        method="POST",
+        headers={
+            "Host": "localhost:8787",
+            "x-local-probe-token": token,
+            "x-correlation-id": f"pr003-baseline-race-{index}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = json.load(response)
+    assert body["correlation_id"] == f"pr003-baseline-race-{index}", body
+    return revision_id, body["published"]
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    baseline_results = list(
+        executor.map(
+            lambda item: publish_from_baseline(*item), enumerate(baseline_candidates)
+        )
+    )
+
+baseline_winners = [revision_id for revision_id, published in baseline_results if published]
+assert len(baseline_winners) == 1, (baseline_results, baseline_revision_id)
+request = urllib.request.Request(
+    "http://127.0.0.1:8787/__local/publication-race",
+    headers={
+        "Host": "localhost:8787",
+        "x-local-probe-token": token,
+        "x-correlation-id": "pr003-baseline-race-status",
+    },
+)
+with urllib.request.urlopen(request, timeout=30) as response:
+    baseline_status = json.load(response)
+assert baseline_status["published_revision_id"] == baseline_winners[0], (
+    baseline_status,
+    baseline_winners,
+)
 cleanup = urllib.request.Request(
     "http://127.0.0.1:8787/__local/publication-race",
     method="DELETE",
@@ -261,6 +325,11 @@ with urllib.request.urlopen(cleanup, timeout=30) as response:
     cleanup_result = json.load(response)
 assert cleanup_result["status"] == "ok", cleanup_result
 print(f"publication_race_candidates={len(revision_ids)} winners={len(winners)} winner={winners[0]}")
+print(
+    f"baseline_publication_candidates={len(baseline_candidates)} "
+    f"winners={len(baseline_winners)} winner={baseline_winners[0]} "
+    f"baseline={baseline_revision_id}"
+)
 PY
 stop_worker
 assert_port_closed
