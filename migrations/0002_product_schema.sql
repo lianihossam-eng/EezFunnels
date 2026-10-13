@@ -46,6 +46,19 @@ BEGIN
     SELECT RAISE(ABORT, 'published revision must belong to funnel');
 END;
 
+CREATE TRIGGER IF NOT EXISTS funnel_inserted_published_revision_matches_owner
+BEFORE INSERT ON funnels
+WHEN NEW.published_revision_id IS NOT NULL
+    AND NOT EXISTS (
+        SELECT 1
+        FROM revisions
+        WHERE revisions.id = NEW.published_revision_id
+          AND revisions.funnel_id = NEW.id
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'published revision must belong to funnel');
+END;
+
 CREATE TABLE IF NOT EXISTS themes (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
     name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0),
