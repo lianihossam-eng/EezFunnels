@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use eez_domain::ThemePreset;
 use repository::{NewFunnel, NewRevision, NewTheme, RepositoryError};
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
@@ -152,6 +153,18 @@ impl Bindings {
                 != 1
         {
             return Err(Error::RustError("product theme seed mismatch".to_owned()));
+        }
+
+        for preset in ThemePreset::all() {
+            let tokens_json = preset
+                .tokens_json()
+                .map_err(|_| Error::RustError("preset theme serialization failed".to_owned()))?;
+            let Some(theme) = seeded_themes.iter().find(|theme| theme.id == preset.id()) else {
+                return Err(Error::RustError("product theme seed mismatch".to_owned()));
+            };
+            if theme.name != preset.name() || theme.tokens_json != tokens_json {
+                return Err(Error::RustError("product theme preset mismatch".to_owned()));
+            }
         }
 
         let created_theme = repository
@@ -553,3 +566,6 @@ impl Bindings {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod theme_seed_tests;

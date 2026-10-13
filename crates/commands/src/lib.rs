@@ -1,1 +1,83 @@
 #![forbid(unsafe_code)]
+
+use std::fmt::{Display, Formatter};
+
+use eez_domain::{DomainError, Revision, RevisionId, ThemePreset};
+use eez_render::{RenderError, ThemeTokens, RENDERER_VERSION};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeSetCommand {
+    theme_id: ThemePreset,
+}
+
+impl ThemeSetCommand {
+    pub const ID: &str = "theme.set";
+
+    pub fn from_json(parameters: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(parameters)
+    }
+
+    pub const fn theme_id(&self) -> ThemePreset {
+        self.theme_id
+    }
+
+    pub fn execute(
+        &self,
+        source: &Revision,
+        next_revision_id: RevisionId,
+    ) -> Result<ThemeSetResult, ThemeSetError> {
+        let tokens = ThemeTokens::from_preset(self.theme_id)?;
+        let revision =
+            source.fork_with_theme(next_revision_id, tokens.version(), RENDERER_VERSION)?;
+        Ok(ThemeSetResult { revision, tokens })
+    }
+}
+
+pub struct ThemeSetResult {
+    revision: Revision,
+    tokens: ThemeTokens,
+}
+
+impl ThemeSetResult {
+    pub fn revision(&self) -> &Revision {
+        &self.revision
+    }
+
+    pub fn tokens(&self) -> &ThemeTokens {
+        &self.tokens
+    }
+}
+
+#[derive(Debug)]
+pub enum ThemeSetError {
+    Domain(DomainError),
+    Render(RenderError),
+}
+
+impl Display for ThemeSetError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Domain(error) => Display::fmt(error, formatter),
+            Self::Render(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl std::error::Error for ThemeSetError {}
+
+impl From<DomainError> for ThemeSetError {
+    fn from(error: DomainError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+impl From<RenderError> for ThemeSetError {
+    fn from(error: RenderError) -> Self {
+        Self::Render(error)
+    }
+}
+
+#[cfg(test)]
+mod theme_set_tests;

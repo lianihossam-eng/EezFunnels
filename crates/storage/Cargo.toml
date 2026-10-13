@@ -9,5 +9,6 @@ rust-version.workspace = true
 layer = 2
 
 [dependencies]
+eez-domain = { path = "../domain" }
 serde.workspace = true
 worker.workspace = true
