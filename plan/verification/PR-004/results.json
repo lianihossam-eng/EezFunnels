@@ -1,0 +1,124 @@
+{
+  "task": "PR-004",
+  "evidence_refreshed_at_utc": "2026-10-13T17:29:39Z",
+  "branch": "feat/004_domain",
+  "base_commit": "5140163ab122d38554b001299faf6b0eb93fd77d",
+  "verified_source_commit": "6da34d09dae2dc0f958a02323c7f025641b86b30",
+  "source_commit_role": "PR-004 domain model and corrective fixes; this evidence/status update follows in a separate documentation commit",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
+  "source_fingerprint_sha256": "2616ef5777cb5de99e533016e2cb0ec34fc0e81413d4fb8a8769e0b4bc3202b4",
+  "source_sha256": {
+    "apps/api/src/errors.rs": "3270460375e95e0217ee4a8c27c7793584f823a77877c7430bc134f1c4a12afb",
+    "crates/domain/src/lib.rs": "a269671d93dc0baa9f46b552a9e6e7212b24784f31d0c77149f3d12c2e994c54",
+    "plan/contracts/C-04_errors.md": "239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3"
+  },
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "isolated_target_dir": "/workspace/.eez-pr004-final2-target.7nlMTa",
+  "checks": [
+    {
+      "name": "hydrated_publication_state_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
+      "red_exit_code": 101,
+      "red_observation": "test-first hydrated-state cases could not compile because Funnel had no constructor capable of restoring the loaded published revision",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
+      "green_exit_code": 0,
+      "tests_passed": 10,
+      "cases": [
+        "new funnels start unpublished; hydrated funnels retain their published baseline",
+        "publish succeeds from a hydrated baseline and advances the pointer",
+        "stale publication from hydrated state preserves the loaded pointer",
+        "100 concurrent candidates compare against one hydrated baseline; exactly one succeeds",
+        "schema v1 is supported; missing and unsupported versions emit C-01 codes",
+        "unknown section type, missing section ID, and duplicate order emit exact C-01 codes",
+        "C-01_CONFIG max_sections accepts 100 and rejects 101",
+        "revision sections normalize by order and render manifest fields remain immutable",
+        "revision and render manifest IDs must match",
+        "poisoned publication state maps only to internal/unexpected"
+      ]
+    },
+    {
+      "name": "schema_version_missing_registry_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status",
+      "red_exit_code": 101,
+      "red_observation": "the test expected validation/schema_version_missing but ApiError returned unknown/unclassified",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status",
+      "green_exit_code": 0,
+      "assertion": "validation/schema_version_missing maps to ErrorCategory::Validation and HTTP 400 in the C-04 registry/API test"
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "formatting, Clippy with warnings denied, workspace tests, and layer validation passed",
+      "workspace_test_counts": {
+        "api": 11,
+        "domain": 10,
+        "storage": 4,
+        "xtask": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      }
+    },
+    {
+      "name": "cargo_xtask_ci",
+      "command": "set -euo pipefail; source .project-tools/env.sh; CARGO_TARGET_DIR=/workspace/.eez-pr004-final2-target.7nlMTa cargo xtask ci",
+      "exit_code": 0,
+      "verified": true,
+      "fresh_isolated_target": true,
+      "outcome": "check, workspace tests, API WASM, dashboard WASM, and cargo-audit all passed",
+      "wasm_sha256": {
+        "eez_api.wasm": "b0fbd4841e23037024c63c3bdd529acc0661a4595b54d49e23391be39bdf4e78",
+        "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+      },
+      "audit": {
+        "audit_version": "cargo-audit 0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 105,
+        "findings": 0,
+        "database_update": "the command fetched the RustSec advisory database and updated the crates.io index before scanning"
+      }
+    },
+    {
+      "name": "no_comments_self_audit",
+      "reviewer": "Luna xhigh, manual diff scan",
+      "result": "no comments, TODO/FIXME markers, or lint suppressions were added",
+      "independent_reviewer": "final PR review by Sol and @codex is still required on the corrected exact head"
+    },
+    {
+      "name": "interrogate_self_audit",
+      "reviewer": "Luna xhigh, manual adversarial review using the repository interrogate rubric",
+      "result": "no remaining actionable issue in hydrated state, CAS behavior, shared-baseline concurrency, C-01/C-04 alignment, or API classification",
+      "findings_resolved": [
+        "hydrated funnel publication baseline could not be restored",
+        "C-01 validation/schema_version_missing was absent from the C-04 registry/API mapping"
+      ],
+      "independent_reviewer": "final PR review by Sol and @codex is still required on the corrected exact head"
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "scope_notes": [
+    "The domain package remains dependency-free and defines no serialization format.",
+    "Funnel::from_state restores the loaded published pointer without exposing a mutable setter or naming persistence technology; in-memory compare-and-set remains protected by Mutex.",
+    "C-04 registers validation/schema_version_missing as validation/400 to satisfy the approved C-01 error code. Other local domain diagnostics do not create new C-04 promises.",
+    "Section content, nested blocks, and render behavior remain in later PRs; this PR enforces the configured section-count limit."
+  ],
+  "hosted_ci": {
+    "last_green_run_id": 38438853320,
+    "last_green_head": "180d5af03eb415d018117fb892211af16cf092be",
+    "last_green_result": "success",
+    "follow_up_required": "the evidence-only commit following this run creates a new PR head; hosted CI must pass on that resulting exact head",
+    "required_head": "the final pushed PR #5 head after this evidence refresh"
+  },
+  "reviews": {
+    "sol": "re-review required on corrected final PR head",
+    "codex": "re-review required on corrected final PR head"
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "reason": "PR-004 is a local domain model change; Cloudflare production bindings and credentials remain unavailable"
+  }
+}

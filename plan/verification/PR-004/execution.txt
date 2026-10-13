@@ -1,0 +1,44 @@
+PR-004 corrective verification transcript
+
+Evidence refreshed: 2026-10-13T17:29:39Z
+Branch: feat/004_domain
+Base commit: 5140163ab122d38554b001299faf6b0eb93fd77d
+Verified source commit: 6da34d09dae2dc0f958a02323c7f025641b86b30
+Source file SHA-256:
+- apps/api/src/errors.rs 3270460375e95e0217ee4a8c27c7793584f823a77877c7430bc134f1c4a12afb
+- crates/domain/src/lib.rs a269671d93dc0baa9f46b552a9e6e7212b24784f31d0c77149f3d12c2e994c54
+- plan/contracts/C-04_errors.md 239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3
+Source fingerprint: 2616ef5777cb5de99e533016e2cb0ec34fc0e81413d4fb8a8769e0b4bc3202b4
+The fingerprint is SHA-256 of sorted `path SHA256\n` lines in results.json.
+
+Toolchain: rustc 1.85.0 / Cargo 1.85.0
+
+Corrective scope:
+- Added `Funnel::from_state` to construct a funnel with its already-published revision loaded. `Funnel::new` still creates an unpublished funnel; no mutable setter was added. The domain API uses no persistence-layer vocabulary.
+- Added a success case and stale-CAS case from a hydrated published baseline. Updated the 100-candidate barrier race so all candidates compare against one hydrated baseline and exactly one succeeds.
+- Added C-01's `validation/schema_version_missing` to C-04 as validation/400 and to `ApiError::from_code`; the API contract-registry test asserts the stable code, category, and status.
+- `PublicationStateUnavailable` continues to expose only `internal/unexpected`. Other domain-only diagnostics remain outside C-04 until a later API integration defines the transport mapping.
+
+TDD observations:
+- P2 hydrated-state regression: `source .project-tools/env.sh && cargo test -p eez-domain --locked` — red, exit 101, because the test-first hydrated-state calls had no constructor/API to restore a published baseline. After adding `Funnel::from_state`, the same command passed, 10/10 tests.
+- P1 C-01/C-04 registry mismatch: `source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status` — red, exit 101; expected `validation/schema_version_missing`, got `unknown/unclassified`. After registering the code in C-04 and mapping it in `ApiError`, the same command passed.
+
+Final local checks:
+- `source .project-tools/env.sh && cargo xtask check` — exit 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Counts: API 11, domain 10, storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5.
+- Fresh isolated target: `/workspace/.eez-pr004-final2-target.7nlMTa`.
+- `set -euo pipefail; source .project-tools/env.sh; CARGO_TARGET_DIR=/workspace/.eez-pr004-final2-target.7nlMTa cargo xtask ci` — exit 0. Check, workspace tests, API WASM, dashboard WASM, and cargo-audit passed.
+- API WASM SHA-256: `b0fbd4841e23037024c63c3bdd529acc0661a4595b54d49e23391be39bdf4e78`; dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
+- cargo-audit 0.22.2 loaded 1,310 advisories, scanned 105 locked dependencies, and reported zero findings.
+- `git diff --check` — exit 0.
+
+Self-audits, Luna xhigh:
+- No-comments: the final source diff adds no comments, TODO/FIXME markers, or lint suppressions.
+- Interrogate: challenged state hydration, stale and successful CAS from a persisted baseline, barrier-based shared-baseline concurrency, C-01/C-04 consistency, and stable API classification. No further actionable finding remained. The two previously reported review findings (hydrated pointer and missing C-04 mapping) are covered by the red/green regressions above.
+- These self-audits were performed in Luna xhigh. Sol and @codex must review the final pushed head separately; reviews on the prior PR head do not cover these corrections.
+
+PR state:
+- PR #5 is open at https://github.com/lianihossam-eng/EezFunnels/pull/5. Hosted CI run `38438853320` passed on pushed head `180d5af03eb415d018117fb892211af16cf092be`. This evidence-only refresh follows that head, so the resulting PR head must pass hosted CI again.
+- Sol/@codex reviews are required again on the resulting final head. No merge or remote deployment was performed.
+
+Deployment:
+- No remote deployment was run. Cloudflare production binding IDs and credentials remain unavailable.

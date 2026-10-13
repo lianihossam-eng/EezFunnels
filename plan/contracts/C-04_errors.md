@@ -21,6 +21,7 @@ Stable, transport-independent error taxonomy.
 | validation/invalid_json                 | validation    | 400  |
 | validation/missing_field                | validation    | 400  |
 | validation/order_duplicate              | validation    | 400  |
+| validation/schema_version_missing       | validation    | 400  |
 | validation/schema_version_unsupported   | validation    | 400  |
 | validation/section_type_unknown         | validation    | 400  |
 | validation/section_missing_id           | validation    | 400  |

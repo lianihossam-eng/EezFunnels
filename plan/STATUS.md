@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-003 fix re-review (`feat/003_schema`)
+Current phase: PR-004 domain model (`feat/004_domain`)
 Last updated: 2026-10-13
 
 ## Phases
@@ -8,8 +8,8 @@ Last updated: 2026-10-13
 - [x] PR-000 Bootstrap (merged as PR #1 into `main`)
 - [x] PR-001 xtask (merged as PR #2; merge commit `79d85c7`)
 - [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
-- [ ] PR-003 Schema + seed themes (PR #4 open; insert ownership guard and publication regressions fixed locally; final-head CI and Sol review pending)
-- [ ] PR-004 Domain model
+- [x] PR-003 Schema + seed themes (merged as PR #4; merge commit `5140163`)
+- [ ] PR-004 Domain model (implementation verified locally; PR #5 open, corrective update prepared)
 - [ ] PR-005 Render engine
 - [ ] PR-006 5 sections
 - [ ] PR-007 5 themes
@@ -29,14 +29,23 @@ Last updated: 2026-10-13
 
 ## Verified locally
 
-Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and
-implementation-verified locally. PR-003's product schema, theme seeds, typed storage, and
-repository behavior are implementation-verified locally at source commit
-`d3e1898f86403bb5c834f2ed736b072440e0d21e`. The insert regression tests were committed first at
-`b8c7e968b20cf8bd2267951eeab84f134eb4845d`; the trigger fix follows at `d3e1898f`. Earlier
-publication guards are at `35246f2481c7bc9402233b9679e527cda13c3742`. The final fresh-target
-`cargo xtask ci`, `cargo xtask check`, local PR-002 and PR-003 Wrangler smokes all passed. Hosted
-CI and Sol review on the next pushed PR #4 head remain pending.
+Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
+implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository
+behavior are integration-verified at merged main commit
+`5140163ab122d38554b001299faf6b0eb93fd77d` (PR #4 head `fb0ffa53a15d586ce283e2ff3d3cba5670b11f4f`).
+The insert regression tests were committed first at `b8c7e968b20cf8bd2267951eeab84f134eb4845d`;
+the trigger fix follows at `d3e1898f86403bb5c834f2ed736b072440e0d21e`. The final fresh-target
+`cargo xtask ci`, `cargo xtask check`, local PR-002 and PR-003 Wrangler smokes passed; hosted CI
+run `38431629403` passed on the exact merged PR head, and Sol/@codex reviews were clean. PR-004
+domain implementation plus review fixes is verified locally at source commit
+`6da34d09dae2dc0f958a02323c7f025641b86b30`. `Funnel::from_state` restores a published baseline
+when hydrating a funnel, and C-04 now registers C-01's `validation/schema_version_missing` code as
+HTTP 400 with matching API mapping. The domain suite has 10 passing tests. `cargo xtask check` and
+clean isolated `cargo xtask ci` passed; the audit scanned 105 locked dependencies against 1,310
+advisories with zero findings. Exact commands, TDD observations, source hashes, and self-audits are
+in `plan/verification/PR-004/`. Hosted CI run `38438853320` passed on pushed head
+`180d5af03eb415d018117fb892211af16cf092be`; the evidence refresh that records this run requires a
+new hosted run on its resulting head before merge.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -71,23 +80,23 @@ CI and Sol review on the next pushed PR #4 head remain pending.
   records, avoiding a transient log-flush race.
 - `scripts/smoke-pr002.sh` remains unchanged. Its final rerun passed host denial, health, D1/R2/KV,
   and all 404/405 correlation-ID cases.
-- PR-003 is open as PR #4 at
-  https://github.com/lianihossam-eng/EezFunnels/pull/4. CI run `38428983108` succeeded on prior
-  head `0eeeb3584b30c7741350eca6e2f2ca1d34c5015e`. A new source and evidence head will run hosted CI
-  after push; merge requires CI green on that exact head and Sol review.
+- PR-003 merged as PR #4 at
+  https://github.com/lianihossam-eng/EezFunnels/pull/4. Hosted CI run `38431629403` passed on
+  head `fb0ffa53a15d586ce283e2ff3d3cba5670b11f4f`; Sol and @codex reviews were clean before merge.
 - A prior measured PR-003 smoke increased adopted defunct `workerd` processes from 58 to 60
   because this container's PID 1 does not reap them. That run left zero live Worker processes and
   closed port 8787; no zombie entries were hidden.
 
 ## Blockers
 
-- Hosted CI has not yet passed on the next pushed PR #4 head. Sol must review that exact head after
-  CI passes.
 - Cloudflare production binding IDs and credentials are unavailable. No remote deployment or
   production binding check has been run.
+- C-01's `validation/schema_version_missing` is now included in C-04 and mapped by `ApiError` to
+  validation/400. Other domain-local diagnostics remain outside the C-04 registry until a later API
+  integration defines their transport mapping.
 
 ## Next action
 
-Push the insert-ownership regression test, migration trigger, and refreshed evidence/status to PR
-#4. Wait for hosted CI and Sol review on that exact latest head before merge. Continue with PR-004
-after PR-003 is merged.
+Push the PR-004 evidence refresh to existing PR #5, rerun hosted CI, and request Sol/@codex review
+on the resulting exact head. Do not merge until both reviews and hosted CI are clean on that same
+head.
