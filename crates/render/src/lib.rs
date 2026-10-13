@@ -11,6 +11,7 @@ pub const RENDERER_VERSION: &str = "renderer-v1";
 const MAX_BLOCKS_PER_SECTION: usize = 50;
 const MAX_SECTION_URL_BYTES: usize = 2_048;
 const MAX_SECTION_CONTENT_BYTES: usize = 1_048_576;
+const CONTENT_CONFIG_HASH_DOMAIN: &[u8] = b"eez-render-section-content-v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenderError {
@@ -21,6 +22,7 @@ pub enum RenderError {
     MissingSectionContent,
     UnexpectedSectionContent,
     SectionContentTypeMismatch,
+    SectionContentHashMismatch,
     UnsafeSectionUrl,
     SectionContentLimitExceeded,
 }
@@ -35,6 +37,9 @@ impl Display for RenderError {
             Self::MissingSectionContent => "revision section has no content",
             Self::UnexpectedSectionContent => "content map contains an unknown section ID",
             Self::SectionContentTypeMismatch => "section content does not match its section type",
+            Self::SectionContentHashMismatch => {
+                "section content hash does not match the render manifest"
+            }
             Self::UnsafeSectionUrl => "section URL is not an allowed same-origin path or HTTPS URL",
             Self::SectionContentLimitExceeded => "section content exceeds the byte or item limit",
         };
@@ -94,6 +99,104 @@ pub struct Testimonial {
 pub struct FooterLink {
     pub label: String,
     pub url: String,
+}
+
+pub fn content_config_hash(contents: &BTreeMap<String, SectionContent>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(CONTENT_CONFIG_HASH_DOMAIN);
+    update_hash_length(&mut digest, contents.len());
+
+    for (id, content) in contents {
+        update_hash_string(&mut digest, id);
+        match content {
+            SectionContent::Hero {
+                title,
+                subtitle,
+                cta_label,
+                cta_url,
+                image,
+            } => {
+                digest.update([1]);
+                update_hash_string(&mut digest, title);
+                update_hash_string(&mut digest, subtitle);
+                update_hash_string(&mut digest, cta_label);
+                update_hash_string(&mut digest, cta_url);
+                match image {
+                    Some(image) => {
+                        digest.update([1]);
+                        update_hash_string(&mut digest, &image.url);
+                        update_hash_string(&mut digest, &image.alt);
+                    }
+                    None => {
+                        digest.update([0]);
+                    }
+                }
+            }
+            SectionContent::Features { items } => {
+                digest.update([2]);
+                update_hash_length(&mut digest, items.len());
+                for item in items {
+                    update_hash_string(&mut digest, &item.title);
+                    update_hash_string(&mut digest, &item.description);
+                }
+            }
+            SectionContent::Testimonials { items } => {
+                digest.update([3]);
+                update_hash_length(&mut digest, items.len());
+                for item in items {
+                    update_hash_string(&mut digest, &item.quote);
+                    update_hash_string(&mut digest, &item.author);
+                    match &item.attribution {
+                        Some(attribution) => {
+                            digest.update([1]);
+                            update_hash_string(&mut digest, attribution);
+                        }
+                        None => {
+                            digest.update([0]);
+                        }
+                    }
+                }
+            }
+            SectionContent::Cta {
+                title,
+                body,
+                cta_label,
+                cta_url,
+            } => {
+                digest.update([4]);
+                update_hash_string(&mut digest, title);
+                update_hash_string(&mut digest, body);
+                update_hash_string(&mut digest, cta_label);
+                update_hash_string(&mut digest, cta_url);
+            }
+            SectionContent::Footer { links, copyright } => {
+                digest.update([5]);
+                update_hash_length(&mut digest, links.len());
+                for link in links {
+                    update_hash_string(&mut digest, &link.label);
+                    update_hash_string(&mut digest, &link.url);
+                }
+                update_hash_string(&mut digest, copyright);
+            }
+        }
+    }
+
+    let mut version = String::from("content-sha256-v1:");
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest.finalize() {
+        version.push(HEX[usize::from(byte >> 4)] as char);
+        version.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    version
+}
+
+fn update_hash_string(digest: &mut Sha256, value: &str) {
+    update_hash_length(digest, value.len());
+    digest.update(value.as_bytes());
+}
+
+fn update_hash_length(digest: &mut Sha256, length: usize) {
+    digest.update((length as u128).to_be_bytes());
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -231,6 +334,9 @@ impl Renderer {
     ) -> Result<String, RenderError> {
         validate_render_context(revision, theme)?;
         validate_section_contents(revision, contents)?;
+        if content_config_hash(contents) != revision.render_manifest().config_hash() {
+            return Err(RenderError::SectionContentHashMismatch);
+        }
         self.render_document(revision, theme, contents)
     }
 
@@ -434,7 +540,7 @@ fn is_safe_section_url(value: &str) -> bool {
             .unwrap_or(false);
     }
 
-    if raw_authority_contains_user_info(value) {
+    if !has_absolute_https_authority(value) || raw_authority_contains_user_info(value) {
         return false;
     }
 
@@ -446,6 +552,15 @@ fn is_safe_section_url(value: &str) -> bool {
                 && url.password().is_none()
         })
         .unwrap_or(false)
+}
+
+fn has_absolute_https_authority(value: &str) -> bool {
+    let Some((scheme, remainder)) = value.split_once("://") else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("https")
+        && !remainder.is_empty()
+        && !remainder.starts_with(['/', '?', '#'])
 }
 
 fn is_valid_https_host(host: Host<&str>) -> bool {

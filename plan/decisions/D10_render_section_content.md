@@ -34,8 +34,19 @@ requires exactly one content value per revision section, rejects extra or missin
 a content variant that does not match the section type. This keeps all section policy behind one
 renderer entry point and leaves domain persistence metadata unchanged.
 
+`RenderManifest::config_hash` binds the immutable content map to that revision. Before constructing
+the manifest, callers calculate the value with the public `content_config_hash(&contents)` function
+and store it as `config_hash`. The
+versioned `content-sha256-v1` digest covers sorted section IDs, each enum variant, every field,
+optional-value markers, and ordered list lengths and entries, using explicit length-prefixed UTF-8
+fields. `Renderer::render` validates the map and then recomputes the digest; a mismatch returns
+`SectionContentHashMismatch` before emitting HTML. Any content edit therefore requires a new digest
+and manifest, and the producer must assign a new revision ID as required by C-01. Reusing a
+manifest while changing map contents is rejected.
+
 Section text is HTML-text encoded and URL attributes are HTML-attribute encoded. URL values may be
-absolute HTTPS URLs with a valid host and no user information, or same-worker root-relative paths
+absolute HTTPS URLs written with an explicit `https://` authority, a valid host, and no user
+information, or same-worker root-relative paths
 that start with one slash and resolve to the fixed same-origin base. Protocol-relative paths are
 rejected. This supports the architecture's `/assets/*` R2 routes without opening external-host
 references. Raw whitespace, controls, quotes, backslashes, and values over 2,048 bytes are rejected
@@ -56,8 +67,9 @@ boundaries.
 
 - Callers must build a section-ID keyed map, in exchange for explicit matching between immutable
   section metadata and the content being rendered.
-- URL references are limited to absolute HTTPS or same-worker root-relative paths, in exchange for
-  supporting `/assets/*` while rejecting `javascript:`, `data:`, and protocol-relative URLs.
+- URL references are limited to explicit absolute `https://` authorities (case-insensitive scheme)
+  or same-worker root-relative paths, in exchange for supporting `/assets/*` while rejecting
+  `https:example.com`, `https:/example.com`, `javascript:`, `data:`, and protocol-relative URLs.
 - Content types live in `eez-render`, in exchange for keeping C-01's domain model free of a wire or
   storage representation.
 
@@ -73,7 +85,8 @@ boundaries.
 ## Open questions and risks
 
 - Should a later product contract allow `mailto:`, arbitrary relative links, or non-HTTPS external
-  URLs? PR-006 accepts only absolute HTTPS and same-worker root-relative paths.
+  URLs? PR-006 accepts only absolute HTTPS with explicit authority and same-worker root-relative
+  paths.
 - The renderer's 1 MiB check covers section IDs and content strings, not the serialized JSON
   punctuation or other funnel metadata; storage/API must retain the full C-01 serialized-payload
   check as an independent boundary.

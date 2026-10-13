@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::content_config_hash;
 use super::{FeatureItem, FooterLink, SectionContent, Testimonial, ThemeTokens};
 use eez_domain::{FunnelId, RenderManifest, Revision, RevisionId, Section};
 
@@ -16,6 +17,29 @@ pub(crate) fn revision_with_theme_version(
     renderer_version: &str,
     theme_version: &str,
 ) -> Revision {
+    revision_with_theme_version_and_contents(
+        sections,
+        renderer_version,
+        theme_version,
+        &BTreeMap::new(),
+    )
+}
+
+pub(crate) fn revision_with_contents(
+    sections: Vec<(&str, &str, usize)>,
+    renderer_version: &str,
+    contents: &BTreeMap<String, SectionContent>,
+) -> Revision {
+    let theme = safe_theme_tokens();
+    revision_with_theme_version_and_contents(sections, renderer_version, theme.version(), contents)
+}
+
+pub(crate) fn revision_with_theme_version_and_contents(
+    sections: Vec<(&str, &str, usize)>,
+    renderer_version: &str,
+    theme_version: &str,
+    contents: &BTreeMap<String, SectionContent>,
+) -> Revision {
     let revision_id = RevisionId::new("revision-1").expect("valid revision ID");
     let sections = sections
         .into_iter()
@@ -28,7 +52,7 @@ pub(crate) fn revision_with_theme_version(
         theme_version,
         renderer_version,
         "assets-hash",
-        "config-hash",
+        content_config_hash(contents),
     )
     .expect("valid render manifest");
     Revision::new(

@@ -1,14 +1,22 @@
 use std::collections::{BTreeMap, HashSet};
 
-use super::{escape_html_attribute, RenderError, Renderer, ThemeTokens};
+use super::{content_config_hash, escape_html_attribute, RenderError, Renderer, ThemeTokens};
 use crate::test_support::{
-    content_map, revision_with_sections, revision_with_theme_version, safe_theme_tokens,
+    content_map, revision_with_contents, revision_with_sections, revision_with_theme_version,
+    revision_with_theme_version_and_contents, safe_theme_tokens,
 };
 use eez_domain::{FunnelId, RenderManifest, Revision, RevisionId};
 
 #[test]
 fn dispatches_each_supported_section_type_in_revision_order() {
-    let revision = revision_with_sections(
+    let contents = content_map(&[
+        ("footer-id", "footer"),
+        ("hero-id", "hero"),
+        ("cta-id", "cta"),
+        ("features-id", "features"),
+        ("testimonials-id", "testimonials"),
+    ]);
+    let revision = revision_with_contents(
         vec![
             ("footer-id", "footer", 40),
             ("hero-id", "hero", 0),
@@ -17,19 +25,10 @@ fn dispatches_each_supported_section_type_in_revision_order() {
             ("testimonials-id", "testimonials", 20),
         ],
         "renderer-v1",
+        &contents,
     );
     let html = Renderer::new()
-        .render(
-            &revision,
-            &safe_theme_tokens(),
-            &content_map(&[
-                ("footer-id", "footer"),
-                ("hero-id", "hero"),
-                ("cta-id", "cta"),
-                ("features-id", "features"),
-                ("testimonials-id", "testimonials"),
-            ]),
-        )
+        .render(&revision, &safe_theme_tokens(), &contents)
         .expect("revision renders");
 
     let expected_order = [
@@ -172,14 +171,15 @@ fn rejects_renderer_and_theme_versions_outside_the_manifest() {
 
 #[test]
 fn rendering_is_deterministic_for_the_render_manifest() {
-    let revision = revision_with_sections(
-        vec![("section-a", "hero", 0), ("section-b", "footer", 1)],
-        "renderer-v1",
-    );
     let theme = safe_theme_tokens();
     let renderer = Renderer::new();
 
     let contents = content_map(&[("section-a", "hero"), ("section-b", "footer")]);
+    let revision = revision_with_contents(
+        vec![("section-a", "hero", 0), ("section-b", "footer", 1)],
+        "renderer-v1",
+        &contents,
+    );
     let first = renderer
         .render(&revision, &theme, &contents)
         .expect("first render");
@@ -202,7 +202,7 @@ fn escapes_untrusted_render_manifest_attribute_values() {
         theme.version(),
         "renderer-v1",
         "assets-hash",
-        "config-hash",
+        content_config_hash(&BTreeMap::new()),
     )
     .expect("render manifest");
     let revision = Revision::new(
@@ -453,12 +453,13 @@ fn ten_thousand_generated_html_and_css_inputs_cannot_inject_active_markup() {
                 safe_theme_tokens()
             }
         };
-        let revision = revision_with_theme_version(
+        let contents = content_map(&[(case.id.as_str(), "hero")]);
+        let revision = revision_with_theme_version_and_contents(
             vec![(case.id.as_str(), "hero", 0)],
             "renderer-v1",
             theme.version(),
+            &contents,
         );
-        let contents = content_map(&[(case.id.as_str(), "hero")]);
         let html = renderer
             .render(&revision, &theme, &contents)
             .expect("hostile ID is escaped");
