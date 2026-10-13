@@ -1,54 +1,65 @@
-PR-005 renderer verification
+PR-005 renderer follow-up verification
 
-Evidence refreshed: 2026-10-13T17:53:42Z
+Evidence refreshed: 2026-10-13T18:20:32Z
 Branch: feat/005_render
 Base commit: c5961dfc77fb60198882fdd7f5909d4e0326933f
-Verified source commit: e4471a0e3d4060ab0c2aa246ec349681ba2b0e1e
-Source fingerprint: 4a879df2d13c4b76b612100a7a002f3f123ba79058f073b29fbfe65245a3153f
+Verified source commit: 622952d5aeadb94c997ff405407f6c9f7461ab45
+Source fingerprint: 1f1376a3fa0b1cf18a820959d5e3e8aa2d5576e72068d4e379e5243f016f23c5
 The fingerprint is SHA-256 of sorted `path SHA256\n` lines recorded in results.json.
 
 Source file SHA-256:
-- Cargo.lock e450186337d88d91621229c699703416b7a1cfb70f219fe61cf271d46dba0966
-- crates/render/Cargo.toml c311465d620545744fa6a122ea01cd3bcefc11ae64f088f565612eaccfbc1cd2
-- crates/render/src/lib.rs 0218b7526a67c19d2b9b3586adff30a521ce1bbf01ed58254d1e9456aa55f35f
+- Cargo.lock d34b118c9f72116d324d2b91da220f1bac8f479b826fc5f77c15749761f3d531
+- Cargo.toml 49dd097ec9b75092285f37e1bdc220f7da961319f4832ceb8d449950391c7229
+- crates/render/Cargo.toml 9372b8094b1927a6f2c3202bcf3b1baa733a2a2abda5b70520711c776d72a416
+- crates/render/src/lib.rs afaac887af41ad6d41598bf52a8b2c27a283e6131c5c0d5c56fa99451c510f77
+- plan/decisions/D9_theme_token_integrity.md 2d7c022fbf8301e51b7e43a323f55a4a6d3052314e64ef44fa7a855cec0a3f95
 
-Toolchain: rustc 1.85.0 and Cargo 1.85.0
+Implementation changes:
+- `ThemeTokens::new` normalizes and validates an immutable map, then derives its stable `sha256-v1:` version from sorted token names and values. The renderer checks that value against the revision manifest.
+- CSS function checks now reject actual case-insensitive `url(` and `expression(` tokens. The restrictive grammar prevents CSS escapes, comments, strings, semicolons, URL schemes, and attribute breakout while accepting `burlywood` and `URL (red)`.
+- The fixed-seed 10,000-case test composes variable-length sequences from 32 HTML and 32 CSS fragments, varies their order and marker insertion position, and proves 10,000 unique rendered IDs and CSS inputs, more than 9,000 unique structural sequences in each set, and full fragment, sequence-length, and insertion-position coverage.
+- D9 records the content-addressed version and the generated-corpus design.
 
-Implementation:
-- `Renderer` emits a static HTML document shell and one ordered wrapper for each supported section type.
-- `ThemeTokens` validates lowercase kebab-case property names and a restricted CSS value grammar before adding sorted custom properties.
-- The renderer escapes untrusted metadata and section IDs in HTML attributes. It replaces all control characters, including NUL, CR, and LF.
-- Section content remains in PR-006.
+Test-first observations on the pre-fix PR-005 implementation:
+- Different theme maps could carry the same caller-supplied `theme-v1`, so a manifest did not identify the immutable contents.
+- `burlywood` was rejected because the prior CSS check banned the `url` substring.
+- The prior fixed-template attack test generated only five distinct CSS values instead of 10,000.
 
-TDD observations:
-- Before implementation, `source .project-tools/env.sh && cargo test -p eez-render` exited 101 because the test-first imports for `RenderError`, `Renderer`, and `ThemeTokens` did not resolve.
-- After implementation, `source .project-tools/env.sh && cargo test -p eez-render --locked` passed all 8 tests. The 10,000-case loop covers hostile section IDs and CSS tokens, including NUL, CR, and LF.
-- The XSS assertions verify unchanged tag and quote counts, reject raw script, style, and image tags, and reject raw NUL, CR, or LF in emitted HTML.
+Targeted test:
+- `source .project-tools/env.sh && cargo test -p eez-render --locked` exited 0: 12 passed, 0 failed.
+- The tests cover five section types and order, safe sorted token injection, content-derived versions and tamper rejection, CSS function-token boundaries, hostile attribute escaping and controls, and the seeded variable-fragment attack corpus.
 
-Final local checks:
+Workspace check:
 - `source .project-tools/env.sh && cargo xtask check` exited 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.
-- `cargo xtask check` counts were API 11, domain 10, render 8, storage 4, xtask 23, bootstrap CLI 2, and PR-001 CLI 5.
-- Fresh isolated target: `/workspace/.eez-pr005-ci.pJUObr`.
-- The exact command sequence was:
+- Workspace test counts: API 11, domain 10, render 12, storage 4, xtask 23, bootstrap CLI 2, and PR-001 CLI 5.
+- `git diff --check` and `cargo fmt --all -- --check` exited 0.
+
+Fresh isolated CI:
+- Target: `/workspace/.eez-pr005-ci.nvNMhl`.
+- Exact command sequence:
 
   ```sh
   ci_target=$(mktemp -d /workspace/.eez-pr005-ci.XXXXXX)
   printf '%s\n' "$ci_target"
   source .project-tools/env.sh
+  rustc --version
+  cargo --version
   CARGO_TARGET_DIR="$ci_target" cargo xtask ci
   ```
 
-- The command printed `/workspace/.eez-pr005-ci.pJUObr` and exited 0. Workspace tests, API WASM, dashboard WASM, and cargo-audit passed.
-- API WASM SHA-256: `ad66a9ed0e53d600eda725563169ca9f7ea98454967efe0329300ce14f3dd2fc`.
+- The target was empty at start. The task completed successfully after workspace check/tests, API WASM, dashboard WASM, and cargo-audit.
+- Rust/Cargo: 1.85.0.
+- API WASM SHA-256: `ffcef25d219978fa9749e2e02d30663ad58ba27e5a69ac8460b166c7d6b1ad8e`.
 - Dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
-- cargo-audit 0.22.2 loaded 1,310 advisories, scanned 105 locked dependencies, and found zero issues. The command fetched the RustSec database and updated the crates.io index.
-- `git diff --check` exited 0.
+- cargo-audit 0.22.2 updated the RustSec advisory database and crates.io index; it loaded 1,310 advisories and scanned 113 locked dependencies.
+- A follow-up cached-database JSON audit, `source .project-tools/env.sh && cargo audit --db .project-tools/cargo/advisory-db --no-fetch --file Cargo.lock --json`, exited 0 and reported 0 vulnerabilities and no warnings.
 
 Self-audits, Luna xhigh:
-- No-comments found no new comments, TODO/FIXME markers, or lint suppressions. The prescribed Comment Sicko subagent type is unavailable in the exposed tools.
-- Interrogate checked HTML attribute boundaries, CSS token grammar, render-manifest version checks, deterministic ordering, section dispatch, and the 10,000-case attack test. No actionable issue remained in that pass.
-- The implementation assignment keeps code work in Luna. Independent Sol and @codex reviews remain required on the pushed PR head.
+- No-comments: the manual diff scan found no source comments, TODO/FIXME markers, or lint suppressions. Raw marker hits were Cargo registry URLs and a CSS comment-delimiter test payload string. The Comment Sicko subagent type is not exposed in this environment, so the prescribed independent tool could not be run.
+- Interrogate: adversarial self-review found no further actionable issue in digest canonicalization, token immutability, CSS function-token boundaries, HTML escaping, sequence variation, or manifest matching. Multi-model local reviewer spawning was unavailable under the approved Luna-only implementation constraint; fresh @codex and Sol reviews are required on the pushed final head.
 
 PR state:
-- PR #6 is not open yet. Hosted CI and independent reviews must pass on the exact pushed head.
-- No remote deployment was run.
+- PR #6 is open at https://github.com/lianihossam-eng/EezFunnels/pull/6.
+- Hosted CI run `38442491344` succeeded on the prior PR head `c14ba75ccbfe1bf8ebe76361bffc69c8705b3c13`.
+- The new source commit has not yet been pushed. Hosted CI and Sol/@codex reviews remain pending on the final pushed head.
+- No remote deployment was run; Cloudflare production bindings and credentials are unavailable.

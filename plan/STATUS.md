@@ -10,7 +10,7 @@ Last updated: 2026-10-13
 - [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
 - [x] PR-003 Schema + seed themes (merged as PR #4; merge commit `5140163`)
 - [x] PR-004 Domain model (merged as PR #5; merge commit `c5961dfc77fb60198882fdd7f5909d4e0326933f`)
-- [ ] PR-005 Render engine (local implementation and CI verified; final push pending)
+- [ ] PR-005 Render engine (implementation and local gates verified; follow-up source commit `622952d5`; evidence/status update ready for push)
 - [ ] PR-006 5 sections
 - [ ] PR-007 5 themes
 - [ ] PR-008 Dashboard shell
@@ -47,14 +47,18 @@ clean isolated `cargo xtask ci` passed with zero audit findings across 105 locke
 was merged as `c5961dfc77fb60198882fdd7f5909d4e0326933f`.
 
 PR-005's sandboxed renderer is implemented at source commit
-`e4471a0e3d4060ab0c2aa246ec349681ba2b0e1e`. It emits a static document shell and ordered wrappers
-for the five section types. Theme tokens use a restricted CSS grammar, and HTML attributes escape
-metacharacters and controls. The renderer suite passes 8 tests, including a 10,000-case HTML/CSS
-attack loop. `cargo xtask check` and a fresh-target `cargo xtask ci` passed. RustSec loaded 1,310
-advisories, scanned 105 locked dependencies, and found zero issues. See
-`plan/verification/PR-005/execution.txt` and `results.json` for the commands, hashes, and results.
-The evidence commit is being prepared; hosted CI and Sol/@codex review remain pending on the final
-PR head.
+`622952d5aeadb94c997ff405407f6c9f7461ab45`. `ThemeTokens` binds a stable content-derived digest to
+the immutable normalized token map, CSS filtering matches actual function-token boundaries, and
+the deterministic 10,000-input test generator varies fragment sequences and insertion positions.
+The render suite passes 12 tests; `cargo xtask check` passes and a fresh-target `cargo xtask ci`
+passed. RustSec loaded 1,310 advisories, scanned 113 locked dependencies, and found zero
+vulnerabilities. Fingerprinted command/output evidence is in
+`plan/verification/PR-005/execution.txt` and `results.json`.
+
+PR #6 is open at https://github.com/lianihossam-eng/EezFunnels/pull/6. Hosted CI run
+`38442491344` is green on prior head `c14ba75ccbfe1bf8ebe76361bffc69c8705b3c13`; the follow-up
+source and evidence commits are not yet pushed, so hosted CI and Sol/@codex review must run again on
+the final updated head.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -106,6 +110,7 @@ PR head.
 
 ## Next action
 
-Commit the PR-005 verification evidence, push `feat/005_render`, and open PR #6. Request @codex and
-Sol review on the final head. Do not merge until both reviews and hosted CI are clean on that exact
-head. Do not deploy remotely.
+Push the PR-005 follow-up source and evidence commits to PR #6, update its summary to reflect the
+content-derived theme digest, CSS function-token validation, and variable-sequence XSS corpus, and
+request fresh @codex and Sol reviews on the exact pushed head. Wait for green hosted CI and both
+reviews before merge. Do not deploy remotely.
