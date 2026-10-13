@@ -24,6 +24,7 @@ Stable, transport-independent error taxonomy.
 | validation/schema_version_unsupported   | validation    | 400  |
 | validation/section_type_unknown         | validation    | 400  |
 | validation/section_missing_id           | validation    | 400  |
+| validation/operation_not_supported      | validation    | 405  |
 | authorization/token_invalid             | authorization | 401  |
 | authorization/token_missing             | authorization | 401  |
 | authorization/host_not_allowed          | authorization | 403  |

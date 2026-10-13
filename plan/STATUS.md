@@ -54,22 +54,20 @@ results do not establish Cloudflare integration or production readiness.
   verify it returns 404 for GET and for a missing token.
 - `cargo xtask ci` passed in a fresh target directory. Its WASM gates now build both `eez-api` and
   `eez-dashboard`, so adding incompatible Tokio runtime/network features to the Worker breaks CI.
-  The run passed fmt, Clippy, workspace tests, layers, both WASM builds, and cargo audit (1,308
-  advisories loaded; 105 locked dependencies scanned).
+  The final PR-002 run passed fmt, Clippy, workspace tests, layers, both WASM builds, and cargo
+  audit (1,310 advisories loaded; 105 locked dependencies scanned with no findings).
 - `bash scripts/smoke-pr002.sh` passed using local Wrangler 4.149.0 and local-only D1/R2/KV bindings.
-  The script checks the production host allowlist and denial envelope, `/health`, structured
-  unknown-route and hidden-probe 404s, D1/R2/KV round-trip, and the token/method gates.
-  Its isolated process-group trap exits without a live listener/process; this container's PID 1 does
-  not reap the two defunct `workerd` children Wrangler leaves per run. The evidence is in
-  `plan/verification/PR-002/execution.txt` and `results.json`.
+  The script checks the production host allowlist and 403 denial envelope, `/health`, structured
+  route 404 and method 405 envelopes, the `Allow` header, hidden-probe 404s, and D1/R2/KV
+  round-trip with a per-run token. Its process-group cleanup closes port 8787 and leaves no live
+  Wrangler or Worker process. This container's PID 1 does not reap Wrangler's defunct `workerd`
+  children. The evidence is in `plan/verification/PR-002/execution.txt` and `results.json`.
 - C-04 registers `authorization/host_not_allowed` as HTTP 403 and `not_found/route` as HTTP 404.
-  The Worker rejects hosts outside `ALLOWED_HOSTS` before routing and returns a structured
-  correlation-ID envelope for denied hosts, unknown Axum routes, and the hidden local probe.
-  Wrangler smoke confirms the production host is accepted and `localhost:8787` is denied in the
-  production environment.
-- A direct request using POST against the GET-only `/health` path still gets Axum's empty HTTP 405.
-  C-04 has no approved code for this condition; `not_found/route` would be inaccurate. This is a
-  separate contract decision from the two mappings approved for PR-002.
+- C-04 also registers `validation/operation_not_supported` as HTTP 405. The Worker rejects hosts
+  outside `ALLOWED_HOSTS` before routing and returns structured correlation-ID envelopes for
+  denied hosts, unknown Axum routes, hidden local probes, and method mismatches on known routes.
+  The Axum method fallback retains its `Allow` header. Wrangler smoke verifies all three error
+  mappings and the production host allowlist.
 - The C-04 registry tests cover all listed codes, category/status stability, safe storage failures,
   correlation IDs, and the alert marker for unclassified errors.
 
@@ -78,12 +76,8 @@ results do not establish Cloudflare integration or production readiness.
 - No real Cloudflare account binding IDs or credentials are available; the configured UUIDs are
   local placeholders. Remote deployment and production binding checks remain outside this local
   PR-002 run.
-- The C-04 invariant that every error has a structured envelope is not yet met for a method mismatch
-  on a known path. A new method-not-allowed code requires a separate contract decision; PR-002 does
-  not mislabel the condition with `not_found/route`.
 
 ## Next action
 
-Open PR #3 after the final local gates and record hosted CI on its current head. Resolve the
-method-not-allowed C-04 mapping before broadening runtime error coverage. Production Cloudflare
-binding IDs and credentials remain prerequisites for a remote deployment.
+Open PR #3 after the final local gates and record hosted CI on its current head. Production
+Cloudflare binding IDs and credentials remain prerequisites for a remote deployment.

@@ -27,13 +27,12 @@ runtime without an account or production credentials.
   `wrangler dev --local`, and a POST request. The token is not stored in Wrangler config, so a
   remote `--env dev` deployment does not expose the probe. The smoke test creates its probe table
   in local D1; PR-003 owns the product schema and migrations.
-- C-04 registers `authorization/host_not_allowed` as an authorization error with HTTP 403 and
-  `not_found/route` as a not-found error with HTTP 404. The Worker applies the configured host
-  allowlist before routing and returns the registered envelope for denied hosts and unmatched
-  Axum routes. Production and local-denial behavior are exercised by the smoke script.
-- A method mismatch on a known Axum path still returns Axum's empty HTTP 405. C-04 has no approved
-  code for that condition; `not_found/route` would misstate it. The current scope does not add a
-  third code, so this remains a separately authorized contract change.
+- C-04 registers `authorization/host_not_allowed` as an authorization error with HTTP 403,
+  `not_found/route` as a not-found error with HTTP 404, and
+  `validation/operation_not_supported` as a validation error with HTTP 405. The Worker applies the
+  configured host allowlist before routing and returns the registered envelope for denied hosts,
+  unmatched Axum routes, and method mismatches on known routes. Axum's method fallback preserves
+  its `Allow` header. The local smoke script exercises all three mappings.
 - The smoke trap starts Wrangler in an isolated process group, verifies it is not the shell's group,
   and asks Wrangler to stop gracefully. Local Wrangler still leaves two defunct `workerd` children
   adopted by this container's PID 1 per run; the PID 1 process does not reap them. The listener is
@@ -42,7 +41,7 @@ runtime without an account or production credentials.
 
 ## Throughput checkpoint
 
-- **Checkpoint result:** Worker 0.8.3 and the locked dependency graph build under the repository's Rust 1.85 toolchain; `worker-build` 0.8.3 uses auxiliary Rust 1.88.0. The host matcher, production host allow/deny responses, C-04 unmatched-route envelope, and local binding smoke pass. The contract owner approved both C-04 codes for this implementation. A separate known-path method mismatch still returns a raw 405 and needs a future C-04 decision.
+- **Checkpoint result:** Worker 0.8.3 and the locked dependency graph build under the repository's Rust 1.85 toolchain; `worker-build` 0.8.3 uses auxiliary Rust 1.88.0. The host matcher, production host allow/deny responses, C-04 unmatched-route and method-mismatch envelopes, and local binding smoke pass. The contract owner approved the three C-04 runtime mappings in this PR.
 - **Independent workstreams:** N/A. Runtime, storage bindings, local smoke tests, and Wrangler configuration share one branch and one lockfile.
 - **Shared mutable state:** Serialize Cargo manifest/lockfile, Worker runtime, storage bindings, and Wrangler changes because the interfaces and local binding names must match.
 - **Smallest safe decomposition:** One owner handles the feature because the Worker request boundary and D1/R2/KV smoke path must be validated together; the model restriction also keeps implementation in Luna xhigh.
@@ -51,10 +50,9 @@ runtime without an account or production credentials.
 
 The local smoke run builds the Worker and checks the production host allowlist's accepted hostname
 and denied localhost response, then checks the dev `/health` route and a D1/R2/KV
-write/read/delete round-trip. It also checks that Axum unmatched routes and the hidden probe return
-the registered C-04 404 envelope, while a valid per-run token enables the probe. A separate local
-request confirmed that POST to the known GET-only `/health` path still returns an empty 405; that
-contract case remains outside the two approved mappings.
+write/read/delete round-trip. It checks that Axum unmatched routes and the hidden probe return the
+registered C-04 404 envelope, that unsupported methods return the C-04 405 envelope with an
+`Allow` header, and that a valid per-run token enables the probe.
 `cargo xtask ci` checks the full Rust workspace, API Worker and dashboard WASM targets, and audit.
 The API WASM build keeps incompatible Tokio runtime/network features out of the Worker dependency
 graph. These results establish implementation behavior only; they do not establish Cloudflare

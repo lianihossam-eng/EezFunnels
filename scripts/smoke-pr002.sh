@@ -99,6 +99,23 @@ assert_port_closed
 start_worker --env dev --var "LOCAL_PROBE_TOKEN:$probe_token"
 health="$(curl --fail --silent --show-error -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-smoke-health' http://127.0.0.1:8787/health)"
 python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok"}' <<<"$health"
+method_not_allowed_status="$(curl --silent --output "$state_dir/method-not-allowed.json" --dump-header "$state_dir/method-not-allowed.headers" --write-out '%{http_code}' -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-method-not-allowed' --request POST http://127.0.0.1:8787/health)"
+python3 - "$state_dir/method-not-allowed.json" "$method_not_allowed_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+
+assert sys.argv[2] == "405"
+assert response == {
+    "code": "validation/operation_not_supported",
+    "category": "validation",
+    "message": "The requested operation is not supported.",
+    "correlation_id": "pr002-method-not-allowed",
+}
+PY
+tr -d '\r' < "$state_dir/method-not-allowed.headers" | grep -Eiq '^Allow: GET,HEAD$'
 unknown_route_status="$(curl --silent --output "$state_dir/unknown-route.json" --write-out '%{http_code}' -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-unknown-route' http://127.0.0.1:8787/__route_does_not_exist)"
 python3 - "$state_dir/unknown-route.json" "$unknown_route_status" <<'PY'
 import json
@@ -149,4 +166,4 @@ assert response == {
 PY
 probe="$(curl --fail --silent --show-error --request POST -H 'Host: localhost:8787' -H "x-local-probe-token: $probe_token" -H 'x-correlation-id: pr002-smoke-storage' http://127.0.0.1:8787/__local/probe)"
 python3 -c 'import json,sys; body=json.load(sys.stdin); assert body == {"status":"ok","d1":"ok","r2":"ok","kv":"ok","correlation_id":"pr002-smoke-storage"}' <<<"$probe"
-printf 'health=%s\nproduction_denial=%s\nunknown_route=%s\nprobe=%s\n' "$health" "$(cat "$state_dir/production-denial.json")" "$(cat "$state_dir/unknown-route.json")" "$probe"
+printf 'health=%s\nproduction_denial=%s\nmethod_not_allowed=%s\nunknown_route=%s\nprobe=%s\n' "$health" "$(cat "$state_dir/production-denial.json")" "$(cat "$state_dir/method-not-allowed.json")" "$(cat "$state_dir/unknown-route.json")" "$probe"

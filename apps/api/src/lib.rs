@@ -34,6 +34,7 @@ fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .fallback(route_not_found)
+        .method_not_allowed_fallback(method_not_allowed)
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -88,6 +89,17 @@ async fn route_not_found(headers: HeaderMap<HeaderValue>) -> Response<axum::body
     let correlation_id = correlation_id(&headers);
     let error = ApiError::from_code("not_found/route");
     log_api_error(&error, &correlation_id, "request route was not found");
+    error_response(&error, correlation_id)
+}
+
+async fn method_not_allowed(headers: HeaderMap<HeaderValue>) -> Response<axum::body::Body> {
+    let correlation_id = correlation_id(&headers);
+    let error = ApiError::from_code("validation/operation_not_supported");
+    log_api_error(
+        &error,
+        &correlation_id,
+        "request method is not supported for route",
+    );
     error_response(&error, correlation_id)
 }
 
