@@ -2,10 +2,11 @@ PR-002 local verification transcript
 
 Executed: 2026-10-13T11:19:48Z
 Branch: feat/002_worker
-HEAD/base commit: 79d85c74d4f1df54057d5a9c8b9ca2c0235e98a7
-HEAD meaning: merged PR-001 base; verification covers the PR-002 working-tree snapshot identified by the source fingerprint below.
+Verified source commit: e579dfed6078422cc254d1bb78f14c138ea93f9f
+Base commit: 79d85c74d4f1df54057d5a9c8b9ca2c0235e98a7
+The checks ran on the working-tree snapshot before commit; all 19 source-path hashes match the local source commit above.
 Source fingerprint SHA-256 over sorted path/hash lines: 36c3e2960562e804944e9d9254584b5ab074ffcc50368e0e721d9af43ed0d601
-Working tree: uncommitted at verification time; no push or PR opened while a separate C-04 method-mismatch decision is pending.
+Working tree: verified source is committed locally as e579dfe; no push or PR opened while a separate C-04 method-mismatch decision is pending.
 Project toolchain: rustc 1.85.0 / Cargo 1.85.0
 Auxiliary build toolchain: Rust 1.88.0 for worker-build installation only
 Node/npm/Wrangler: v24.19.0 / 11.9.0 / 4.149.0
