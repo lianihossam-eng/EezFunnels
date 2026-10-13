@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, HashSet};
 
 use super::{
     content_config_hash, escape_html_text, FeatureItem, FooterLink, HeroImage, RenderError,
-    Renderer, SectionContent, Testimonial,
+    Renderer, SectionContent, Testimonial, ThemeTokens,
 };
 use crate::test_support::{
     content_map, revision_with_contents, revision_with_sections, revision_with_theme_version,
-    safe_theme_tokens,
+    revision_with_theme_version_and_contents, safe_theme_tokens,
 };
+use eez_domain::ThemePreset;
 
 fn next_attack_word(state: &mut u64) -> u64 {
     let mut word = *state;
@@ -406,6 +407,40 @@ fn footer_section_snapshot_renders_links_and_copyright() {
             rendered_section(&html),
             "<section class=\"section section-footer\" data-section-id=\"footer-1\" data-section-type=\"footer\" data-order=\"0\"><nav aria-label=\"Footer\"><ul><li><a href=\"https://example.com/privacy\">Privacy</a></li></ul></nav><small>© 2026 Eez Funnel</small></section>"
         );
+}
+
+#[test]
+fn renderer_v2_styles_nonempty_footer_links_using_emitted_markup() {
+    let id = "footer-theme";
+    let contents = BTreeMap::from([(
+        id.to_owned(),
+        SectionContent::Footer {
+            links: vec![FooterLink {
+                label: "Privacy".to_owned(),
+                url: "/privacy".to_owned(),
+            }],
+            copyright: "Copyright".to_owned(),
+        },
+    )]);
+    let theme = ThemeTokens::from_preset(ThemePreset::Bold).expect("preset tokens are safe");
+    let revision = revision_with_theme_version_and_contents(
+        vec![(id, "footer", 0)],
+        "renderer-v2",
+        theme.version(),
+        &contents,
+    );
+    let html = Renderer::new()
+        .render(&revision, &theme, &contents)
+        .expect("themed footer renders");
+    let stylesheet = include_str!("../snapshots/theme.css").trim();
+    let section = rendered_section(&html);
+
+    assert!(section.contains(
+        "<nav aria-label=\"Footer\"><ul><li><a href=\"/privacy\">Privacy</a></li></ul></nav>"
+    ));
+    assert!(html.contains(&format!("<style>{stylesheet}</style>")));
+    assert!(stylesheet.contains(".section-footer nav ul{display:flex;"));
+    assert!(stylesheet.contains(".section-footer nav a{color:var(--color-primary)}"));
 }
 
 #[test]
