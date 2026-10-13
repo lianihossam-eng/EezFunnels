@@ -1,39 +1,49 @@
 {
   "task": "PR-004",
-  "executed_at_utc": "2026-10-13T17:06:38Z",
+  "evidence_refreshed_at_utc": "2026-10-13T17:23:51Z",
   "branch": "feat/004_domain",
   "base_commit": "5140163ab122d38554b001299faf6b0eb93fd77d",
-  "verified_source_commit": "e0c38979d88923e570020624d91ce7e181b742f9",
-  "source_commit_role": "PR-004 domain model implementation; evidence and status follow in a separate documentation commit",
+  "verified_source_commit": "6da34d09dae2dc0f958a02323c7f025641b86b30",
+  "source_commit_role": "PR-004 domain model and corrective fixes; this evidence/status update follows in a separate documentation commit",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
-  "source_fingerprint_sha256": "00ed007c9537e132a6d601aa75d001adc6742b25b882f7c35e9b4be79cfaca03",
+  "source_fingerprint_sha256": "2616ef5777cb5de99e533016e2cb0ec34fc0e81413d4fb8a8769e0b4bc3202b4",
   "source_sha256": {
-    "crates/domain/src/lib.rs": "2b7645ced584a087cac89f200f31b1860fb698e8fc61319a287fab18dadfea97"
+    "apps/api/src/errors.rs": "3270460375e95e0217ee4a8c27c7793584f823a77877c7430bc134f1c4a12afb",
+    "crates/domain/src/lib.rs": "a269671d93dc0baa9f46b552a9e6e7212b24784f31d0c77149f3d12c2e994c54",
+    "plan/contracts/C-04_errors.md": "239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3"
   },
   "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
-  "isolated_target_dir": "/workspace/.eez-pr004-final-target.3wp4Q5",
+  "isolated_target_dir": "/workspace/.eez-pr004-final2-target.7nlMTa",
   "checks": [
     {
-      "name": "domain_model_test_first",
-      "red_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked (test-first API imports, before domain implementation)",
+      "name": "hydrated_publication_state_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
       "red_exit_code": 101,
-      "red_observation": "the new behavior tests failed to compile because Funnel, Revision, Section, RenderManifest, and the compatibility API did not yet exist"
-    },
-    {
-      "name": "domain_model_unit_tests",
-      "command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
-      "exit_code": 0,
-      "tests_passed": 8,
+      "red_observation": "test-first hydrated-state cases could not compile because Funnel had no constructor capable of restoring the loaded published revision",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
+      "green_exit_code": 0,
+      "tests_passed": 10,
       "cases": [
-        "schema v1 is supported; missing and unsupported versions emit the C-01 codes",
-        "unknown section type, missing section ID, and duplicate order emit the exact C-01 codes",
+        "new funnels start unpublished; hydrated funnels retain their published baseline",
+        "publish succeeds from a hydrated baseline and advances the pointer",
+        "stale publication from hydrated state preserves the loaded pointer",
+        "100 concurrent candidates compare against one hydrated baseline; exactly one succeeds",
+        "schema v1 is supported; missing and unsupported versions emit C-01 codes",
+        "unknown section type, missing section ID, and duplicate order emit exact C-01 codes",
         "C-01_CONFIG max_sections accepts 100 and rejects 101",
         "revision sections normalize by order and render manifest fields remain immutable",
         "revision and render manifest IDs must match",
-        "stale, no-op, and cross-funnel publication preserve the published pointer",
-        "100 concurrent candidates share one already-published baseline; exactly one succeeds",
-        "poisoned publication state maps to internal/unexpected without implementation detail"
+        "poisoned publication state maps only to internal/unexpected"
       ]
+    },
+    {
+      "name": "schema_version_missing_registry_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status",
+      "red_exit_code": 101,
+      "red_observation": "the test expected validation/schema_version_missing but ApiError returned unknown/unclassified",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status",
+      "green_exit_code": 0,
+      "assertion": "validation/schema_version_missing maps to ErrorCategory::Validation and HTTP 400 in the C-04 registry/API test"
     },
     {
       "name": "cargo_xtask_check",
@@ -42,7 +52,7 @@
       "outcome": "formatting, Clippy with warnings denied, workspace tests, and layer validation passed",
       "workspace_test_counts": {
         "api": 11,
-        "domain": 8,
+        "domain": 10,
         "storage": 4,
         "xtask": 23,
         "bootstrap_cli": 2,
@@ -51,13 +61,13 @@
     },
     {
       "name": "cargo_xtask_ci",
-      "command": "set -euo pipefail; source .project-tools/env.sh; CARGO_TARGET_DIR=/workspace/.eez-pr004-final-target.3wp4Q5 cargo xtask ci",
+      "command": "set -euo pipefail; source .project-tools/env.sh; CARGO_TARGET_DIR=/workspace/.eez-pr004-final2-target.7nlMTa cargo xtask ci",
       "exit_code": 0,
       "verified": true,
       "fresh_isolated_target": true,
       "outcome": "check, workspace tests, API WASM, dashboard WASM, and cargo-audit all passed",
       "wasm_sha256": {
-        "eez_api.wasm": "eaf7d0b5dfc88d16bdb8f3d1f14179be149f729aebaa4d397c93cd71642f16ef",
+        "eez_api.wasm": "b0fbd4841e23037024c63c3bdd529acc0661a4595b54d49e23391be39bdf4e78",
         "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
       },
       "audit": {
@@ -69,35 +79,42 @@
       }
     },
     {
-      "name": "isolated_ci_target_retry_after_tmp_capacity_failure",
-      "initial_command": "CARGO_TARGET_DIR=/tmp/eezfunnel-pr004-target.ccSNI1 cargo xtask ci",
-      "initial_exit_code": 1,
-      "initial_failure": "the separate 17 GiB /tmp volume was full during compilation (80 KiB free); no code or test failure",
-      "retry": "a new empty target was created on the /workspace volume, which had 30 GiB free; complete clean CI then exited 0",
-      "cleanup": "only the failed PR-004 temporary target /tmp/eezfunnel-pr004-target.ccSNI1 was removed"
-    },
-    {
       "name": "no_comments_self_audit",
       "reviewer": "Luna xhigh, manual diff scan",
-      "result": "no added or deleted comments, no TODO/FIXME, and no lint suppressions",
-      "independent_reviewer": "not run under the Luna-only implementation/review constraint"
+      "result": "no comments, TODO/FIXME markers, or lint suppressions were added",
+      "independent_reviewer": "final PR review by Sol and @codex is still required on the corrected exact head"
     },
     {
       "name": "interrogate_self_audit",
       "reviewer": "Luna xhigh, manual adversarial review using the repository interrogate rubric",
-      "result": "no correctness finding in schema validation, immutable snapshot normalization, manifest identity, pointer-preserving rejection, or synchronized publication race",
-      "contract_boundary": "C-04 was not modified. C-01-listed errors have exact tests; other domain-local validation diagnostics are not new C-04 promises and must be mapped by the API integration to the approved registry.",
-      "independent_reviewer": "not run under the Luna-only implementation/review constraint"
+      "result": "no remaining actionable issue in hydrated state, CAS behavior, shared-baseline concurrency, C-01/C-04 alignment, or API classification",
+      "findings_resolved": [
+        "hydrated funnel publication baseline could not be restored",
+        "C-01 validation/schema_version_missing was absent from the C-04 registry/API mapping"
+      ],
+      "independent_reviewer": "final PR review by Sol and @codex is still required on the corrected exact head"
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
     }
   ],
   "scope_notes": [
     "The domain package remains dependency-free and defines no serialization format.",
-    "Funnel publication uses an in-memory Mutex compare-and-set for this domain model; persisted cross-request publication remains the storage layer's atomic D1 responsibility.",
-    "Section content, nested blocks, and render behavior remain in later section/render PRs; this PR enforces the configured section-count limit."
+    "Funnel::from_state restores the loaded published pointer without exposing a mutable setter or naming persistence technology; in-memory compare-and-set remains protected by Mutex.",
+    "C-04 registers validation/schema_version_missing as validation/400 to satisfy the approved C-01 error code. Other local domain diagnostics do not create new C-04 promises.",
+    "Section content, nested blocks, and render behavior remain in later PRs; this PR enforces the configured section-count limit."
   ],
   "hosted_ci": {
-    "status": "not yet run; PR #5 is not open at the time of this evidence commit",
-    "required_head": "the final pushed PR #5 head"
+    "status": "pending on corrected final pushed PR #5 head",
+    "previous_head": "0bcd201a0451aa3ed782f6fb4f5684af1acf2ce3",
+    "previous_head_ci": "green; stale after corrective source changes",
+    "required_head": "the final pushed PR #5 head after source and evidence updates"
+  },
+  "reviews": {
+    "sol": "re-review required on corrected final PR head",
+    "codex": "re-review required on corrected final PR head"
   },
   "deployment": {
     "remote_deployment_run": false,

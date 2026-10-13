@@ -1,65 +1,44 @@
-PR-004 local verification transcript
+PR-004 corrective verification transcript
 
-Executed: 2026-10-13T17:06:38Z
+Evidence refreshed: 2026-10-13T17:23:51Z
 Branch: feat/004_domain
 Base commit: 5140163ab122d38554b001299faf6b0eb93fd77d
-Verified source commit: e0c38979d88923e570020624d91ce7e181b742f9
-Source file SHA-256: crates/domain/src/lib.rs 2b7645ced584a087cac89f200f31b1860fb698e8fc61319a287fab18dadfea97
-Source fingerprint: 00ed007c9537e132a6d601aa75d001adc6742b25b882f7c35e9b4be79cfaca03
-The fingerprint is SHA-256 of the sorted `path SHA256\n` lines in results.json.
+Verified source commit: 6da34d09dae2dc0f958a02323c7f025641b86b30
+Source file SHA-256:
+- apps/api/src/errors.rs 3270460375e95e0217ee4a8c27c7793584f823a77877c7430bc134f1c4a12afb
+- crates/domain/src/lib.rs a269671d93dc0baa9f46b552a9e6e7212b24784f31d0c77149f3d12c2e994c54
+- plan/contracts/C-04_errors.md 239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3
+Source fingerprint: 2616ef5777cb5de99e533016e2cb0ec34fc0e81413d4fb8a8769e0b4bc3202b4
+The fingerprint is SHA-256 of sorted `path SHA256\n` lines in results.json.
 
 Toolchain: rustc 1.85.0 / Cargo 1.85.0
 
-Scope and boundary:
-- Added pure-Rust funnel, revision, section, render-manifest, schema-version, compatibility, and
-  publication domain types. No dependency, contract, storage, API, or serialization changes.
-- C-01 schema v1 is the only supported registry entry. Tests assert the exact codes for missing
-  schema version, unsupported version, unknown section type, missing section ID, and duplicate
-  order. The configured 100-section boundary is covered at 100 and 101.
-- Revisions hold private immutable snapshots; construction rejects a manifest for a different
-  revision, duplicate section IDs/orders, and over-limit sections, and normalizes sections by order.
-- Publication tests reject stale, no-op, and cross-funnel candidates without changing the current
-  pointer. The concurrency test releases 100 publisher threads through a Barrier against one
-  already-published baseline. `Funnel` serializes the compare-and-set under its internal Mutex;
-  exactly one candidate succeeds. Durable cross-request CAS remains storage-owned.
-- The C-04 contract remains unchanged. The C-01-listed domain errors have exact assertions. Other
-  local domain diagnostics do not add new C-04 promises; the API integration must map them to the
-  approved registry. `PublicationStateUnavailable` emits only `internal/unexpected`.
-- Section content/nesting/render behavior remains in later PRs; this model enforces the C-01_CONFIG
-  max section count. No Cloudflare deployment or remote binding check was run.
+Corrective scope:
+- Added `Funnel::from_state` to construct a funnel with its already-published revision loaded. `Funnel::new` still creates an unpublished funnel; no mutable setter was added. The domain API uses no persistence-layer vocabulary.
+- Added a success case and stale-CAS case from a hydrated published baseline. Updated the 100-candidate barrier race so all candidates compare against one hydrated baseline and exactly one succeeds.
+- Added C-01's `validation/schema_version_missing` to C-04 as validation/400 and to `ApiError::from_code`; the API contract-registry test asserts the stable code, category, and status.
+- `PublicationStateUnavailable` continues to expose only `internal/unexpected`. Other domain-only diagnostics remain outside C-04 until a later API integration defines the transport mapping.
 
-TDD:
-- Before implementation, the test-first domain API imports failed to compile (exit 101) because
-  the domain types and compatibility API did not exist. The behavior suite was then implemented
-  and passed against the new model.
-- Green targeted command: `source .project-tools/env.sh && cargo test -p eez-domain --locked` —
-  exit 0, 8 tests passed.
+TDD observations:
+- P2 hydrated-state regression: `source .project-tools/env.sh && cargo test -p eez-domain --locked` — red, exit 101, because the test-first hydrated-state calls had no constructor/API to restore a published baseline. After adding `Funnel::from_state`, the same command passed, 10/10 tests.
+- P1 C-01/C-04 registry mismatch: `source .project-tools/env.sh && cargo test -p eez-api --locked every_contract_error_has_a_stable_category_and_status` — red, exit 101; expected `validation/schema_version_missing`, got `unknown/unclassified`. After registering the code in C-04 and mapping it in `ApiError`, the same command passed.
 
 Final local checks:
-- An initial `cargo xtask check` identified three unnecessary `.to_owned()` calls in the new
-  fixtures; those calls were removed before the final successful checks below.
-- `source .project-tools/env.sh && cargo xtask check` — exit 0. Formatting, Clippy with warnings
-  denied, layer validation, and workspace tests passed. Counts: API 11, domain 8, storage 4,
-  xtask 23, bootstrap CLI 2, PR-001 CLI 5.
-- Clean isolated CI command: `set -euo pipefail; source .project-tools/env.sh;
-  CARGO_TARGET_DIR=/workspace/.eez-pr004-final-target.3wp4Q5 cargo xtask ci` — exit 0. `check`,
-  workspace tests, API WASM, dashboard WASM, and cargo-audit all passed. API WASM SHA-256:
-  `eaf7d0b5dfc88d16bdb8f3d1f14179be149f729aebaa4d397c93cd71642f16ef`; dashboard WASM SHA-256:
-  `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
-- cargo-audit 0.22.2 fetched/loaded 1,310 advisories, scanned 105 locked dependencies, and reported
-  zero findings.
-- An earlier clean attempt under `/tmp/eezfunnel-pr004-target.ccSNI1` stopped during compilation
-  because `/tmp` is a separate full 17 GiB volume (80 KiB free). It was retried in a newly-created
-  empty target on `/workspace`, which had 30 GiB free. Only the failed PR-004 temporary target was
-  removed; the final `/workspace` clean-target run passed.
+- `source .project-tools/env.sh && cargo xtask check` — exit 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Counts: API 11, domain 10, storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5.
+- Fresh isolated target: `/workspace/.eez-pr004-final2-target.7nlMTa`.
+- `set -euo pipefail; source .project-tools/env.sh; CARGO_TARGET_DIR=/workspace/.eez-pr004-final2-target.7nlMTa cargo xtask ci` — exit 0. Check, workspace tests, API WASM, dashboard WASM, and cargo-audit passed.
+- API WASM SHA-256: `b0fbd4841e23037024c63c3bdd529acc0661a4595b54d49e23391be39bdf4e78`; dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
+- cargo-audit 0.22.2 loaded 1,310 advisories, scanned 105 locked dependencies, and reported zero findings.
 - `git diff --check` — exit 0.
 
 Self-audits, Luna xhigh:
-- No-comments: no comments were added/deleted, and no TODO/FIXME or lint suppression was introduced.
-- Interrogate: manually challenged version/section validation, manifest/revision identity,
-  immutable snapshots, pointer-preserving failures, mutex synchronization, and the shared-baseline
-  race; no actionable correctness finding remained. Independent-model reviewers were not used
-  under the Luna-only implementation constraint.
+- No-comments: the final source diff adds no comments, TODO/FIXME markers, or lint suppressions.
+- Interrogate: challenged state hydration, stale and successful CAS from a persisted baseline, barrier-based shared-baseline concurrency, C-01/C-04 consistency, and stable API classification. No further actionable finding remained. The two previously reported review findings (hydrated pointer and missing C-04 mapping) are covered by the red/green regressions above.
+- These self-audits were performed in Luna xhigh. Sol and @codex must review the final pushed head separately; reviews on the prior PR head do not cover these corrections.
 
-Hosted CI has not run yet: PR #5 is not open at the time of this evidence snapshot. Run hosted CI
-and request Sol review on the exact final pushed PR head before merge.
+PR state:
+- PR #5 is open at https://github.com/lianihossam-eng/EezFunnels/pull/5. Source commit `6da34d0` and this evidence update are prepared locally; hosted CI on the corrected pushed head is pending and must be green before merge.
+- Sol/@codex reviews are required again on the corrected final head. No merge or remote deployment was performed.
+
+Deployment:
+- No remote deployment was run. Cloudflare production binding IDs and credentials remain unavailable.
