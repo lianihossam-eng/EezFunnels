@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
+use repository::{NewFunnel, NewRevision, NewTheme, RepositoryError};
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
+
+pub mod repository;
 
 pub struct Bindings {
     database: worker::D1Database,
@@ -26,6 +29,358 @@ impl Bindings {
             Err(error) => Err(error),
             Ok(()) => cleanup,
         }
+    }
+
+    pub fn repository(&self) -> repository::Repository<'_> {
+        repository::Repository::new(&self.database)
+    }
+
+    pub async fn verify_product_repository_round_trip(&self) -> Result<()> {
+        let result = self.run_product_repository_checks().await;
+        let repository = self.repository();
+        let funnel_cleanup = repository.delete_funnel("pr003-smoke-funnel").await;
+        let theme_cleanup = repository.delete_theme("pr003-smoke-theme").await;
+
+        match result {
+            Err(error) => Err(error),
+            Ok(()) => {
+                funnel_cleanup?;
+                theme_cleanup?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn prepare_publication_race(&self) -> Result<Vec<String>> {
+        let repository = self.repository();
+        repository
+            .create_funnel(&NewFunnel {
+                id: "pr003-race-funnel".to_owned(),
+                name: "PR-003 Publication Race".to_owned(),
+                slug: "pr003-publication-race".to_owned(),
+            })
+            .await?;
+
+        let mut revision_ids = Vec::with_capacity(100);
+        for index in 0..100 {
+            let revision_id = format!("pr003-race-revision-{index:03}");
+            repository
+                .create_revision(&NewRevision {
+                    id: revision_id.clone(),
+                    funnel_id: "pr003-race-funnel".to_owned(),
+                    schema_version: 1,
+                    data_json: "{\"schema_version\":1,\"sections\":[]}".to_owned(),
+                    render_manifest_json: "{}".to_owned(),
+                })
+                .await?;
+            revision_ids.push(revision_id);
+        }
+        let over_limit = repository
+            .create_revision(&NewRevision {
+                id: "pr003-race-revision-100".to_owned(),
+                funnel_id: "pr003-race-funnel".to_owned(),
+                schema_version: 1,
+                data_json: "{\"schema_version\":1,\"sections\":[]}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await;
+        if !matches!(over_limit, Err(RepositoryError::RevisionLimitReached)) {
+            return Err(Error::RustError(
+                "revision retention limit was not enforced".to_owned(),
+            ));
+        }
+        Ok(revision_ids)
+    }
+
+    pub async fn publish_race_candidate(&self, revision_id: &str) -> Result<bool> {
+        self.repository()
+            .publish_revision("pr003-race-funnel", revision_id, None)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn publication_race_winner(&self) -> Result<Option<String>> {
+        let funnel = self
+            .repository()
+            .get_funnel("pr003-race-funnel")
+            .await?
+            .ok_or_else(|| Error::RustError("publication race funnel missing".to_owned()))?;
+        Ok(funnel.published_revision_id)
+    }
+
+    pub async fn cleanup_publication_race(&self) -> Result<()> {
+        self.repository().delete_funnel("pr003-race-funnel").await?;
+        Ok(())
+    }
+
+    async fn run_product_repository_checks(&self) -> Result<()> {
+        let repository = self.repository();
+        let seeded_themes = repository.list_themes().await?;
+        let expected_theme_ids = ["bold", "corporate", "elegant", "minimal", "playful"];
+        let actual_theme_ids = seeded_themes
+            .iter()
+            .map(|theme| theme.id.as_str())
+            .collect::<Vec<_>>();
+        if seeded_themes.len() != expected_theme_ids.len()
+            || expected_theme_ids
+                .iter()
+                .any(|expected| !actual_theme_ids.contains(expected))
+            || seeded_themes
+                .iter()
+                .filter(|theme| theme.is_default == 1)
+                .count()
+                != 1
+        {
+            return Err(Error::RustError("product theme seed mismatch".to_owned()));
+        }
+
+        let created_theme = repository
+            .create_theme(&NewTheme {
+                id: "pr003-smoke-theme".to_owned(),
+                name: "PR-003 Smoke Theme".to_owned(),
+                tokens_json: "{\"palette\":\"test\"}".to_owned(),
+                is_default: false,
+            })
+            .await?;
+        if created_theme.id != "pr003-smoke-theme" {
+            return Err(Error::RustError("theme create/read mismatch".to_owned()));
+        }
+        let updated_theme = repository
+            .update_theme(
+                &created_theme.id,
+                "PR-003 Updated Theme",
+                "{\"palette\":\"updated\"}",
+                false,
+            )
+            .await?;
+        if updated_theme.as_ref().map(|theme| theme.name.as_str()) != Some("PR-003 Updated Theme") {
+            return Err(Error::RustError("theme update mismatch".to_owned()));
+        }
+        if !repository.delete_theme(&created_theme.id).await? {
+            return Err(Error::RustError("theme delete mismatch".to_owned()));
+        }
+
+        let created_funnel = repository
+            .create_funnel(&NewFunnel {
+                id: "pr003-smoke-funnel".to_owned(),
+                name: "PR-003 Smoke Funnel".to_owned(),
+                slug: "pr003-smoke-funnel".to_owned(),
+            })
+            .await?;
+        if repository.get_funnel(&created_funnel.id).await?.is_none()
+            || !repository
+                .list_funnels()
+                .await?
+                .iter()
+                .any(|funnel| funnel.id == created_funnel.id)
+        {
+            return Err(Error::RustError(
+                "funnel create/read/list mismatch".to_owned(),
+            ));
+        }
+
+        let unsupported = repository
+            .create_revision(&NewRevision {
+                id: "pr003-unsupported-revision".to_owned(),
+                funnel_id: created_funnel.id.clone(),
+                schema_version: 2,
+                data_json: "{}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await;
+        if !matches!(
+            unsupported,
+            Err(RepositoryError::UnsupportedSchemaVersion(2))
+        ) {
+            return Err(Error::RustError(
+                "unsupported schema version was not refused".to_owned(),
+            ));
+        }
+
+        let missing_funnel = repository
+            .create_revision(&NewRevision {
+                id: "pr003-missing-funnel-revision".to_owned(),
+                funnel_id: "pr003-missing-funnel".to_owned(),
+                schema_version: 1,
+                data_json: "{}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await;
+        if !matches!(missing_funnel, Err(RepositoryError::FunnelNotFound)) {
+            return Err(Error::RustError(
+                "revision for missing funnel was not refused".to_owned(),
+            ));
+        }
+
+        let persisted_unsupported_id = D1Type::Text("pr003-persisted-unsupported-revision");
+        let persisted_unsupported_funnel_id = D1Type::Text(&created_funnel.id);
+        let unsupported_data = D1Type::Text("{}");
+        self.database
+            .prepare("INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES (?, ?, 2, ?, ?)")
+            .bind_refs([
+                &persisted_unsupported_id,
+                &persisted_unsupported_funnel_id,
+                &unsupported_data,
+                &unsupported_data,
+            ])?
+            .run()
+            .await?;
+        if !matches!(
+            repository
+                .get_revision("pr003-persisted-unsupported-revision")
+                .await,
+            Err(RepositoryError::UnsupportedSchemaVersion(2))
+        ) {
+            return Err(Error::RustError(
+                "persisted unsupported schema version was not refused".to_owned(),
+            ));
+        }
+        self.database
+            .prepare("DELETE FROM revisions WHERE id = ?")
+            .bind_refs([&persisted_unsupported_id])?
+            .run()
+            .await?;
+
+        let invalid_json = repository
+            .create_revision(&NewRevision {
+                id: "pr003-invalid-json-revision".to_owned(),
+                funnel_id: created_funnel.id.clone(),
+                schema_version: 1,
+                data_json: "{".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await;
+        if !matches!(invalid_json, Err(RepositoryError::InvalidJson)) {
+            return Err(Error::RustError(
+                "invalid revision JSON was accepted".to_owned(),
+            ));
+        }
+
+        let first_revision = repository
+            .create_revision(&NewRevision {
+                id: "pr003-smoke-revision-1".to_owned(),
+                funnel_id: created_funnel.id.clone(),
+                schema_version: 1,
+                data_json: "{\"schema_version\":1,\"sections\":[]}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await?;
+        if repository.get_revision(&first_revision.id).await?.as_ref() != Some(&first_revision)
+            || repository.list_revisions(&created_funnel.id).await?.len() != 1
+        {
+            return Err(Error::RustError(
+                "revision create/read/list mismatch".to_owned(),
+            ));
+        }
+        let revision_id = D1Type::Text(&first_revision.id);
+        let replacement_data =
+            D1Type::Text("{\"schema_version\":1,\"sections\":[{\"id\":\"mutated\"}]}");
+        let attempted_mutation = self
+            .database
+            .prepare("UPDATE revisions SET data_json = ? WHERE id = ?")
+            .bind_refs([&replacement_data, &revision_id])?
+            .run()
+            .await;
+        if attempted_mutation.is_ok() {
+            return Err(Error::RustError(
+                "revision snapshot was mutable after creation".to_owned(),
+            ));
+        }
+
+        if !repository
+            .publish_revision(&created_funnel.id, &first_revision.id, None)
+            .await?
+            || repository
+                .publish_revision(&created_funnel.id, &first_revision.id, None)
+                .await?
+        {
+            return Err(Error::RustError(
+                "conditional publication mismatch".to_owned(),
+            ));
+        }
+        let published_funnel = repository
+            .get_funnel(&created_funnel.id)
+            .await?
+            .ok_or_else(|| Error::RustError("published funnel missing".to_owned()))?;
+        if published_funnel.published_revision_id.as_deref() != Some(&first_revision.id) {
+            return Err(Error::RustError(
+                "published revision pointer mismatch".to_owned(),
+            ));
+        }
+        if repository.delete_revision(&first_revision.id).await? {
+            return Err(Error::RustError(
+                "published revision was deleted".to_owned(),
+            ));
+        }
+
+        let second_revision = repository
+            .create_revision(&NewRevision {
+                id: "pr003-smoke-revision-2".to_owned(),
+                funnel_id: created_funnel.id.clone(),
+                schema_version: 1,
+                data_json: "{\"schema_version\":1,\"sections\":[{\"id\":\"new\"}]}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await?;
+        if !repository
+            .publish_revision(
+                &created_funnel.id,
+                &second_revision.id,
+                Some(&first_revision.id),
+            )
+            .await?
+            || repository.get_revision(&first_revision.id).await?.is_none()
+            || !repository.delete_revision(&first_revision.id).await?
+        {
+            return Err(Error::RustError(
+                "revision replacement or retention mismatch".to_owned(),
+            ));
+        }
+
+        let other_funnel = repository
+            .create_funnel(&NewFunnel {
+                id: "pr003-other-funnel".to_owned(),
+                name: "PR-003 Other Funnel".to_owned(),
+                slug: "pr003-other-funnel".to_owned(),
+            })
+            .await?;
+        let foreign_revision = repository
+            .create_revision(&NewRevision {
+                id: "pr003-foreign-revision".to_owned(),
+                funnel_id: other_funnel.id.clone(),
+                schema_version: 1,
+                data_json: "{\"schema_version\":1,\"sections\":[]}".to_owned(),
+                render_manifest_json: "{}".to_owned(),
+            })
+            .await?;
+        if repository
+            .publish_revision(
+                &created_funnel.id,
+                &foreign_revision.id,
+                Some(&second_revision.id),
+            )
+            .await?
+            || repository
+                .get_funnel(&created_funnel.id)
+                .await?
+                .and_then(|funnel| funnel.published_revision_id)
+                .as_deref()
+                != Some(&second_revision.id)
+            || !repository.delete_funnel(&other_funnel.id).await?
+        {
+            return Err(Error::RustError(
+                "cross-funnel revision publication was not refused".to_owned(),
+            ));
+        }
+
+        let updated_funnel = repository
+            .update_funnel(&created_funnel.id, "PR-003 Updated Funnel", "pr003-updated")
+            .await?;
+        if updated_funnel.as_ref().map(|funnel| funnel.slug.as_str()) != Some("pr003-updated") {
+            return Err(Error::RustError("funnel update mismatch".to_owned()));
+        }
+
+        Ok(())
     }
 
     async fn verify_values(&self, key: &str, value: &str) -> Result<()> {

@@ -1,14 +1,14 @@
 # Eez Funnel - Status
 
-Current phase: PR-002 implementation (`feat/002_worker`)
+Current phase: PR-003 implementation (`feat/003_schema`)
 Last updated: 2026-10-13
 
 ## Phases
 
 - [x] PR-000 Bootstrap (merged as PR #1 into `main`)
 - [x] PR-001 xtask (merged as PR #2; merge commit `79d85c7`)
-- [ ] PR-002 Worker + D1 + R2 + KV (implementation in progress)
-- [ ] PR-003 Schema + seed themes
+- [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
+- [ ] PR-003 Schema + seed themes (implementation in progress; no PR opened)
 - [ ] PR-004 Domain model
 - [ ] PR-005 Render engine
 - [ ] PR-006 5 sections
@@ -29,63 +29,53 @@ Last updated: 2026-10-13
 
 ## Verified locally
 
-Proof status: PR-001 tooling is IMPLEMENTATION_VERIFIED on the merged main commit. PR-002 local
-behavior is IMPLEMENTATION_VERIFIED; PR #3 is open at
-https://github.com/lianihossam-eng/EezFunnels/pull/3. Merge remains gated on green hosted CI for
-the current PR head and a Sol review. These results do not establish Cloudflare integration or
-production readiness.
+Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and
+implementation-verified locally. PR-003 implementation is locally
+IMPLEMENTATION_VERIFIED on its source tree: it adds the product D1 schema, five
+seeded themes, typed storage records and repository operations. Its local D1
+smoke covers CRUD and immutable revisions, schema-version rejection,
+conditional publication, the 100-revision limit, and a 100-way publication
+race. Local verification does not establish Cloudflare production readiness.
 
-- `cargo xtask ci` passed on PR-001 and was green in hosted CI before merge.
-- The dashboard WASM artifact, workspace checks, audit, and PR-001 CLI behavior are recorded in
-  `plan/verification/PR-001/execution.txt` and `results.json`.
-- This PR-002 branch starts from merge commit `79d85c7` and was clean before implementation began.
-- Node 24.19.0, npm 11.9.0, and Rust/Cargo 1.85.0 are available in the cloud environment.
-- Wrangler 4.149.0 requires Node >=22 and has been installed and run locally without Cloudflare
-  credentials; the project pins it as a local npm dependency.
-- Wrangler's production `ALLOWED_HOSTS` contains only `eezfunnel.workers.dev`; `localhost:8787` is
-  configured only under the dev environment. The Worker normalizes missing, empty, and overlength
-  correlation IDs once at the fetch boundary and replaces the request header before Axum routing;
-  API tests cover these cases and preserve a valid supplied ID.
-- Worker 0.8.3 and worker-build 0.8.3 are pinned. Axum's default runtime/network features are off so
-  the API builds to wasm32 under Rust 1.85. The helper binary is compiled with the auxiliary Rust
-  1.88 toolchain; application builds still run with the repository's 1.85 toolchain.
-- `worker-build --release` and Wrangler's custom build passed. `wrangler d1 migrations apply DB
-  --local --env dev` applied the local runtime probe migration, and Wrangler dev exposed DB/R2/KV
-  in local mode. `/health` returned `{"status":"ok"}`; `/__local/probe` verified D1, R2, KV
-  write/read/delete and returned `ok` for all three with the supplied correlation ID. The probe
-  requires a per-run token passed only to `wrangler dev --local` and accepts POST only; smoke checks
-  verify it returns 404 for GET and for a missing token.
-- `cargo xtask ci` passed in the fresh isolated target `/tmp/eezfunnel-pr002-correlation-final`.
-  Its WASM gates build both `eez-api` and `eez-dashboard`, so adding incompatible Tokio
-  runtime/network features to the Worker breaks CI. The latest PR-002 run passed fmt, Clippy,
-  workspace tests, layers, both WASM builds, and cargo audit (1,310 advisories loaded; 105 locked
-  dependencies scanned with no findings).
-- `bash scripts/smoke-pr002.sh` passed using local Wrangler 4.149.0 and local-only D1/R2/KV bindings.
-  It checks the production host allowlist and 403 denial envelope, `/health`, structured route 404
-  and method 405 envelopes, the `Allow` header, hidden-probe 404s, and D1/R2/KV round-trip with a
-  per-run token. For both 404 and 405 it tests absent, empty, 129-character, and valid correlation
-  IDs, asserting that each response ID matches both the API error record and request log. Cleanup
-  closes port 8787 and leaves no live Wrangler or Worker process. This container's PID 1 does not
-  reap Wrangler's defunct `workerd` children. The evidence is in
-  `plan/verification/PR-002/execution.txt` and `results.json`.
-- C-04 registers `authorization/host_not_allowed` as HTTP 403 and `not_found/route` as HTTP 404.
-- C-04 also registers `validation/operation_not_supported` as HTTP 405. The Worker rejects hosts
-  outside `ALLOWED_HOSTS` before routing and returns structured correlation-ID envelopes for
-  denied hosts, unknown Axum routes, hidden local probes, and method mismatches on known routes.
-  The fetch boundary writes the normalized correlation ID to the request before routing, so both
-  Axum fallbacks and the request/API error logs use the same ID. The Axum method fallback retains
-  its `Allow` header. Wrangler smoke verifies all three error mappings and the production host
-  allowlist.
-- The C-04 registry tests cover all listed codes, category/status stability, safe storage failures,
-  correlation IDs, and the alert marker for unclassified errors.
+- Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
+  Wrangler 4.149.0 are available. Wrangler runs with local bindings only for
+  the current verification.
+- PR-002 was merged at `bc641cad138706c023c254fcfdaaf782b5b7329d`. Its hosted CI
+  and Sol review gates were completed before merge.
+- The PR-002 evidence contains a pre-existing fingerprint inconsistency:
+  all 19 individual source hashes in `results.json` match source commit
+  `9006b207b701ec71d6a8121dfdf21c1b5dc4b8b5`; recomputing the sorted
+  path/hash lines gives `3b4844681883458eb1086c41a5abddf0b39e3194c515829fb290136a2787c5d3`,
+  matching `results.json`. Its `execution.txt` instead records
+  `ebbaa869aad93c9a35d3bdb1ccdeff4704eca039290c0f2a6b4979ad3cd56d88`.
+  The already-merged PR-002 evidence is unchanged; this discrepancy is recorded
+  here rather than silently rewriting historical evidence.
+- PR-002 introduced the pinned Worker 0.8.3 / worker-build 0.8.3 runtime and
+  local Wrangler smoke. `cargo xtask ci` includes `eez-api` and dashboard WASM
+  builds plus pinned cargo-audit; the application remains on Rust 1.85.
+- PR-003 is scoped to five product tables (`funnels`, `revisions`, `themes`,
+  `assets`, `audit_logs`), seeds `minimal`, `bold`, `elegant`, `playful`, and
+  `corporate`, and keeps database row types in storage per D8. No domain-layer
+  package or product API behavior is introduced ahead of PR-004.
+- The new local-only PR-003 smoke applies both migrations to a fresh D1 store,
+  verifies repository round trips and refusal cases, and races 100 conditional
+  publications with exactly one winner. It also repeats the PR-002 404/405
+  correlation-ID cases (absent, empty, overlength, and supplied) and polls
+  Wrangler logs for up to five seconds before asserting the matching
+  `api_error` and request records, avoiding a transient log-flush race.
+- `scripts/smoke-pr002.sh` remains unchanged. Its final rerun passed the same
+  404/405 cases and the D1/R2/KV probe after one earlier transient missing-log
+  assertion; PR-003's regression smoke uses the bounded poll described above.
 
 ## Blockers
 
-- No real Cloudflare account binding IDs or credentials are available; the configured UUIDs are
-  local placeholders. Remote deployment and production binding checks remain outside this local
-  PR-002 run.
+- Cloudflare production binding IDs and credentials are unavailable. No remote
+  deployment or production binding check has been run.
+- PR-003 has not been opened. Its clean CI, local smoke, and self-audits have
+  passed; final evidence and the PR handoff remain to be committed.
 
 ## Next action
 
-Keep PR #3 open until hosted CI is green on its latest head and Sol has completed review. Production
-Cloudflare binding IDs and credentials remain prerequisites for a remote deployment.
+Commit the PR-003 evidence on `feat/003_schema` and open its PR against `main`.
+Sol review and hosted CI must be green on the exact PR head before merge.
+Continue with PR-004 after PR-003 is merged.
