@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Mutex;
 
+use serde::{Deserialize, Serialize};
+
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -169,6 +171,367 @@ impl Section {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreset {
+    Minimal,
+    Bold,
+    Elegant,
+    Playful,
+    Corporate,
+}
+
+const THEME_PRESETS: [ThemePreset; 5] = [
+    ThemePreset::Minimal,
+    ThemePreset::Bold,
+    ThemePreset::Elegant,
+    ThemePreset::Playful,
+    ThemePreset::Corporate,
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThemeToken {
+    name: &'static str,
+    value: &'static str,
+}
+
+impl ThemeToken {
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub const fn value(&self) -> &'static str {
+        self.value
+    }
+}
+
+const MINIMAL_TOKENS: [ThemeToken; 13] = [
+    ThemeToken {
+        name: "color-background",
+        value: "#f8fafc",
+    },
+    ThemeToken {
+        name: "color-border",
+        value: "#e2e8f0",
+    },
+    ThemeToken {
+        name: "color-muted",
+        value: "#64748b",
+    },
+    ThemeToken {
+        name: "color-on-primary",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-primary",
+        value: "#334155",
+    },
+    ThemeToken {
+        name: "color-surface",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-text",
+        value: "#1f2937",
+    },
+    ThemeToken {
+        name: "font-family",
+        value: "system-ui, sans-serif",
+    },
+    ThemeToken {
+        name: "font-scale",
+        value: "1",
+    },
+    ThemeToken {
+        name: "radius-button",
+        value: "0.375rem",
+    },
+    ThemeToken {
+        name: "radius-card",
+        value: "0.75rem",
+    },
+    ThemeToken {
+        name: "shadow-card",
+        value: "0 1px 3px rgba(15, 23, 42, 0.08)",
+    },
+    ThemeToken {
+        name: "spacing-section",
+        value: "4rem",
+    },
+];
+
+const BOLD_TOKENS: [ThemeToken; 13] = [
+    ThemeToken {
+        name: "color-background",
+        value: "#111113",
+    },
+    ThemeToken {
+        name: "color-border",
+        value: "#3f3f46",
+    },
+    ThemeToken {
+        name: "color-muted",
+        value: "#a1a1aa",
+    },
+    ThemeToken {
+        name: "color-on-primary",
+        value: "#1c1917",
+    },
+    ThemeToken {
+        name: "color-primary",
+        value: "#f97316",
+    },
+    ThemeToken {
+        name: "color-surface",
+        value: "#18181b",
+    },
+    ThemeToken {
+        name: "color-text",
+        value: "#fafafa",
+    },
+    ThemeToken {
+        name: "font-family",
+        value: "Arial, sans-serif",
+    },
+    ThemeToken {
+        name: "font-scale",
+        value: "1.08",
+    },
+    ThemeToken {
+        name: "radius-button",
+        value: "0",
+    },
+    ThemeToken {
+        name: "radius-card",
+        value: "0",
+    },
+    ThemeToken {
+        name: "shadow-card",
+        value: "0 8px 32px rgba(0, 0, 0, 0.32)",
+    },
+    ThemeToken {
+        name: "spacing-section",
+        value: "6rem",
+    },
+];
+
+const ELEGANT_TOKENS: [ThemeToken; 13] = [
+    ThemeToken {
+        name: "color-background",
+        value: "#faf7f2",
+    },
+    ThemeToken {
+        name: "color-border",
+        value: "#e8ded1",
+    },
+    ThemeToken {
+        name: "color-muted",
+        value: "#7c6f64",
+    },
+    ThemeToken {
+        name: "color-on-primary",
+        value: "#fffaf5",
+    },
+    ThemeToken {
+        name: "color-primary",
+        value: "#8b5e4c",
+    },
+    ThemeToken {
+        name: "color-surface",
+        value: "#fffdf9",
+    },
+    ThemeToken {
+        name: "color-text",
+        value: "#3b3028",
+    },
+    ThemeToken {
+        name: "font-family",
+        value: "Georgia, serif",
+    },
+    ThemeToken {
+        name: "font-scale",
+        value: "1.04",
+    },
+    ThemeToken {
+        name: "radius-button",
+        value: "0.75rem",
+    },
+    ThemeToken {
+        name: "radius-card",
+        value: "1rem",
+    },
+    ThemeToken {
+        name: "shadow-card",
+        value: "0 4px 20px rgba(59, 48, 40, 0.08)",
+    },
+    ThemeToken {
+        name: "spacing-section",
+        value: "5rem",
+    },
+];
+
+const PLAYFUL_TOKENS: [ThemeToken; 13] = [
+    ThemeToken {
+        name: "color-background",
+        value: "#fff7fd",
+    },
+    ThemeToken {
+        name: "color-border",
+        value: "#f0d8fb",
+    },
+    ThemeToken {
+        name: "color-muted",
+        value: "#715a81",
+    },
+    ThemeToken {
+        name: "color-on-primary",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-primary",
+        value: "#d946ef",
+    },
+    ThemeToken {
+        name: "color-surface",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-text",
+        value: "#38204d",
+    },
+    ThemeToken {
+        name: "font-family",
+        value: "system-ui, sans-serif",
+    },
+    ThemeToken {
+        name: "font-scale",
+        value: "1.05",
+    },
+    ThemeToken {
+        name: "radius-button",
+        value: "1.5rem",
+    },
+    ThemeToken {
+        name: "radius-card",
+        value: "1.5rem",
+    },
+    ThemeToken {
+        name: "shadow-card",
+        value: "0 8px 24px rgba(192, 38, 211, 0.18)",
+    },
+    ThemeToken {
+        name: "spacing-section",
+        value: "4.5rem",
+    },
+];
+
+const CORPORATE_TOKENS: [ThemeToken; 13] = [
+    ThemeToken {
+        name: "color-background",
+        value: "#f1f5f9",
+    },
+    ThemeToken {
+        name: "color-border",
+        value: "#cbd5e1",
+    },
+    ThemeToken {
+        name: "color-muted",
+        value: "#475569",
+    },
+    ThemeToken {
+        name: "color-on-primary",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-primary",
+        value: "#2563eb",
+    },
+    ThemeToken {
+        name: "color-surface",
+        value: "#ffffff",
+    },
+    ThemeToken {
+        name: "color-text",
+        value: "#0f172a",
+    },
+    ThemeToken {
+        name: "font-family",
+        value: "Arial, sans-serif",
+    },
+    ThemeToken {
+        name: "font-scale",
+        value: "1",
+    },
+    ThemeToken {
+        name: "radius-button",
+        value: "0.375rem",
+    },
+    ThemeToken {
+        name: "radius-card",
+        value: "0.375rem",
+    },
+    ThemeToken {
+        name: "shadow-card",
+        value: "0 2px 8px rgba(15, 23, 42, 0.08)",
+    },
+    ThemeToken {
+        name: "spacing-section",
+        value: "4rem",
+    },
+];
+
+impl ThemePreset {
+    pub const fn all() -> &'static [Self; 5] {
+        &THEME_PRESETS
+    }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|preset| preset.id() == value)
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Bold => "bold",
+            Self::Elegant => "elegant",
+            Self::Playful => "playful",
+            Self::Corporate => "corporate",
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Minimal => "Minimal",
+            Self::Bold => "Bold",
+            Self::Elegant => "Elegant",
+            Self::Playful => "Playful",
+            Self::Corporate => "Corporate",
+        }
+    }
+
+    pub const fn tokens(self) -> &'static [ThemeToken] {
+        match self {
+            Self::Minimal => &MINIMAL_TOKENS,
+            Self::Bold => &BOLD_TOKENS,
+            Self::Elegant => &ELEGANT_TOKENS,
+            Self::Playful => &PLAYFUL_TOKENS,
+            Self::Corporate => &CORPORATE_TOKENS,
+        }
+    }
+
+    pub fn tokens_json(self) -> Result<String, serde_json::Error> {
+        let tokens = self
+            .tokens()
+            .iter()
+            .map(|token| (token.name(), token.value()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        serde_json::to_string(&tokens)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderManifest {
     revision_id: RevisionId,
@@ -294,6 +657,28 @@ impl Revision {
 
     pub fn render_manifest(&self) -> &RenderManifest {
         &self.render_manifest
+    }
+
+    pub fn fork_with_theme(
+        &self,
+        id: RevisionId,
+        theme_version: impl Into<String>,
+        renderer_version: impl Into<String>,
+    ) -> Result<Self, DomainError> {
+        let manifest = RenderManifest::new(
+            id.clone(),
+            theme_version,
+            renderer_version,
+            self.render_manifest.assets_manifest_hash.clone(),
+            self.render_manifest.config_hash.clone(),
+        )?;
+        Self::new(
+            id,
+            self.funnel_id.clone(),
+            Some(i64::from(self.schema_version.value())),
+            self.sections.clone(),
+            manifest,
+        )
     }
 }
 
@@ -844,3 +1229,6 @@ mod tests {
         assert!(published.is_some());
     }
 }
+
+#[cfg(test)]
+mod theme_tests;

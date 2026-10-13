@@ -671,7 +671,7 @@ fn section_content_enforces_an_aggregate_one_mib_utf8_budget() {
 fn render_context_errors_precede_content_validation_errors() {
     let theme = safe_theme_tokens();
     let unsupported_renderer =
-        revision_with_theme_version(vec![("hero-1", "hero", 0)], "renderer-v2", "theme-v1");
+        revision_with_theme_version(vec![("hero-1", "hero", 0)], "renderer-v3", "theme-v1");
     assert_eq!(
         Renderer::new()
             .render(&unsupported_renderer, &theme, &BTreeMap::new())

@@ -3,15 +3,31 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
-use eez_domain::{Revision, Section, SectionType};
+use eez_domain::{Revision, Section, SectionType, ThemePreset};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
-pub const RENDERER_VERSION: &str = "renderer-v1";
+pub const RENDERER_VERSION: &str = "renderer-v2";
+const LEGACY_RENDERER_VERSION: &str = "renderer-v1";
 const MAX_BLOCKS_PER_SECTION: usize = 50;
 const MAX_SECTION_URL_BYTES: usize = 2_048;
 const MAX_SECTION_CONTENT_BYTES: usize = 1_048_576;
 const CONTENT_CONFIG_HASH_DOMAIN: &[u8] = b"eez-render-section-content-v1\0";
+const THEME_STYLESHEET: &str = concat!(
+    "html{color-scheme:light}body{margin:0}",
+    "#funnel{box-sizing:border-box;min-height:100vh;background-color:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}",
+    "#funnel *{box-sizing:inherit}.section{max-width:72rem;margin:0 auto;padding:var(--spacing-section) 1.5rem}",
+    ".section-hero{text-align:center}.hero-content{max-width:48rem;margin:0 auto}",
+    ".hero-image{display:block;max-width:100%;height:auto;margin:2rem auto 0;border-radius:var(--radius-card)}",
+    ".features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1rem}",
+    ".feature,.testimonial{margin:0;padding:1.5rem;border:1px solid var(--color-border);background-color:var(--color-surface);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}",
+    ".testimonial+.testimonial{margin-top:1rem}.section h1,.section h2,.section p{margin-top:0}",
+    ".section h1{font-size:2.5em}.section h2{font-size:1.25em}.section p,.testimonial-attribution{color:var(--color-muted)}",
+    ".button{display:inline-block;padding:.75rem 1.25rem;background-color:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}",
+    ".section-cta{text-align:center;background-color:var(--color-surface);border-radius:var(--radius-card)}",
+    ".section-footer{border-top:1px solid var(--color-border);color:var(--color-muted)}",
+    ".footer-links{display:flex;flex-wrap:wrap;gap:1rem;padding-left:0;list-style:none}.footer-links a{color:var(--color-primary)}"
+);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenderError {
@@ -222,6 +238,15 @@ impl ThemeTokens {
         Ok(Self { version, values })
     }
 
+    pub fn from_preset(preset: ThemePreset) -> Result<Self, RenderError> {
+        let values = preset
+            .tokens()
+            .iter()
+            .map(|token| (token.name().to_owned(), token.value().to_owned()))
+            .collect();
+        Self::new(values)
+    }
+
     pub fn version(&self) -> &str {
         &self.version
     }
@@ -349,14 +374,20 @@ impl Renderer {
         let manifest = revision.render_manifest();
 
         let mut html = String::from(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Funnel</title></head><body><main id=\"funnel\"",
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Funnel</title>",
         );
+        if manifest.renderer_version() == RENDERER_VERSION {
+            html.push_str("<style>");
+            html.push_str(THEME_STYLESHEET);
+            html.push_str("</style>");
+        }
+        html.push_str("</head><body><main id=\"funnel\"");
         html.push_str(" data-revision-id=\"");
         html.push_str(&escape_html_attribute(manifest.revision_id().as_str()));
         html.push_str("\" data-theme-version=\"");
         html.push_str(&escape_html_attribute(manifest.theme_version()));
         html.push_str("\" data-renderer-version=\"");
-        html.push_str(RENDERER_VERSION);
+        html.push_str(manifest.renderer_version());
         html.push('\"');
 
         if !theme.values.is_empty() {
@@ -387,7 +418,9 @@ impl Renderer {
 
 fn validate_render_context(revision: &Revision, theme: &ThemeTokens) -> Result<(), RenderError> {
     let manifest = revision.render_manifest();
-    if manifest.renderer_version() != RENDERER_VERSION {
+    if manifest.renderer_version() != RENDERER_VERSION
+        && manifest.renderer_version() != LEGACY_RENDERER_VERSION
+    {
         return Err(RenderError::UnsupportedRendererVersion);
     }
     if manifest.theme_version() != theme.version() {
