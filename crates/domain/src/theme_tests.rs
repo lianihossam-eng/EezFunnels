@@ -64,6 +64,11 @@ fn theme_fork_updates_the_manifest_without_mutating_the_source_revision() {
     .expect("valid source revision");
     let next_id = RevisionId::new("theme-revision-after").expect("valid revision ID");
 
+    assert!(matches!(
+        original.fork_with_theme(original.id().clone(), "sha256-v1:corporate", "renderer-v2"),
+        Err(super::DomainError::RevisionIdUnchanged)
+    ));
+
     let updated = original
         .fork_with_theme(next_id.clone(), "sha256-v1:corporate", "renderer-v2")
         .expect("theme selection creates a valid revision");

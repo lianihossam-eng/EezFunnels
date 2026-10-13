@@ -665,6 +665,10 @@ impl Revision {
         theme_version: impl Into<String>,
         renderer_version: impl Into<String>,
     ) -> Result<Self, DomainError> {
+        if id == self.id {
+            return Err(DomainError::RevisionIdUnchanged);
+        }
+
         let manifest = RenderManifest::new(
             id.clone(),
             theme_version,
@@ -694,6 +698,7 @@ pub enum DomainError {
     DuplicateSectionOrder(usize),
     SectionLimitReached(usize),
     ManifestRevisionMismatch,
+    RevisionIdUnchanged,
     RevisionFunnelMismatch,
     PublicationConflict,
     PublicationStateUnavailable,
@@ -731,6 +736,7 @@ impl Display for DomainError {
             Self::ManifestRevisionMismatch => {
                 formatter.write_str("validation/manifest_revision_mismatch")
             }
+            Self::RevisionIdUnchanged => formatter.write_str("validation/revision_id_unchanged"),
             Self::RevisionFunnelMismatch => {
                 formatter.write_str("validation/revision_funnel_mismatch")
             }
