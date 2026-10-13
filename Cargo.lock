@@ -136,6 +136,9 @@ version = "0.1.0"
 [[package]]
 name = "eez-render"
 version = "0.1.0"
+dependencies = [
+ "eez-domain",
+]
 
 [[package]]
 name = "eez-storage"
