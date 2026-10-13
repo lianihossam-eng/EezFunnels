@@ -1,33 +1,83 @@
 {
   "task": "PR-003",
-  "executed_at_utc": "2026-10-13T15:46:25Z",
+  "executed_at_utc": "2026-10-13T16:13:05Z",
   "branch": "feat/003_schema",
   "base_commit": "bc641cad138706c023c254fcfdaaf782b5b7329d",
-  "verified_source_commit": "5b2abbd1c9cfa6c1d4faf3cb8ee7528ec88a480f",
-  "source_commit_role": "PR-003 implementation, STATUS update, migration, and local verification script; evidence is committed separately",
+  "verified_source_commit": "35246f2481c7bc9402233b9679e527cda13c3742",
+  "source_commit_role": "PR-003 implementation source verified at fix commit 35246f2; regression tests were committed first at 115a778 and evidence follows separately",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
-  "source_fingerprint_sha256": "afe49238f1c1df1d1758786ca26055d685ec3af2c4b433d54faa50134f1e8bcd",
+  "source_fingerprint_sha256": "fad140a4f7e98c448a44f7faef17efff2dada279ef9a212f7a324d7728d5eae4",
   "source_sha256": {
     "Cargo.lock": "f9ab9e7862ed107774745e54af60f2bf612fa522d72f7c8d84057002f934b031",
-    "apps/api/src/lib.rs": "7a43fd609c21f7e52d2fbdc759bf9adfe895c3c51ae116eb5b9318c82926b6df",
+    "apps/api/src/lib.rs": "e420dc50b23703a47ab60f155826250029a524427fe2e8289a839bfdf3e94970",
     "crates/storage/Cargo.toml": "d6f6c6ec2bcd936269611a0aa214de8f5a95ecf4d5eafa640e2cd002561ce748",
-    "crates/storage/src/lib.rs": "3920f4bb691454561e35ae4e45c625019358f2a1aa72ae4a23b4d993f9881f7b",
-    "crates/storage/src/repository.rs": "e8c87b35382001d3d1cc061c103895906f8b68a8a60bbdd8b5b9d648c8d80711",
+    "crates/storage/src/lib.rs": "3298f1a8e0e729fff2b3803ebc0c8f52ee4c5ac18c0dd1cb9ac293b374b4f0ca",
+    "crates/storage/src/repository.rs": "33374b0b55d2467855589cc42d9ae0a13516a6232f0c4f8be8cd45ba4606f518",
     "migrations/0002_product_schema.sql": "14f4203d8912cf4247aeda7f6e86e69ade813e0b39de45bb90f02017d9ac98cc",
-    "scripts/smoke-pr003.sh": "a25725145dd7042ba23177ba6090a5235abbc84eed92e60120872759ad6e64e0"
+    "scripts/smoke-pr003.sh": "088dcf97897314abd746e57b94cfdaa551f8a4b9851d80b27c3c569206fe34a6"
   },
   "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
   "node": "24.19.0",
   "npm": "11.9.0",
   "wrangler": "4.149.0",
-  "isolated_target_dir": "/tmp/eezfunnel-pr003-final-v2",
+  "isolated_target_dir": "/tmp/eezfunnel-pr003-p2-regression-final",
   "checks": [
     {
+      "name": "storage_schema_version_tdd",
+      "red_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-red-version cargo test -p eez-storage --locked",
+      "red_exit_code": 101,
+      "red_observation": "the test-first import of validate_schema_version failed to compile before the repository helper existed",
+      "green_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-final-v2 cargo test -p eez-storage --locked",
+      "green_exit_code": 0,
+      "green_tests_passed": 4,
+      "cases": [
+        "schema version 1 accepted",
+        "versions 0, 2, and i64::MAX rejected",
+        "required fields reject empty/whitespace values",
+        "1 MiB payload boundary counts UTF-8 bytes"
+      ]
+    },
+    {
+      "name": "publication_guard_tdd",
+      "red_command": "bash scripts/smoke-pr003.sh (new publication assertions, before repository fix)",
+      "red_exit_code": 1,
+      "red_observation": {
+        "unsupported_schema_publish_accepted": true,
+        "unsupported_schema_published_revision_id": "pr003-persisted-unsupported-revision",
+        "current_revision_noop_accepted": true,
+        "publication_baseline_cas_successes": 2,
+        "distinct_candidate_cas_successes": 1,
+        "assertion_failures": [
+          "unsupported schema version was publishable",
+          "unsupported publication changed the funnel pointer",
+          "re-publishing the current revision was counted as a CAS success",
+          "a published baseline produced more than one successful CAS"
+        ]
+      },
+      "red_output_log": "/tmp/eezfunnel-pr003-p2-red.log",
+      "green_command": "bash scripts/smoke-pr003.sh",
+      "green_exit_code": 0,
+      "green_observation": {
+        "unsupported_schema_publish_accepted": false,
+        "unsupported_schema_published_revision_id": null,
+        "current_revision_noop_accepted": false,
+        "publication_baseline_cas_successes": 1,
+        "distinct_candidate_cas_successes": 1,
+        "100_candidate_race_winners": 1,
+        "two_candidate_shared_baseline_race_winners": 1,
+        "final_published_revision_matches_winner": true,
+        "port_8787_after_cleanup": "closed"
+      },
+      "green_output_log": "/tmp/eezfunnel-pr003-p2-regression-final/smoke-pr003.log",
+      "fix_commit": "35246f2481c7bc9402233b9679e527cda13c3742",
+      "regression_test_commit": "115a77826466946e0737b121fb3bf24ca79ffd63"
+    },
+    {
       "name": "cargo_xtask_ci",
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-final-v2 cargo xtask ci",
+      "command": "source .project-tools/env.sh && target_dir=/tmp/eezfunnel-pr003-p2-regression-final && rm -rf \"$target_dir\" && mkdir -p \"$target_dir\" && CARGO_TARGET_DIR=\"$target_dir\" cargo xtask ci",
       "exit_code": 0,
       "verified": true,
-      "outcome": "passed from a fresh isolated target",
+      "outcome": "passed from a fresh isolated target after both publication regressions were fixed",
       "gates": [
         "cargo fmt --all -- --check",
         "cargo clippy --workspace --all-targets --locked -- -D warnings",
@@ -53,38 +103,24 @@
       },
       "wasm_artifacts": [
         {
-          "path": "/tmp/eezfunnel-pr003-final-v2/wasm32-unknown-unknown/debug/eez_api.wasm",
-          "size_bytes": 28058216,
-          "sha256": "a2297e77dace7af05ab466ef60a0d971667437611f06237d05c9ceef6e367450"
+          "path": "/tmp/eezfunnel-pr003-p2-regression-final/wasm32-unknown-unknown/debug/eez_api.wasm",
+          "size_bytes": 28133102,
+          "sha256": "674ce9f1c7c3d9752b40777bd9629b8bad97b486caa54ee003e9a8113b325d90"
         },
         {
-          "path": "/tmp/eezfunnel-pr003-final-v2/wasm32-unknown-unknown/debug/eez_dashboard.wasm",
+          "path": "/tmp/eezfunnel-pr003-p2-regression-final/wasm32-unknown-unknown/debug/eez_dashboard.wasm",
           "size_bytes": 1432977,
           "sha256": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
         }
-      ]
+      ],
+      "log": "/tmp/eezfunnel-pr003-p2-regression-final/ci.log"
     },
     {
       "name": "cargo_xtask_check",
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-final-v2 cargo xtask check",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-p2-regression-final cargo xtask check",
       "exit_code": 0,
       "verified": true,
-      "outcome": "fmt, clippy, workspace tests, and layers passed"
-    },
-    {
-      "name": "storage_schema_version_tdd",
-      "red_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-red-version cargo test -p eez-storage --locked",
-      "red_exit_code": 101,
-      "red_observation": "the test-first import of validate_schema_version failed to compile before the repository helper existed",
-      "green_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-final-v2 cargo test -p eez-storage --locked",
-      "green_exit_code": 0,
-      "green_tests_passed": 4,
-      "cases": [
-        "schema version 1 accepted",
-        "versions 0, 2, and i64::MAX rejected",
-        "required fields reject empty/whitespace values",
-        "1 MiB payload boundary counts UTF-8 bytes"
-      ]
+      "outcome": "fmt, clippy, workspace tests, and layers passed after the source commits"
     },
     {
       "name": "local_wrangler_smoke_pr003",
@@ -97,22 +133,40 @@
         "0001_pr002_runtime_probe.sql",
         "0002_product_schema.sql"
       ],
+      "publication_regression_observations": {
+        "unsupported_schema_publish_accepted": false,
+        "unsupported_schema_published_revision_id": null,
+        "current_revision_noop_accepted": false,
+        "publication_baseline_cas_successes": 1,
+        "distinct_candidate_cas_successes": 1
+      },
+      "publication_races": [
+        {
+          "candidates": 100,
+          "winners": 1,
+          "winner": "pr003-race-revision-007"
+        },
+        {
+          "candidates_sharing_published_baseline": 2,
+          "winners": 1,
+          "winner": "pr003-race-revision-001",
+          "baseline": "pr003-race-revision-007",
+          "stored_pointer_matches_winner": true
+        }
+      ],
       "repository_coverage": [
         "five seeded themes and exactly one default",
-        "theme create/read/update/delete",
-        "funnel create/read/list/update/delete",
-        "unsupported schema version refused on input and persisted read",
-        "missing funnel, invalid JSON, and payload overflow refused",
+        "theme and funnel create/read/update/delete",
+        "unsupported schema version refused on input, persisted read, and publication",
+        "unsupported publication leaves the funnel pointer unchanged",
+        "same-revision no-op publication is rejected",
+        "at most one candidate can publish against a shared baseline",
+        "invalid JSON and payload overflow refused",
         "revision snapshots immutable and retention capped at 100",
         "published revision cannot be deleted until replacement",
         "cross-funnel publication refused",
-        "conditional publication rejects a stale expected value"
+        "stale expected publication pointer refused"
       ],
-      "publication_race": {
-        "candidates": 100,
-        "winners": 1,
-        "winner": "pr003-race-revision-015"
-      },
       "correlation_id_cases": {
         "route_404": [
           "absent -> UUID",
@@ -126,7 +180,7 @@
           "129-character -> UUID",
           "valid supplied ID preserved"
         ],
-        "log_consistency": "matching api_error and request log records are polled for up to five seconds before failing"
+        "log_consistency": "matching api_error and request log records are polled for up to five seconds before asserting"
       },
       "method_not_allowed": {
         "status": 405,
@@ -134,12 +188,9 @@
       },
       "cleanup": {
         "port_8787": "closed",
-        "live_worker_processes": 0,
-        "workerd_zombies_before": 58,
-        "workerd_zombies_after": 60,
-        "environment_note": "container PID 1 does not reap adopted defunct workerd children; entries were not hidden"
+        "live_worker_processes": 0
       },
-      "log": "/tmp/eezfunnel-pr003-final-v2/smoke-pr003-final.log"
+      "log": "/tmp/eezfunnel-pr003-p2-regression-final/smoke-pr003.log"
     },
     {
       "name": "local_wrangler_smoke_pr002_regression",
@@ -147,13 +198,12 @@
       "exit_code": 0,
       "verified": true,
       "script_changed": false,
-      "outcome": "final identical rerun passed host denial, health, D1/R2/KV probe, and all 404/405 correlation-ID cases",
-      "transient_log_flush": "one earlier run missed an asynchronous api_error log; the repeated run passed and PR-003 smoke uses a bounded poll"
+      "outcome": "host denial, health, D1/R2/KV round trip, and 404/405 correlation-ID cases passed"
     },
     {
       "name": "shell_and_diff_checks",
       "commands": [
-        "cargo fmt --all -- --check",
+        "source .project-tools/env.sh && cargo fmt --all -- --check",
         "bash -n scripts/smoke-pr003.sh",
         "git diff --check"
       ],
@@ -172,37 +222,40 @@
   },
   "reviews": {
     "no_comments": {
-      "method": "Luna xhigh manual scan of the final code diff and scoped comment/suppression search",
+      "method": "Luna xhigh manual scan of final PR-003 fix diff and scoped comment/suppression search",
       "actionable_findings": 0,
       "comments_added": 0,
       "comments_deleted": 0,
-      "result": "no comments, suppressions, or accepted findings",
+      "result": "no comments, suppressions, or actionable findings",
       "independent_comment_sicko_review": "not run because parent instruction prohibited reviewer agents from other models"
     },
     "interrogate": {
-      "intent": "Add PR-003 D1 product tables, theme seeds, typed storage repository behavior, and local proof without implementing product domain/API behavior before PR-004.",
-      "method": "Luna xhigh adversarial self-review against the local interrogate rubric and code-quality review",
+      "intent": "Ensure published revisions use supported schema version 1 and a shared expected baseline can produce at most one successful conditional publication.",
+      "method": "Luna xhigh adversarial self-review against the local interrogate rubric and current product smoke behavior",
       "act_on": [],
       "consider": [],
-      "noted": [
-        "This container's PID 1 leaves adopted workerd zombies after local Wrangler shutdown; no live Worker remains and port 8787 is closed."
-      ],
+      "noted": [],
       "dismissed": [],
-      "independent_model_diversity": "not performed because parent instruction prohibited reviewer agents from other models"
+      "findings_from_prior_sol_review": [
+        "schema_version > 1 could be published despite read rejection; fixed by the schema_version=1 EXISTS guard in the atomic UPDATE",
+        "a no-op target equal to the expected baseline could succeed and leave the baseline reusable; fixed by the atomic published_revision_id IS NOT target guard"
+      ],
+      "independent_model_diversity": "not performed because parent instruction prohibited reviewer agents from other models; Sol will re-review the pushed exact head"
     }
   },
   "hosted_ci": {
     "pr_number": 4,
     "pr_url": "https://github.com/lianihossam-eng/EezFunnels/pull/4",
-    "tested_source_head": "5b2abbd1c9cfa6c1d4faf3cb8ee7528ec88a480f",
-    "run_id": "38424516651",
-    "status": "SUCCESS",
+    "previous_green_head": "9642f876c651aa10fdc409b0c6a2ef0a2a819c1c",
+    "previous_green_run_id": "38425635252",
+    "previous_green_status": "SUCCESS",
+    "source_fix_head": "35246f2481c7bc9402233b9679e527cda13c3742",
+    "current_status": "NOT_YET_GREEN_ON_FINAL_PR_HEAD",
     "workflow": "CI",
-    "latest_evidence_head_run_pending": true
+    "requirement": "hosted CI must pass on the latest pushed PR #4 head and Sol must review that exact head before merge"
   },
   "pending": [
-    "Wait for hosted CI to succeed on the latest PR #4 head after pushing the evidence-only commit.",
-    "Sol review and merge of PR #4 after the latest-head CI is green.",
+    "Hosted CI must pass on the latest pushed source/evidence head; Sol review and merge remain pending on that exact head.",
     "Cloudflare production binding IDs and credentials; no remote deployment was attempted."
   ],
   "unrun": [
