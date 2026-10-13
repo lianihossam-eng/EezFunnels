@@ -99,39 +99,84 @@ assert_port_closed
 start_worker --env dev --var "LOCAL_PROBE_TOKEN:$probe_token"
 health="$(curl --fail --silent --show-error -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-smoke-health' http://127.0.0.1:8787/health)"
 python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok"}' <<<"$health"
-method_not_allowed_status="$(curl --silent --output "$state_dir/method-not-allowed.json" --dump-header "$state_dir/method-not-allowed.headers" --write-out '%{http_code}' -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-method-not-allowed' --request POST http://127.0.0.1:8787/health)"
-python3 - "$state_dir/method-not-allowed.json" "$method_not_allowed_status" <<'PY'
+assert_error_case() {
+  local label="$1"
+  local path="$2"
+  local method="$3"
+  local status="$4"
+  local code="$5"
+  local category="$6"
+  local message="$7"
+  local id_mode="$8"
+  local requested_id=""
+  local response_file="$state_dir/$label.json"
+  local headers_file="$state_dir/$label.headers"
+  local correlation_header=""
+  local -a curl_args=(--silent --output "$response_file" --dump-header "$headers_file" --write-out '%{http_code}' -H 'Host: localhost:8787')
+
+  case "$id_mode" in
+    absent) ;;
+    empty) curl_args+=(-H 'x-correlation-id;') ;;
+    overlength)
+      correlation_header="$(printf '%129s' '' | tr ' ' x)"
+      curl_args+=(-H "x-correlation-id: $correlation_header")
+      ;;
+    provided)
+      requested_id="pr002-preserved-$label"
+      curl_args+=(-H "x-correlation-id: $requested_id")
+      ;;
+    *) return 2 ;;
+  esac
+
+  if [ "$method" != GET ]; then
+    curl_args+=(--request "$method")
+  fi
+  local response_status
+  response_status="$(curl "${curl_args[@]}" "http://127.0.0.1:8787$path")"
+  python3 - "$response_file" "$response_status" "$status" "$code" "$category" "$message" "$id_mode" "$requested_id" "$method" "$path" /tmp/eezfunnel-pr002-wrangler.log <<'PY'
 import json
+import re
 import sys
+import uuid
 
-with open(sys.argv[1], encoding="utf-8") as response_file:
+response_path, actual_status, expected_status, code, category, message, id_mode, requested_id, method, path, log_path = sys.argv[1:]
+with open(response_path, encoding="utf-8") as response_file:
     response = json.load(response_file)
+assert actual_status == expected_status, (actual_status, expected_status)
+assert response["code"] == code, response
+assert response["category"] == category, response
+assert response["message"] == message, response
+correlation_id = response["correlation_id"]
+if id_mode == "provided":
+    assert correlation_id == requested_id, response
+else:
+    uuid.UUID(correlation_id)
 
-assert sys.argv[2] == "405"
-assert response == {
-    "code": "validation/operation_not_supported",
-    "category": "validation",
-    "message": "The requested operation is not supported.",
-    "correlation_id": "pr002-method-not-allowed",
-}
+records = []
+ansi = re.compile(r"\x1b\[[0-9;]*m")
+with open(log_path, encoding="utf-8", errors="replace") as log_file:
+    for line in log_file:
+        clean_line = ansi.sub("", line)
+        start = clean_line.find("{")
+        if start < 0:
+            continue
+        try:
+            records.append(json.loads(clean_line[start:]))
+        except json.JSONDecodeError:
+            continue
+assert any(record.get("event") == "api_error" and record.get("code") == code and record.get("correlation_id") == correlation_id for record in records), ("api_error correlation ID mismatch", response, records)
+assert any(record.get("event") == "request" and record.get("method") == method and record.get("path") == path and record.get("status") == int(expected_status) and record.get("correlation_id") == correlation_id for record in records), ("request log correlation ID mismatch", response, records)
 PY
-tr -d '\r' < "$state_dir/method-not-allowed.headers" | grep -Eiq '^Allow: GET,HEAD$'
-unknown_route_status="$(curl --silent --output "$state_dir/unknown-route.json" --write-out '%{http_code}' -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-unknown-route' http://127.0.0.1:8787/__route_does_not_exist)"
-python3 - "$state_dir/unknown-route.json" "$unknown_route_status" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as response_file:
-    response = json.load(response_file)
-
-assert sys.argv[2] == "404"
-assert response == {
-    "code": "not_found/route",
-    "category": "not_found",
-    "message": "The requested route was not found.",
-    "correlation_id": "pr002-unknown-route",
+  if [ "$status" = 405 ]; then
+    tr -d '\r' < "$headers_file" | grep -Eiq '^Allow: GET,HEAD$'
+  fi
+  printf '%s=%s\n' "$label" "$(cat "$response_file")"
 }
-PY
+
+for id_mode in absent empty overlength provided; do
+  assert_error_case "route-$id_mode" "/__route_does_not_exist/$id_mode" GET 404 not_found/route not_found "The requested route was not found." "$id_mode"
+  assert_error_case "method-$id_mode" /health POST 405 validation/operation_not_supported validation "The requested operation is not supported." "$id_mode"
+done
 probe_without_token_status="$(curl --silent --output "$state_dir/probe-without-token.json" --write-out '%{http_code}' -H 'Host: localhost:8787' -H 'x-correlation-id: pr002-probe-no-token' --request POST http://127.0.0.1:8787/__local/probe)"
 python3 - "$state_dir/probe-without-token.json" "$probe_without_token_status" pr002-probe-no-token <<'PY'
 import json
@@ -166,4 +211,4 @@ assert response == {
 PY
 probe="$(curl --fail --silent --show-error --request POST -H 'Host: localhost:8787' -H "x-local-probe-token: $probe_token" -H 'x-correlation-id: pr002-smoke-storage' http://127.0.0.1:8787/__local/probe)"
 python3 -c 'import json,sys; body=json.load(sys.stdin); assert body == {"status":"ok","d1":"ok","r2":"ok","kv":"ok","correlation_id":"pr002-smoke-storage"}' <<<"$probe"
-printf 'health=%s\nproduction_denial=%s\nmethod_not_allowed=%s\nunknown_route=%s\nprobe=%s\n' "$health" "$(cat "$state_dir/production-denial.json")" "$(cat "$state_dir/method-not-allowed.json")" "$(cat "$state_dir/unknown-route.json")" "$probe"
+printf 'health=%s\nproduction_denial=%s\nprobe=%s\n' "$health" "$(cat "$state_dir/production-denial.json")" "$probe"
