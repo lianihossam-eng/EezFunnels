@@ -73,7 +73,8 @@ Enforced by cargo xtask layers.
 ### Before merge
 
 - PR-000 bootstrap gate requires `cargo xtask check`, the dashboard WASM build, a public GitHub
-  repository, and green hosted CI. PR-000 does not require `cargo xtask ci`; PR-001 introduces it.
+  repository, and green hosted CI on the current PR head. PR-000 does not require `cargo xtask ci`;
+  PR-001 introduces it.
 - Starting with PR-001, `cargo xtask ci` (check, WASM, and `cargo audit`) must pass before merging
   PR-001 and every later PR.
 - Update plan/STATUS.md.
