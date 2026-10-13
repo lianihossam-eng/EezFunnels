@@ -177,6 +177,7 @@ version = "0.1.0"
 dependencies = [
  "eez-domain",
  "sha2",
+ "url",
 ]
 
 [[package]]
