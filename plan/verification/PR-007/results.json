@@ -1,0 +1,215 @@
+{
+  "task": "PR-007",
+  "evidence_refreshed_at_utc": "2026-10-13T23:43:05Z",
+  "branch": "feat/007_themes",
+  "base_commit": "96701762c384e47264cdd8092c5f0c3496c7adac",
+  "verified_source_commit": "c4751dd9e7519c3c80b3cf136685d49673fbdd52",
+  "source_commit_role": "PR-007 implementation and same-ID fork guard plus review fix: five typed preset themes and JSON token maps, renderer-v2 token application with renderer-v1 compatibility, theme.set, migration/catalog parity, enforcement of C-01's new-revision-ID rule, and CSS selectors matched to emitted nonempty footer markup.",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256.",
+  "source_fingerprint_sha256": "a1f2fe36f3a1ede67d11cbdb48f38ec1ecaeb31768ffbf6dbca3770e87da0945",
+  "source_sha256": {
+    "Cargo.lock": "4b023aac6be867f317efdd58d9ca70e1733d7359cf9702a19f77077569574f11",
+    "Cargo.toml": "61185b4518efc4c99a3f6efd1b6c741e1345c7b2010b329faa1e7a1d7c6f6136",
+    "crates/commands/Cargo.toml": "8a1b264103901376d2e9c4846d5a77b1085a550fac1da8415c71da0e2849886c",
+    "crates/commands/src/lib.rs": "ef71642e064835174f129c0fa69d42c200bd4e483236a80bccbe4893085ae98d",
+    "crates/commands/src/theme_set_tests.rs": "03bfdbe4566e595a27440c3cfea097dcd6354a2f0f214e1a74164b0ce3c740b7",
+    "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
+    "crates/domain/src/lib.rs": "03ead752169feb127347aa08584f7ca0266cfc7ba2984c5fef44e5f83b253208",
+    "crates/domain/src/theme_tests.rs": "11a1456868e1c0a85cb0b82dc34c60d0170020c65238fec2c6b43525fe0854e5",
+    "crates/render/snapshots/theme-bold.properties": "651910870bdc8c51e9fbc641be97c8d76f39ec1e539f3b91c59c4dba4ce8988f",
+    "crates/render/snapshots/theme-corporate.properties": "74d6a02435851c780527dd9f362aba341ae946f4dfa015693dab44b108b74269",
+    "crates/render/snapshots/theme-elegant.properties": "e9879887b8a316cf3a38818b4121c0f5b0073d0f8958d9bdd228e703545d6194",
+    "crates/render/snapshots/theme-minimal.properties": "df87bc2f9d993e2c968c8aad857d9b763fb7442ddfca786f761e9328150320ac",
+    "crates/render/snapshots/theme-playful.properties": "e819c2de382322629618675e3ea6f7aff5605221b6da588a4ca90015376fc6fd",
+    "crates/render/snapshots/theme.css": "9b817c3207ff4adbc4c38d00adbbd26fbb8efb681dffc16b2a9b2b2e866c7954",
+    "crates/render/src/lib.rs": "e85bf09646c6434d5890e3413ae146d01ac15c846ea1552a8a2d93cb101ffcf3",
+    "crates/render/src/renderer_tests.rs": "d081d8dc5b5ae5774f40490c432caa9b1c8dd7fc52a08cc6850049c794b528f2",
+    "crates/render/src/section_content_tests.rs": "e32cf26f27e99ba3d89a989687dce037a3a2baf950c9d5d14b26e172701752df",
+    "crates/storage/Cargo.toml": "3b5e255eb82e81e6cb85d6332927fec226a097f7f2ebad0a0663175bac23fec3",
+    "crates/storage/src/lib.rs": "69b4562314942ef501d395fc062b43cdad2c6b364ee3ec92e6517abf9fa36263",
+    "crates/storage/src/theme_seed_tests.rs": "042b9c6ba4eb9ca138f76b21f47b269f13a8b3b5ea4c625ce98d0ed59800e5ad",
+    "migrations/0003_theme_presets.sql": "9d1be7c5e9fe5e055f4a21248005ef47bb14d3cb60d43c8fc6def3656888e50a",
+    "plan/decisions/D11_theme_presets.md": "181399d45c91b76265edb1789cce97f53c36a63bd8d271dd88c87e2ed0ba924a"
+  },
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "isolated_target_dir": "/workspace/.pr007-footer-ci.c4751dd",
+  "checks": [
+    {
+      "name": "preset_catalog_tdd",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
+      "red_exit_code": 101,
+      "red_observation": "The new catalog tests could not compile before ThemePreset and its JSON serialization were implemented.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked",
+      "green_exit_code": 0,
+      "tests_passed": 13,
+      "coverage": [
+        "Five stable preset IDs and display names each map to distinct token JSON.",
+        "Preset IDs serialize to stable snake_case JSON and unknown IDs are rejected.",
+        "Theme forks preserve the source snapshot and all non-theme manifest values while producing a new revision ID.",
+        "Reusing the source revision ID fails with validation/revision_id_unchanged."
+      ]
+    },
+    {
+      "name": "renderer_theme_snapshots_tdd",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render preset_theme_visual_snapshots_match_tokens_and_renderer_stylesheet",
+      "red_exit_code": 101,
+      "red_observation": "The visual regression could not compile before ThemeTokens::from_preset was implemented.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 33,
+      "coverage": [
+        "All five presets match exact sorted CSS property snapshots and the shared trusted stylesheet snapshot.",
+        "The stylesheet consumes all preset layout, typography, and color tokens, including list and link styles on the renderer-v2 footer markup that is actually emitted.",
+        "renderer-v1 output remains unstyled and keeps renderer-v1 metadata; renderer-v2 emits renderer-v2 metadata and the theme stylesheet.",
+        "Existing unsafe CSS, HTML escaping, section content, URL, and generated hostile-input regressions remain green."
+      ]
+    },
+    {
+      "name": "renderer_v2_footer_styles_regression",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render --locked renderer_v2_styles_nonempty_footer_links_using_emitted_markup",
+      "red_exit_code": 101,
+      "red_observation": "The new nonempty footer test failed because `.section-footer nav ul` was absent from the stylesheet while rendered footer HTML emitted `<nav aria-label=\"Footer\"><ul><li><a...`; the prior `.footer-links` selector matched no element.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked renderer_v2_styles_nonempty_footer_links_using_emitted_markup",
+      "green_exit_code": 0,
+      "tests_passed": 1,
+      "coverage": [
+        "The emitted nonempty footer contains the existing nav/list markup, and the renderer-v2 snapshot styles that list and its links through selectors scoped to `.section-footer`."
+      ]
+    },
+    {
+      "name": "theme_set_command_tdd",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-commands --locked",
+      "red_exit_code": 101,
+      "red_observation": "The new command tests could not compile before ThemeSetCommand and its dependencies were implemented.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-commands --locked",
+      "green_exit_code": 0,
+      "tests_passed": 2,
+      "coverage": [
+        "theme.set parses a stable preset ID and rejects unknown IDs and unknown fields.",
+        "Executing the command returns a renderable new revision without mutating the source revision."
+      ]
+    },
+    {
+      "name": "theme_seed_migration_tdd",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-storage",
+      "red_exit_code": 101,
+      "red_observation": "The parity regression failed with missing seed for minimal before migration 0003 updated the existing D1 theme rows.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-storage --locked",
+      "green_exit_code": 0,
+      "tests_passed": 5,
+      "coverage": [
+        "Every canonical theme JSON statement is present in migration 0003.",
+        "The local product repository probe rejects a seed catalog that differs from the domain catalog."
+      ]
+    },
+    {
+      "name": "legacy_renderer_metadata_regression",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render --locked injects_theme_tokens_as_sorted_css_custom_properties",
+      "red_exit_code": 101,
+      "red_observation": "The legacy renderer test failed because a renderer-v1 manifest emitted renderer-v2 in the HTML metadata.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 32
+    },
+    {
+      "name": "same_revision_id_regression",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked theme_fork_updates_the_manifest_without_mutating_the_source_revision",
+      "red_exit_code": 101,
+      "red_observation": "The new same-ID assertion failed because fork_with_theme returned a revision with the source ID.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-domain --locked theme_fork_updates_the_manifest_without_mutating_the_source_revision",
+      "green_exit_code": 0,
+      "tests_passed": 1
+    },
+    {
+      "name": "format_check",
+      "command": "source .project-tools/env.sh && cargo fmt --all -- --check",
+      "exit_code": 0,
+      "outcome": "Formatting check passed."
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "Clippy with warnings denied, workspace tests, and layer validation passed; cargo fmt --all -- --check also passed separately.",
+      "workspace_test_counts": {
+        "api": 11,
+        "commands": 2,
+        "domain": 13,
+        "render": 33,
+        "storage": 5,
+        "xtask": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      }
+    },
+    {
+      "name": "cargo_xtask_ci",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.pr007-footer-ci.c4751dd cargo xtask ci",
+      "exit_code": 0,
+      "fresh_isolated_target": true,
+      "target_was_empty_at_start": true,
+      "outcome": "Workspace checks/tests, API WASM, dashboard WASM, and cargo-audit passed; the command exited 0.",
+      "wasm_sha256": {
+        "eez_api.wasm": "fb6c9bacaa57cb1a133dd1ce46102ad5429de00c11a93bdc6bbab7a9b655b7fa",
+        "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+      },
+      "wasm_bytes": {
+        "eez_api.wasm": 29241068,
+        "eez_dashboard.wasm": 1432977
+      },
+      "audit": {
+        "audit_version": "0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 113,
+        "findings": 0,
+        "database_update": "cargo xtask ci fetched/updated the RustSec advisory database and crates.io index before scanning."
+      },
+      "target_dir": "/workspace/.pr007-footer-ci.c4751dd"
+    },
+    {
+      "name": "local_d1_worker_smoke",
+      "command": "bash scripts/smoke-pr003.sh",
+      "exit_code": 0,
+      "outcome": "Local migration 0003 applied, product_repository_probe passed against the domain preset catalog, publication and correlation-ID regressions passed, and port 8787 was closed after cleanup.",
+      "remote_bindings_used": false
+    },
+    {
+      "name": "no_comments_review",
+      "reviewer": "Manual Luna self-audit of the PR-007 source diff and added-comment/TODO/FIXME/lint-suppression scan.",
+      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added; git diff --check passed."
+    },
+    {
+      "name": "interrogate_self_audit",
+      "reviewer": "Manual Luna adversarial review of preset JSON parity, CSS token validation, renderer-version compatibility, immutable revision behavior, and same-ID rejection.",
+      "result": "No further actionable issue found. The footer selector mismatch found in review is covered by a nonempty-rendered-footer regression and now targets the emitted markup; the renderer-v1 byte-preservation snapshot remains green.",
+      "independent_review": "Sol identified the original selector mismatch on the prior PR head; a fresh Sol review is pending on the final pushed head."
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "scope_notes": [
+    "ThemePreset is a closed domain catalog of five stable IDs, display names, and thirteen deterministic tokens; token JSON uses lexicographic key order.",
+    "ThemeTokens validates every preset token and computes the theme-version digest from the normalized ordered map. The exact same catalog JSON is applied to the existing D1 theme rows by migration 0003 and checked by storage.",
+    "theme.set is a pure command: it receives a new revision ID, creates a validated immutable revision with renderer-v2 and the selected preset digest, preserves section content and asset/config hashes, and returns renderer-ready tokens. Reusing the source revision ID is rejected.",
+    "Renderer-v2 emits a trusted constant stylesheet that consumes the theme tokens. Renderer-v1 manifests retain the previous unstyled representation and their renderer-v1 metadata; unsupported versions remain rejected.",
+    "D11 records catalog ownership, migration parity, command and renderer version behavior. C-01 and other frozen contracts are unchanged.",
+    "The local Worker/D1 smoke used local resources only. No remote bindings, production settings, or deployment commands were used.",
+    "Sol review found that the prior `.footer-links` CSS matched no footer DOM nodes. The regression proved the issue with a nonempty renderer-v2 footer; the fix targets the existing `.section-footer nav ul` and `.section-footer nav a` markup, leaving renderer-v1 output unchanged."
+  ],
+  "hosted_ci": {
+    "status_at_evidence_capture": "The source fix and refreshed evidence are ready for push; hosted CI must pass on PR #8 exact final pushed head.",
+    "required": "Hosted CI must pass on the exact final pushed PR head before review completion and merge.",
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/8"
+  },
+  "reviews": {
+    "sol": "Fresh Sol review and merge are pending after hosted CI is green on the exact final pushed PR head.",
+    "codex": "Request one @codex review on the final pushed head after hosted CI is green."
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "reason": "PR-007 is verified with local D1/Worker bindings; production deployment and remote binding checks are outside this task."
+  }
+}

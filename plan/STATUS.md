@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-006 section content rendering (`feat/006_sections`)
+Current phase: PR-007 5 themes (`feat/007_themes`)
 Last updated: 2026-10-13
 
 ## Phases
@@ -11,8 +11,8 @@ Last updated: 2026-10-13
 - [x] PR-003 Schema + seed themes (merged as PR #4; merge commit `5140163`)
 - [x] PR-004 Domain model (merged as PR #5; merge commit `c5961dfc77fb60198882fdd7f5909d4e0326933f`)
 - [x] PR-005 Render engine (merged as PR #6; merge commit `2c67843b61c0eb266dee1219565d4e55d59738da`)
-- [ ] PR-006 5 sections (implementation in progress)
-- [ ] PR-007 5 themes
+- [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
+- [ ] PR-007 5 themes (implementation complete; local verification passed)
 - [ ] PR-008 Dashboard shell
 - [ ] PR-009 Funnel list + creation
 - [ ] PR-010 Visual editor
@@ -66,11 +66,27 @@ relationship to the full serialized-payload limit. Review fixes in source commit
 SHA-256 of canonical typed section content and reject HTTPS-looking relative spellings without an
 explicit `://` authority. Both regressions failed against the prior PR head and pass after the fix.
 The renderer suite passes 31 tests, `cargo xtask check` passes, and fresh-target `cargo xtask ci`
-passes with 113 audited dependencies and zero findings. Refreshed evidence is in
-`plan/verification/PR-006/execution.txt` and `results.json`. The source and evidence commits are
-local and ready to push; hosted CI and fresh Sol/@codex reviews remain pending on the pushed PR
-head. PR #7 is open at https://github.com/lianihossam-eng/EezFunnels/pull/7. Do not merge until
-hosted CI and both reviews are clean on the exact latest pushed head.
+passes with 113 audited dependencies and zero findings. PR #7 merged at
+`96701762c384e47264cdd8092c5f0c3496c7adac`; the final reviewed PR head was `9f46533`, with hosted
+CI green and Sol/@codex reviews clean. Refreshed evidence is in
+`plan/verification/PR-006/execution.txt` and `results.json`.
+
+PR-007 adds five closed, typed preset themes with stable IDs and JSON token maps, a migration that
+updates the existing D1 seed rows, and a storage probe that checks exact catalog parity. `theme.set`
+creates an immutable revision with a validated theme digest and renderer-v2; it rejects reuse of the
+source revision ID. Renderer-v2 emits a trusted stylesheet that consumes the token set, while
+renderer-v1 keeps its unstyled output and version metadata. D11 records the ownership and
+compatibility decisions. Test-first regressions cover preset serialization, renderer snapshots,
+command behavior, migration parity, renderer-v1 metadata, same-ID revision forks, and the nonempty
+renderer-v2 footer selector against its emitted markup. The domain, command, renderer, and storage
+suites pass 13, 2, 33, and 5 tests. `cargo xtask check`, fresh-target `cargo xtask ci` on source
+commit `c4751dd9e7519c3c80b3cf136685d49673fbdd52`, and the local-only
+`scripts/smoke-pr003.sh` all pass. RustSec scanned 113 locked dependencies against 1,310 advisories
+with zero findings. Fingerprinted output is in `plan/verification/PR-007/execution.txt` and
+`results.json`. The fix addresses Sol's review finding that `.footer-links` matched no emitted
+footer elements; it styles the existing `.section-footer nav ul` and anchor markup without changing
+renderer-v1 bytes. Hosted CI and fresh @codex/Sol review are required on PR #8's final head; do not
+merge before they are clean on that exact SHA. No remote deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -122,5 +138,6 @@ hosted CI and both reviews are clean on the exact latest pushed head.
 
 ## Next action
 
-Request @codex and Sol review on PR #7's latest head, and verify hosted CI on that same commit. Do
-not merge before both reviews and hosted CI are clean on the exact head. Do not deploy remotely.
+Push the PR-007 source and refreshed evidence, verify hosted CI on the final PR #8 head, then request
+one @codex review and Sol review on that same head. Do not merge until both reviews and hosted CI
+are clean on the exact SHA. Do not deploy remotely.
