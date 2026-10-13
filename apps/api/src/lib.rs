@@ -30,6 +30,38 @@ struct ProbeResponse {
     correlation_id: String,
 }
 
+#[derive(Serialize)]
+struct ProductProbeResponse {
+    status: &'static str,
+    funnels: &'static str,
+    revisions: &'static str,
+    themes: &'static str,
+    publication: &'static str,
+    unsupported_schema_version: &'static str,
+    cross_funnel_published_revision_insert_accepted: bool,
+    null_published_revision_insert_accepted: bool,
+    unsupported_schema_publish_accepted: bool,
+    unsupported_schema_published_revision_id: Option<String>,
+    current_revision_noop_accepted: bool,
+    publication_baseline_cas_successes: usize,
+    distinct_candidate_cas_successes: usize,
+    publication_race_funnel_id: &'static str,
+    publication_race_revision_ids: Vec<String>,
+    correlation_id: String,
+}
+
+#[derive(Serialize)]
+struct PublicationRaceResponse {
+    published: bool,
+    correlation_id: String,
+}
+
+#[derive(Serialize)]
+struct PublicationStatusResponse {
+    published_revision_id: Option<String>,
+    correlation_id: String,
+}
+
 fn router() -> Router {
     Router::new()
         .route("/health", get(health))
@@ -57,6 +89,20 @@ pub async fn fetch(
         error_response(&error, correlation_id.clone())
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
         local_probe(&env, request.headers(), correlation_id.clone()).await
+    } else if request_path == "/__local/product-probe" && request.method() == Method::POST {
+        local_product_probe(&env, request.headers(), correlation_id.clone()).await
+    } else if request_path == "/__local/publication-race" && request.method() == Method::POST {
+        local_publication_race(
+            &env,
+            request.headers(),
+            request.uri().query(),
+            correlation_id.clone(),
+        )
+        .await
+    } else if request_path == "/__local/publication-race" && request.method() == Method::GET {
+        local_publication_status(&env, request.headers(), correlation_id.clone()).await
+    } else if request_path == "/__local/publication-race" && request.method() == Method::DELETE {
+        local_publication_race_cleanup(&env, request.headers(), correlation_id.clone()).await
     } else {
         let mut router = router();
         router.call(request).await?
@@ -108,22 +154,7 @@ async fn local_probe(
     headers: &HeaderMap<HeaderValue>,
     correlation_id: String,
 ) -> Response<axum::body::Body> {
-    let is_development = env
-        .var("ENVIRONMENT")
-        .map(|value| value.to_string() == "development")
-        .unwrap_or(false);
-    let expected_token = env
-        .var("LOCAL_PROBE_TOKEN")
-        .ok()
-        .map(|value| value.to_string());
-    let supplied_token = headers
-        .get("x-local-probe-token")
-        .and_then(|value| value.to_str().ok());
-    let has_valid_token = matches!(
-        (expected_token.as_deref(), supplied_token),
-        (Some(expected), Some(supplied)) if !expected.is_empty() && expected == supplied
-    );
-    if !is_development || !has_valid_token {
+    if !local_probe_authorized(env, headers) {
         let error = ApiError::from_code("not_found/route");
         log_api_error(
             &error,
@@ -156,6 +187,201 @@ async fn local_probe(
             error_response(&error, correlation_id)
         }
     }
+}
+
+async fn local_product_probe(
+    env: &Env,
+    headers: &HeaderMap<HeaderValue>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if !local_probe_authorized(env, headers) {
+        let error = ApiError::from_code("not_found/route");
+        log_api_error(
+            &error,
+            &correlation_id,
+            "local product probe route is not available",
+        );
+        return error_response(&error, correlation_id);
+    }
+
+    let result = async {
+        let bindings = eez_storage::Bindings::from_env(env)?;
+        let publication_regressions = bindings.verify_product_repository_round_trip().await?;
+        let revision_ids = bindings.prepare_publication_race().await?;
+        Ok::<_, worker::Error>((publication_regressions, revision_ids))
+    }
+    .await;
+
+    match result {
+        Ok((publication_regressions, publication_race_revision_ids)) => {
+            Json(ProductProbeResponse {
+                status: "ok",
+                funnels: "ok",
+                revisions: "ok",
+                themes: "ok",
+                publication: "ok",
+                unsupported_schema_version: "rejected",
+                cross_funnel_published_revision_insert_accepted: publication_regressions
+                    .cross_funnel_published_revision_insert_accepted,
+                null_published_revision_insert_accepted: publication_regressions
+                    .null_published_revision_insert_accepted,
+                unsupported_schema_publish_accepted: publication_regressions
+                    .unsupported_schema_publish_accepted,
+                unsupported_schema_published_revision_id: publication_regressions
+                    .unsupported_schema_published_revision_id,
+                current_revision_noop_accepted: publication_regressions
+                    .current_revision_noop_accepted,
+                publication_baseline_cas_successes: publication_regressions
+                    .publication_baseline_cas_successes,
+                distinct_candidate_cas_successes: publication_regressions
+                    .distinct_candidate_cas_successes,
+                publication_race_funnel_id: "pr003-race-funnel",
+                publication_race_revision_ids,
+                correlation_id,
+            })
+            .into_response()
+        }
+        Err(source) => {
+            let error = ApiError::from_storage_error(&source);
+            log_api_error(&error, &correlation_id, &format!("{source:?}"));
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+async fn local_publication_race(
+    env: &Env,
+    headers: &HeaderMap<HeaderValue>,
+    query: Option<&str>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if !local_probe_authorized(env, headers) {
+        let error = ApiError::from_code("not_found/route");
+        log_api_error(
+            &error,
+            &correlation_id,
+            "local publication probe is not available",
+        );
+        return error_response(&error, correlation_id);
+    }
+    let Some(revision_id) = query_parameter(query, "revision_id") else {
+        let error = ApiError::from_code("not_found/route");
+        log_api_error(
+            &error,
+            &correlation_id,
+            "local publication candidate is missing",
+        );
+        return error_response(&error, correlation_id);
+    };
+    let expected_published_revision_id = query_parameter(query, "expected_published_revision_id");
+
+    let result = async {
+        let bindings = eez_storage::Bindings::from_env(env)?;
+        bindings
+            .publish_race_candidate(revision_id, expected_published_revision_id)
+            .await
+    }
+    .await;
+    match result {
+        Ok(published) => Json(PublicationRaceResponse {
+            published,
+            correlation_id,
+        })
+        .into_response(),
+        Err(source) => {
+            let error = ApiError::from_storage_error(&source);
+            log_api_error(&error, &correlation_id, &format!("{source:?}"));
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+async fn local_publication_status(
+    env: &Env,
+    headers: &HeaderMap<HeaderValue>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if !local_probe_authorized(env, headers) {
+        let error = ApiError::from_code("not_found/route");
+        log_api_error(
+            &error,
+            &correlation_id,
+            "local publication probe is not available",
+        );
+        return error_response(&error, correlation_id);
+    }
+
+    let result = async {
+        let bindings = eez_storage::Bindings::from_env(env)?;
+        bindings.publication_race_winner().await
+    }
+    .await;
+    match result {
+        Ok(published_revision_id) => Json(PublicationStatusResponse {
+            published_revision_id,
+            correlation_id,
+        })
+        .into_response(),
+        Err(source) => {
+            let error = ApiError::from_storage_error(&source);
+            log_api_error(&error, &correlation_id, &format!("{source:?}"));
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+async fn local_publication_race_cleanup(
+    env: &Env,
+    headers: &HeaderMap<HeaderValue>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if !local_probe_authorized(env, headers) {
+        let error = ApiError::from_code("not_found/route");
+        log_api_error(
+            &error,
+            &correlation_id,
+            "local publication probe is not available",
+        );
+        return error_response(&error, correlation_id);
+    }
+    let result = async {
+        let bindings = eez_storage::Bindings::from_env(env)?;
+        bindings.cleanup_publication_race().await
+    }
+    .await;
+    match result {
+        Ok(()) => Json(HealthResponse { status: "ok" }).into_response(),
+        Err(source) => {
+            let error = ApiError::from_storage_error(&source);
+            log_api_error(&error, &correlation_id, &format!("{source:?}"));
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+fn query_parameter<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
+    query?.split('&').find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        (key == name && !value.is_empty()).then_some(value)
+    })
+}
+
+fn local_probe_authorized(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
+    let is_development = env
+        .var("ENVIRONMENT")
+        .map(|value| value.to_string() == "development")
+        .unwrap_or(false);
+    let expected_token = env
+        .var("LOCAL_PROBE_TOKEN")
+        .ok()
+        .map(|value| value.to_string());
+    let supplied_token = headers
+        .get("x-local-probe-token")
+        .and_then(|value| value.to_str().ok());
+    matches!(
+        (is_development, expected_token.as_deref(), supplied_token),
+        (true, Some(expected), Some(supplied)) if !expected.is_empty() && expected == supplied
+    )
 }
 
 fn correlation_id(headers: &HeaderMap<HeaderValue>) -> String {
