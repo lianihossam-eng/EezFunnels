@@ -22,6 +22,6 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo xtask check
-      - run: cargo build -p eez-dashboard --target wasm32-unknown-unknown --locked
+      - run: bash scripts/install-cargo-audit.sh
+      - run: cargo xtask ci
       - run: cargo run -p eez-cli --locked -- --help
