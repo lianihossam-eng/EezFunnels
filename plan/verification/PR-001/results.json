@@ -1,0 +1,130 @@
+{
+  "task": "PR-001",
+  "executed_at_utc": "2026-10-13T07:57:23+00:00",
+  "base_commit": "1256e01f92e0fc20368db6a4f57b2cb311d3073a",
+  "rust_toolchain": "1.85.0",
+  "isolated_target_dir": "/tmp/eezfunnel-pr001-final-target",
+  "checks": [
+    {
+      "name": "cargo_xtask_ci",
+      "command": ["cargo", "xtask", "ci"],
+      "cwd": ".",
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/eezfunnel-pr001-final-target"
+      },
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "tests_passed": {
+        "xtask_unit": 23,
+        "bootstrap_integration": 2,
+        "pr001_integration": 4
+      },
+      "gates": ["fmt", "clippy", "workspace tests", "layers", "dashboard wasm", "cargo audit"]
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": ["cargo", "xtask", "check"],
+      "cwd": ".",
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/eezfunnel-pr001-final-target"
+      },
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "tests_passed": {
+        "xtask_unit": 23,
+        "bootstrap_integration": 2,
+        "pr001_integration": 4
+      }
+    },
+    {
+      "name": "wasm_artifact_header",
+      "command": ["python3", "-c", "verify wasm magic and version"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "path": "/tmp/eezfunnel-pr001-final-target/wasm32-unknown-unknown/debug/eez_dashboard.wasm",
+      "size_bytes": 1432977,
+      "header_hex": "0061736d01000000",
+      "sha256": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+    },
+    {
+      "name": "cli_help",
+      "command": ["cargo", "run", "-p", "eez-cli", "--locked", "--", "--help"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed"
+    },
+    {
+      "name": "layers",
+      "command": ["cargo", "xtask", "layers"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed"
+    },
+    {
+      "name": "cargo_audit_installation",
+      "command": ["bash", "scripts/install-cargo-audit.sh"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "cargo_audit_version": "0.22.2",
+      "audit_toolchain": "1.88.0",
+      "project_rust_toolchain_unchanged": "1.85.0",
+      "idempotent_rerun": true,
+      "captured_in_transcript": true
+    },
+    {
+      "name": "cargo_audit_scan",
+      "command": ["cargo", "audit"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "advisories_loaded": 1308,
+      "locked_crates_scanned": 19
+    },
+    {
+      "name": "deploy_mock_tests",
+      "command": ["cargo", "xtask", "ci"],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "tests": [
+        "deploy_forwards_arguments_from_workspace_root",
+        "deploy_propagates_wrangler_failures",
+        "missing_wrangler_is_reported"
+      ],
+      "real_deploy_run": false
+    }
+  ],
+  "pending": [
+    "hosted GitHub CI on PR #2 head 5d57c8d at last poll; any new push requires a fresh run"
+  ],
+  "unrun": [
+    "deployment against a real Cloudflare account (Wrangler and credentials are unavailable)",
+    "product behavior beyond the PR-000 bootstrap"
+  ],
+  "source_sha256": {
+    ".github/workflows/ci.yml": "c58c9936fd1641cdaa46d0218dd91f3590fddf117c6bcfcaf4c6f40352590aa2",
+    "xtask/src/main.rs": "c22cbc3f1ae036f2059d55f5bbcc226beb138963f887ca43324abbe291b61f7b",
+    "xtask/tests/bootstrap_cli.rs": "1b744077cb0cb221bf161c154349f0fedf4f3325a2665f0f9c4d853126457817",
+    "xtask/tests/pr001_cli.rs": "f8bf5d448643e0cc99a94d21e9070b009978e357e4c44640d1ef69702076b903",
+    "scripts/install-cargo-audit.sh": "62c51b872d3f27ad6326ed152105279e66e7353eebec51386aea25762e599a9f"
+  },
+  "transcript": "execution.txt"
+}
