@@ -43,7 +43,9 @@ when hydrating a funnel, and C-04 now registers C-01's `validation/schema_versio
 HTTP 400 with matching API mapping. The domain suite has 10 passing tests. `cargo xtask check` and
 clean isolated `cargo xtask ci` passed; the audit scanned 105 locked dependencies against 1,310
 advisories with zero findings. Exact commands, TDD observations, source hashes, and self-audits are
-in `plan/verification/PR-004/`.
+in `plan/verification/PR-004/`. Hosted CI run `38438853320` passed on pushed head
+`180d5af03eb415d018117fb892211af16cf092be`; the evidence refresh that records this run requires a
+new hosted run on its resulting head before merge.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -95,6 +97,6 @@ in `plan/verification/PR-004/`.
 
 ## Next action
 
-Push the PR-004 corrective source and evidence commits to the existing PR #5, then rerun hosted CI
-and request Sol/@codex review on that exact head. Do not merge until both reviews and hosted CI are
-clean on the same head.
+Push the PR-004 evidence refresh to existing PR #5, rerun hosted CI, and request Sol/@codex review
+on the resulting exact head. Do not merge until both reviews and hosted CI are clean on that same
+head.

@@ -1,6 +1,6 @@
 {
   "task": "PR-004",
-  "evidence_refreshed_at_utc": "2026-10-13T17:23:51Z",
+  "evidence_refreshed_at_utc": "2026-10-13T17:29:39Z",
   "branch": "feat/004_domain",
   "base_commit": "5140163ab122d38554b001299faf6b0eb93fd77d",
   "verified_source_commit": "6da34d09dae2dc0f958a02323c7f025641b86b30",
@@ -107,10 +107,11 @@
     "Section content, nested blocks, and render behavior remain in later PRs; this PR enforces the configured section-count limit."
   ],
   "hosted_ci": {
-    "status": "pending on corrected final pushed PR #5 head",
-    "previous_head": "0bcd201a0451aa3ed782f6fb4f5684af1acf2ce3",
-    "previous_head_ci": "green; stale after corrective source changes",
-    "required_head": "the final pushed PR #5 head after source and evidence updates"
+    "last_green_run_id": 38438853320,
+    "last_green_head": "180d5af03eb415d018117fb892211af16cf092be",
+    "last_green_result": "success",
+    "follow_up_required": "the evidence-only commit following this run creates a new PR head; hosted CI must pass on that resulting exact head",
+    "required_head": "the final pushed PR #5 head after this evidence refresh"
   },
   "reviews": {
     "sol": "re-review required on corrected final PR head",

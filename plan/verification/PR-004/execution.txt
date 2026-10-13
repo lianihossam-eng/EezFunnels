@@ -1,6 +1,6 @@
 PR-004 corrective verification transcript
 
-Evidence refreshed: 2026-10-13T17:23:51Z
+Evidence refreshed: 2026-10-13T17:29:39Z
 Branch: feat/004_domain
 Base commit: 5140163ab122d38554b001299faf6b0eb93fd77d
 Verified source commit: 6da34d09dae2dc0f958a02323c7f025641b86b30
@@ -37,8 +37,8 @@ Self-audits, Luna xhigh:
 - These self-audits were performed in Luna xhigh. Sol and @codex must review the final pushed head separately; reviews on the prior PR head do not cover these corrections.
 
 PR state:
-- PR #5 is open at https://github.com/lianihossam-eng/EezFunnels/pull/5. Source commit `6da34d0` and this evidence update are prepared locally; hosted CI on the corrected pushed head is pending and must be green before merge.
-- Sol/@codex reviews are required again on the corrected final head. No merge or remote deployment was performed.
+- PR #5 is open at https://github.com/lianihossam-eng/EezFunnels/pull/5. Hosted CI run `38438853320` passed on pushed head `180d5af03eb415d018117fb892211af16cf092be`. This evidence-only refresh follows that head, so the resulting PR head must pass hosted CI again.
+- Sol/@codex reviews are required again on the resulting final head. No merge or remote deployment was performed.
 
 Deployment:
 - No remote deployment was run. Cloudflare production binding IDs and credentials remain unavailable.
