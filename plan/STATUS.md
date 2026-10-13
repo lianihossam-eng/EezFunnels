@@ -5,7 +5,8 @@ Last updated: 2026-10-13
 
 ## Phases
 
-- [ ] PR-000 Bootstrap (local checks verified; PR #1 open; hosted CI pending)
+- [ ] PR-000 Bootstrap (local checks verified; PR #1 open; previous hosted CI passed; this update
+  awaits review and CI)
 - [ ] PR-001 xtask
 - [ ] PR-002 Worker + D1 + R2 + KV
 - [ ] PR-003 Schema + seed themes
@@ -41,8 +42,14 @@ The application libraries remain empty. Product behavior, Cloudflare deployment,
 
 ## Blockers
 
-No local bootstrap blockers. [PR #1](https://github.com/lianihossam-eng/EezFunnels/pull/1) is open; hosted CI was in progress at the last check. GitHub reports the repository as public.
+No local bootstrap blockers. [PR #1](https://github.com/lianihossam-eng/EezFunnels/pull/1) is open;
+GitHub reports the repository as public. [Hosted CI run 38358575998](https://github.com/lianihossam-eng/EezFunnels/actions/runs/38358575998)
+passed on `85541917`; it does not cover this documentation update.
 
 ## Next action
 
-Finish PR-000 review and verify hosted CI. Then execute PR-001 for the full ci, audit, and deployment automation. No merge or release is authorized by a local check alone.
+Finish PR-000 review after `cargo xtask check`, the dashboard WASM build, the public repository, and
+green hosted CI on the current PR head are confirmed. PR-000 is the sole bootstrap exception to the
+`cargo xtask ci` merge gate. PR-001 introduces `cargo xtask ci` (check, WASM, and `cargo audit`); it
+must pass before merging PR-001 and every later PR. No merge or release is authorized by local
+checks alone.
