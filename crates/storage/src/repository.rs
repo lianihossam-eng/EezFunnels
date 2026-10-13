@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use worker::d1::D1Type;
 use worker::{D1Database, Error};
 
-const SUPPORTED_SCHEMA_VERSION: i64 = 1;
+const SUPPORTED_SCHEMA_VERSION: i32 = 1;
 const MAX_FUNNEL_BYTES: usize = 1_048_576;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 
@@ -285,17 +285,20 @@ impl<'a> Repository<'a> {
         let expected = expected_published_revision_id
             .map(D1Type::Text)
             .unwrap_or(D1Type::Null);
+        let supported_schema_version = D1Type::Integer(SUPPORTED_SCHEMA_VERSION);
         let published = self
             .database
             .prepare(
-                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ?) RETURNING id",
+                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?) RETURNING id",
             )
             .bind_refs([
                 &revision_id,
                 &funnel_id,
                 &expected,
                 &revision_id,
+                &revision_id,
                 &funnel_id,
+                &supported_schema_version,
             ])?
             .first::<String>(Some("id"))
             .await?;
@@ -396,7 +399,7 @@ impl<'a> Repository<'a> {
 }
 
 pub fn validate_schema_version(version: i64) -> RepositoryResult<()> {
-    if version == SUPPORTED_SCHEMA_VERSION {
+    if version == i64::from(SUPPORTED_SCHEMA_VERSION) {
         Ok(())
     } else {
         Err(RepositoryError::UnsupportedSchemaVersion(version))
