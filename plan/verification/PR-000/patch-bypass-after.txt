@@ -1,0 +1,4 @@
+   Compiling xtask v0.1.0 (/tmp/eez-review-3vjtlzhm/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running `target/debug/xtask layers`
+unclassified resolved local package: hidden-helper

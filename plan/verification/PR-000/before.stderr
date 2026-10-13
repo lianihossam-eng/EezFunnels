@@ -1,0 +1,8 @@
+error: failed to load manifest for workspace member `/workspace/EezFunnels/crates/domain`
+referenced by workspace at `/workspace/EezFunnels/Cargo.toml`
+
+Caused by:
+  failed to read `/workspace/EezFunnels/crates/domain/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)

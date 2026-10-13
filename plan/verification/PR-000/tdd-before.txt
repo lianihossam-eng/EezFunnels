@@ -1,0 +1,37 @@
+    Updating crates.io index
+     Locking 11 packages to latest compatible versions
+ Downloading crates ...
+  Downloaded memchr v2.8.3
+  Downloaded itoa v1.0.18
+  Downloaded zmij v1.0.23
+  Downloaded serde_json v1.0.154
+  Downloaded serde_core v1.0.229
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.154
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling xtask v0.1.0 (/workspace/EezFunnels/xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.70s
+     Running unittests src/main.rs (target/debug/deps/xtask-67ba53d1c1a07002)
+
+running 1 test
+test layers::tests::upward_dependency_is_rejected ... FAILED
+
+failures:
+
+---- layers::tests::upward_dependency_is_rejected stdout ----
+
+thread 'layers::tests::upward_dependency_is_rejected' panicked at xtask/src/layers.rs:11:9:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err("product dependencies must strictly descend: L0 -> L3")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    layers::tests::upward_dependency_is_rejected
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p xtask --bin xtask`
