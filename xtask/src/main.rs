@@ -74,6 +74,14 @@ fn steps(task: &Task) -> Vec<Step> {
             steps.push(cargo_step(&[
                 "build",
                 "-p",
+                "eez-api",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--locked",
+            ]));
+            steps.push(cargo_step(&[
+                "build",
+                "-p",
                 "eez-dashboard",
                 "--target",
                 "wasm32-unknown-unknown",
@@ -220,6 +228,14 @@ mod tests {
                 ]),
                 cargo_step(&["test", "--workspace", "--locked"]),
                 Step::Layers,
+                cargo_step(&[
+                    "build",
+                    "-p",
+                    "eez-api",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "--locked",
+                ]),
                 cargo_step(&[
                     "build",
                     "-p",

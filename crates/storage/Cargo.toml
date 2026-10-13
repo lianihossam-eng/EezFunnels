@@ -7,3 +7,6 @@ rust-version.workspace = true
 
 [package.metadata.eez]
 layer = 2
+
+[dependencies]
+worker.workspace = true

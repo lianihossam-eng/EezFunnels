@@ -1,0 +1,14 @@
+{
+  "name": "eezfunnel-worker-tools",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "wrangler": "wrangler"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}
