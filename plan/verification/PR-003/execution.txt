@@ -1,86 +1,105 @@
 PR-003 local verification transcript
 
-Executed: 2026-10-13T16:13:05Z
+Executed: 2026-10-13T16:30:03Z
 Branch: feat/003_schema
 Base commit: bc641cad138706c023c254fcfdaaf782b5b7329d
-Regression-test commit: 115a77826466946e0737b121fb3bf24ca79ffd63
-Verified source commit: 35246f2481c7bc9402233b9679e527cda13c3742
-The regression-test commit precedes the fix commit. Evidence and status are committed separately.
-The source hashes cover Cargo.lock, API/storage Rust sources and manifest, the product migration,
-and the PR-003 local smoke script. The source fingerprint is SHA-256 of sorted `path SHA256\n`
-lines and is recorded in results.json. PR-002's historical fingerprint discrepancy is recorded
-below without changing its merged evidence files.
+Earlier publication regression-test/fix commits: 115a77826466946e0737b121fb3bf24ca79ffd63 / 35246f2481c7bc9402233b9679e527cda13c3742
+Insert-ownership regression-test commit: b8c7e968b20cf8bd2267951eeab84f134eb4845d
+Verified source commit: d3e1898f86403bb5c834f2ed736b072440e0d21e
+The regression tests precede their fixes. Evidence and status are separate commits. Source hashes
+cover Cargo.lock, API/storage Rust sources and manifest, the product migration, and the PR-003
+local smoke. The source fingerprint is SHA-256 of sorted `path SHA256\n` lines and is recorded in
+results.json. PR-002's historical fingerprint discrepancy is recorded below without changing its
+merged evidence files.
 
 Project toolchain: rustc 1.85.0 / Cargo 1.85.0
 Node/npm/Wrangler: v24.19.0 / 11.9.0 / 4.149.0
 Pinned cargo-audit: cargo-audit-audit 0.22.2
 
-TDD regression, failing then passing:
-- Test-first commit `115a778` added local D1 observations for publication and the shared-baseline
-  race assertions before the repository fix.
-- Red command: `bash scripts/smoke-pr003.sh` against the unchanged repository publication code.
-- Red exit: 1. The local D1 probe observed:
-  `publication_regression_observations={"current_revision_noop_accepted": true, "distinct_candidate_cas_successes": 1, "publication_baseline_cas_successes": 2, "unsupported_schema_publish_accepted": true, "unsupported_schema_published_revision_id": "pr003-persisted-unsupported-revision"}`
-  It then failed with:
-  `AssertionError: ['unsupported schema version was publishable', 'unsupported publication changed the funnel pointer', 're-publishing the current revision was counted as a CAS success', 'a published baseline produced more than one successful CAS']`
-  Full captured red output: `/tmp/eezfunnel-pr003-p2-red.log`.
-- Fix commit `35246f2` adds two predicates to the existing single atomic UPDATE: the target
-  revision must have schema_version 1, and it must differ from the currently published pointer.
-  The SQL still compares the current pointer to the caller's expected baseline in that same UPDATE.
-- Green command: `bash scripts/smoke-pr003.sh` — exit 0. The unsupported schema publish returned
-  false and left the pointer null; publishing the current revision as a no-op returned false;
-  two different candidates against one published baseline produced one winner.
-- Latest captured green output: `/tmp/eezfunnel-pr003-p2-regression-final/smoke-pr003.log`.
+TDD: publication update regressions (previous commits):
+- The test-first smoke on the unguarded repository observed unsupported schema publication was
+  accepted and moved the funnel pointer; re-publishing the current revision was accepted; the
+  no-op and subsequent candidate gave two successes from one expected baseline.
+- Fix commit `35246f2` added schema_version=1 and target-not-current predicates to the same atomic
+  D1 UPDATE that compares the expected published pointer.
+- After the fix, the local smoke observed unsupported publish=false with pointer null, no-op
+  publish=false, and one winner for two candidates sharing a published baseline.
+
+TDD: insert ownership regression:
+- Test-first commit `b8c7e96` added a local D1 insert using a real revision owned by another funnel,
+  plus a positive check that a funnel with a NULL published pointer can be inserted.
+- Red command before the migration trigger: `bash scripts/smoke-pr003.sh` — exit 1. It observed
+  `publication_regression_observations={"cross_funnel_published_revision_insert_accepted": true, "current_revision_noop_accepted": false, "distinct_candidate_cas_successes": 1, "null_published_revision_insert_accepted": true, "publication_baseline_cas_successes": 1, "unsupported_schema_publish_accepted": false, "unsupported_schema_published_revision_id": null}`
+  and failed with
+  `AssertionError: ['cross-funnel publication pointer was accepted on insert']`.
+  Full red output: `/tmp/eezfunnel-pr003-insert-red.log`.
+- Fix commit `d3e1898` adds a `BEFORE INSERT` trigger with the same ownership predicate as the
+  existing update guard. It applies only when `published_revision_id` is non-NULL.
+- Green command: `bash scripts/smoke-pr003.sh` — exit 0. The cross-funnel insert returned
+  unsuccessful, NULL pointer insertion succeeded and was read back, and both publication races
+  still had one winner. Port 8787 was closed after cleanup.
+- Full green output: `/tmp/eezfunnel-pr003-insert-green.log`.
 
 Final clean CI:
-`source .project-tools/env.sh && target_dir=/tmp/eezfunnel-pr003-p2-regression-final && rm -rf "$target_dir" && mkdir -p "$target_dir" && CARGO_TARGET_DIR="$target_dir" cargo xtask ci`
-Exit: 0 from a fresh isolated target. Gates passed: fmt, Clippy with warnings denied, workspace
-tests, layer validation, API WASM, dashboard WASM, and cargo-audit. Tests passed: API 11,
-storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5. Audit 0.22.2 loaded 1,310 advisories and
-scanned 105 locked dependencies with no findings. API WASM SHA-256:
-`674ce9f1c7c3d9752b40777bd9629b8bad97b486caa54ee003e9a8113b325d90`; dashboard WASM SHA-256:
-`d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
-CI log: `/tmp/eezfunnel-pr003-p2-regression-final/ci.log`.
+`source .project-tools/env.sh && target_dir=/tmp/eezfunnel-pr003-insert-final-clean && rm -rf "$target_dir" && mkdir -p "$target_dir" && CARGO_TARGET_DIR="$target_dir" cargo xtask ci`
+Exit: 0 from a fresh isolated target after the advisory fetch recovered. Gates passed: fmt,
+Clippy with warnings denied, workspace tests, layer validation, API WASM, dashboard WASM, and
+cargo-audit. Tests passed: API 11, storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5. Audit
+0.22.2 loaded 1,310 advisories and scanned 105 locked dependencies with no findings. API WASM
+SHA-256: `60c2cda75673967188854bcf5e813d942bff556f911d2367c92b57523a833a7f`; dashboard WASM
+SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
+CI log: `/tmp/eezfunnel-pr003-insert-final-clean/ci.log`.
 
-Additional check:
-`source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-p2-regression-final cargo xtask check`
-Exit: 0; fmt, Clippy, workspace tests, and layers passed after the source commits.
+Advisory fetch diagnosis:
+- The first fresh-target `cargo xtask ci` attempt stopped at cargo-audit before a scan because Git
+  reported `Failed to obtain credentials` and could not obtain a username for `https://github.com`.
+  `GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/RustSec/advisory-db.git HEAD` confirmed
+  the same transient upstream authentication problem.
+- The cached database at `.project-tools/cargo/advisory-db` passed `git fsck --full --no-reflogs`
+  and its latest commit was `6aed84668c23d7f535077a9fe918bf1fa0f6a5bc`, committed
+  2026-10-13T15:07:33Z, 82 minutes before the 16:30:03Z check. Diagnostic command
+  `source .project-tools/env.sh && cargo audit --db .project-tools/cargo/advisory-db --no-fetch`
+  passed with 1,310 advisories, 105 dependencies, and zero findings.
+- A later unchanged `cargo xtask ci` retry passed on its isolated target. A final new clean-target
+  `cargo xtask ci` also passed and fetched/loaded the advisory database normally. No CI task or
+  audit configuration was modified.
 
-Final local Wrangler smoke checks:
-- `bash scripts/smoke-pr003.sh` — exit 0, local-only Wrangler 4.149.0. Applied both migrations
-  to a fresh temporary D1 store. The product probe confirmed unsupported schema publication is
-  refused without changing the funnel pointer, no-op publication is refused, and the publication
-  baseline produced one success. A 100-candidate initial publication race had one winner; a
-  concurrent two-candidate race against an already-published baseline also had one winner and the
-  stored pointer matched that winner. The script verified port 8787 is closed after cleanup.
-- The same smoke retained PR-003 product repository checks: five theme seeds, CRUD and immutable
-  revisions, schema/JSON/payload refusal, retention limit, conditional publication, and cross-
-  funnel refusal. It also checked 404/405 correlation IDs: absent, empty, and 129-character IDs
-  became UUIDs; supplied IDs were preserved. Response IDs matched api_error and request logs; the
-  smoke polls up to five seconds to cover asynchronous log flush. The 405 response retained
-  `Allow: GET,HEAD`.
-- `bash scripts/smoke-pr002.sh` — exit 0. The unchanged script passed production host denial,
-  health, D1/R2/KV round trip, hidden-probe denial, and all 404/405 correlation-ID cases.
-- `source .project-tools/env.sh && cargo fmt --all -- --check`,
-  `bash -n scripts/smoke-pr003.sh`, and `git diff --check` passed.
-- No remote Wrangler deployment was run. Cloudflare production bindings and credentials remain
-  unavailable.
+Additional checks:
+`source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr003-insert-final-clean cargo xtask check`
+Exit: 0; fmt, Clippy, workspace tests, and layers passed.
 
-Final self-audits on the PR-003 fix and evidence diff:
+Local Wrangler smoke checks:
+- `bash scripts/smoke-pr003.sh` — exit 0, local-only Wrangler 4.149.0. Applied both migrations to
+  a fresh temporary D1 database. Cross-funnel published pointer insertion was rejected; inserting
+  and reading back a NULL pointer succeeded. Unsupported schema publication left the owner funnel
+  pointer unchanged, no-op publication was rejected, a 100-candidate initial publication race had
+  one winner, and a concurrent two-candidate race against a published baseline also had one winner
+  whose ID matched the stored pointer. Existing schema, CRUD, immutable revision, retention, JSON,
+  payload, and cross-funnel publication checks passed.
+- The same smoke checked 404/405 correlation IDs: absent, empty, and 129-character IDs became UUIDs;
+  supplied IDs were preserved. Response IDs matched api_error and request logs (polled for up to
+  five seconds); the 405 response retained `Allow: GET,HEAD`. Port 8787 closed after cleanup.
+- `bash scripts/smoke-pr002.sh` — exit 0; host denial, health, D1/R2/KV round trip, and all 404/405
+  correlation-ID cases passed. The script remains unchanged.
+- `source .project-tools/env.sh && cargo fmt --all -- --check`, `bash -n scripts/smoke-pr003.sh`,
+  and `git diff --check` passed.
+- No Cloudflare remote deployment was run. Production bindings and credentials remain unavailable.
+
+Final self-audits on the insert-ownership diff:
 - No-comments: Luna xhigh manual scan found no added comments, suppressions, or actionable
-  findings. No comments were deleted. An independent Comment Sicko reviewer was not run because
-  the parent instruction prohibited reviewer agents from other models.
-- Interrogate: Luna xhigh adversarial self-review confirmed the new predicates are part of the
-  single conditional UPDATE and reviewed the D1 regression paths. The two prior Sol findings are
-  covered by the source and local smoke. Independent reviewer diversity was unavailable under the
-  parent model constraint; Sol must re-review the exact pushed head.
+  findings. No comments were deleted. Independent Comment Sicko review was not run because the
+  parent instruction prohibited reviewer agents from other models.
+- Interrogate: Luna xhigh adversarial self-review confirmed the trigger blocks a valid foreign
+  revision reference, leaves NULL inserts legal, and does not replace the existing atomic update
+  guard. Sol's finding is covered by the red/green D1 regression. Independent reviewer diversity
+  was not used under the parent model constraint; Sol must review the exact pushed head.
 
 Hosted CI and review:
 - PR #4: https://github.com/lianihossam-eng/EezFunnels/pull/4.
-- Before these fixes, CI run 38425635252 succeeded on head
-  `9642f876c651aa10fdc409b0c6a2ef0a2a819c1c`.
-- Hosted CI must run and pass on the final pushed evidence/status head; Sol review is still
-  required on that exact head before merge.
+- Before the insert fix, CI run `38428983108` succeeded on head
+  `0eeeb3584b30c7741350eca6e2f2ca1d34c5015e`.
+- Hosted CI must pass on the next pushed head, and Sol must review that same exact head before
+  merge.
 
 Historical PR-002 evidence fingerprint reconciliation:
 - All 19 individual `source_sha256` values in the merged PR-002 results match commit
@@ -88,5 +107,5 @@ Historical PR-002 evidence fingerprint reconciliation:
 - Recomputing sorted path/hash lines yields
   `3b4844681883458eb1086c41a5abddf0b39e3194c515829fb290136a2787c5d3`, matching that results
   file. PR-002 `execution.txt` records `ebbaa869aad93c9a35d3bdb1ccdeff4704eca039290c0f2a6b4979ad3cd56d88`.
-- This inconsistency remains reported here and in STATUS.md; neither merged PR-002 evidence file
-  was edited.
+- This discrepancy remains reported here and in STATUS.md; neither merged PR-002 evidence file was
+  edited.

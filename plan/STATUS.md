@@ -8,7 +8,7 @@ Last updated: 2026-10-13
 - [x] PR-000 Bootstrap (merged as PR #1 into `main`)
 - [x] PR-001 xtask (merged as PR #2; merge commit `79d85c7`)
 - [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
-- [ ] PR-003 Schema + seed themes (PR #4 open; publication regressions fixed locally, final-head CI and Sol review pending)
+- [ ] PR-003 Schema + seed themes (PR #4 open; insert ownership guard and publication regressions fixed locally; final-head CI and Sol review pending)
 - [ ] PR-004 Domain model
 - [ ] PR-005 Render engine
 - [ ] PR-006 5 sections
@@ -32,11 +32,11 @@ Last updated: 2026-10-13
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and
 implementation-verified locally. PR-003's product schema, theme seeds, typed storage, and
 repository behavior are implementation-verified locally at source commit
-`35246f2481c7bc9402233b9679e527cda13c3742`. Regression tests were committed first at
-`115a77826466946e0737b121fb3bf24ca79ffd63`; the atomic publication fix follows at
-`35246f2481c7bc9402233b9679e527cda13c3742`. The final fresh-target `cargo xtask ci`,
-`cargo xtask check`, local PR-002 and PR-003 Wrangler smokes all passed. Hosted CI and Sol's
-review on the updated PR #4 head remain pending.
+`d3e1898f86403bb5c834f2ed736b072440e0d21e`. The insert regression tests were committed first at
+`b8c7e968b20cf8bd2267951eeab84f134eb4845d`; the trigger fix follows at `d3e1898f`. Earlier
+publication guards are at `35246f2481c7bc9402233b9679e527cda13c3742`. The final fresh-target
+`cargo xtask ci`, `cargo xtask check`, local PR-002 and PR-003 Wrangler smokes all passed. Hosted
+CI and Sol review on the next pushed PR #4 head remain pending.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -58,33 +58,36 @@ review on the updated PR #4 head remain pending.
   `audit_logs`), seeds `minimal`, `bold`, `elegant`, `playful`, and `corporate`, and keeps database
   row types in storage per D8. No domain-layer package or product API behavior is introduced
   ahead of PR-004.
-- The two reproduced publication defects are fixed in one atomic D1 `UPDATE`: publication now
-  requires schema_version 1 and refuses a target equal to the existing published pointer while
-  checking the caller's expected baseline. The fresh local D1 smoke verifies a rejected v2
-  publication leaves the pointer unchanged, rejects a no-op publish, and yields exactly one winner
-  for both a 100-way initial race and two concurrent candidates against a published baseline.
-- The PR-003 local smoke also verifies the 404/405 correlation-ID cases (absent, empty,
-  overlength, and supplied) and polls Wrangler logs for up to five seconds before asserting the
-  matching `api_error` and request records, avoiding a transient log-flush race.
+- The publication update guard remains one atomic D1 `UPDATE` that requires schema_version 1 and
+  a target distinct from the current published pointer while comparing the caller's expected
+  baseline. The update ownership guard is now complemented by a `BEFORE INSERT` trigger with the
+  same ownership check; NULL published pointers are explicitly allowed. Fresh local D1 smoke
+  rejects a cross-funnel pointer insert and confirms the NULL insert succeeds.
+- The same D1 smoke rejects unsupported publication without changing the pointer and rejects
+  no-op publication. It yields exactly one winner for both a 100-way initial publication race and
+  two concurrent candidates against an already-published baseline.
+- The PR-003 local smoke also verifies 404/405 correlation IDs (absent, empty, overlength, supplied)
+  and polls Wrangler logs for up to five seconds before asserting matching api_error and request
+  records, avoiding a transient log-flush race.
 - `scripts/smoke-pr002.sh` remains unchanged. Its final rerun passed host denial, health, D1/R2/KV,
   and all 404/405 correlation-ID cases.
 - PR-003 is open as PR #4 at
-  https://github.com/lianihossam-eng/EezFunnels/pull/4. CI run `38425635252` succeeded on the
-  prior head `9642f876c651aa10fdc409b0c6a2ef0a2a819c1c`. A new source and evidence head will run
-  hosted CI after push; merge requires CI green on that exact final head and Sol review.
+  https://github.com/lianihossam-eng/EezFunnels/pull/4. CI run `38428983108` succeeded on prior
+  head `0eeeb3584b30c7741350eca6e2f2ca1d34c5015e`. A new source and evidence head will run hosted CI
+  after push; merge requires CI green on that exact head and Sol review.
 - A prior measured PR-003 smoke increased adopted defunct `workerd` processes from 58 to 60
   because this container's PID 1 does not reap them. That run left zero live Worker processes and
   closed port 8787; no zombie entries were hidden.
 
 ## Blockers
 
-- Hosted CI has not yet passed on the final PR #4 head. Sol must review that exact head after CI
-  passes.
+- Hosted CI has not yet passed on the next pushed PR #4 head. Sol must review that exact head after
+  CI passes.
 - Cloudflare production binding IDs and credentials are unavailable. No remote deployment or
   production binding check has been run.
 
 ## Next action
 
-Ensure the test-first, publication-fix, and evidence/status commits are pushed to PR #4; wait for
-hosted CI and Sol review on that exact latest head before merge. Continue with PR-004 after PR-003
-is merged.
+Push the insert-ownership regression test, migration trigger, and refreshed evidence/status to PR
+#4. Wait for hosted CI and Sol review on that exact latest head before merge. Continue with PR-004
+after PR-003 is merged.
