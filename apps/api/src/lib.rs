@@ -43,13 +43,13 @@ async fn health() -> Json<HealthResponse> {
 
 #[event(fetch)]
 pub async fn fetch(
-    request: HttpRequest,
+    mut request: HttpRequest,
     env: Env,
     _context: Context,
 ) -> worker::Result<Response<axum::body::Body>> {
     let request_path = request.uri().path().to_owned();
     let method = request.method().as_str().to_owned();
-    let correlation_id = correlation_id(request.headers());
+    let correlation_id = normalize_correlation_id(request.headers_mut());
 
     let response = if !request_host_allowed(&env, request.headers()) {
         let error = ApiError::from_code("authorization/host_not_allowed");
@@ -162,9 +162,23 @@ fn correlation_id(headers: &HeaderMap<HeaderValue>) -> String {
     headers
         .get("x-correlation-id")
         .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+fn normalize_correlation_id(headers: &mut HeaderMap<HeaderValue>) -> String {
+    let mut correlation_id = headers
+        .get("x-correlation-id")
+        .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty() && value.len() <= 128)
         .map(str::to_owned)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let header_value = HeaderValue::from_bytes(correlation_id.as_bytes()).unwrap_or_else(|_| {
+        correlation_id = "correlation-id-unavailable".to_owned();
+        HeaderValue::from_static("correlation-id-unavailable")
+    });
+    headers.insert("x-correlation-id", header_value);
+    correlation_id
 }
 
 fn error_response(error: &ApiError, correlation_id: String) -> Response<axum::body::Body> {
@@ -204,24 +218,50 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::correlation_id;
+    use super::{correlation_id, normalize_correlation_id};
     use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
-    fn empty_correlation_id_is_replaced_with_a_uuid() {
+    fn missing_correlation_id_is_generated_and_written_to_headers() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-correlation-id", HeaderValue::from_static(""));
 
-        let id = correlation_id(&headers);
+        let id = normalize_correlation_id(&mut headers);
 
         assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_eq!(correlation_id(&headers), id);
     }
 
     #[test]
-    fn nonempty_correlation_id_is_preserved() {
+    fn empty_correlation_id_is_replaced_and_written_to_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-correlation-id", HeaderValue::from_static(""));
+
+        let id = normalize_correlation_id(&mut headers);
+
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_eq!(correlation_id(&headers), id);
+    }
+
+    #[test]
+    fn overlength_correlation_id_is_replaced_and_written_to_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-correlation-id",
+            HeaderValue::from_bytes(&[b'x'; 129]).unwrap(),
+        );
+
+        let id = normalize_correlation_id(&mut headers);
+
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_eq!(correlation_id(&headers), id);
+    }
+
+    #[test]
+    fn nonempty_correlation_id_is_preserved_in_headers() {
         let mut headers = HeaderMap::new();
         headers.insert("x-correlation-id", HeaderValue::from_static("request-123"));
 
+        assert_eq!(normalize_correlation_id(&mut headers), "request-123");
         assert_eq!(correlation_id(&headers), "request-123");
     }
 }
