@@ -1,0 +1,106 @@
+{
+  "task": "PR-005",
+  "evidence_refreshed_at_utc": "2026-10-13T17:53:42Z",
+  "branch": "feat/005_render",
+  "base_commit": "c5961dfc77fb60198882fdd7f5909d4e0326933f",
+  "verified_source_commit": "e4471a0e3d4060ab0c2aa246ec349681ba2b0e1e",
+  "source_commit_role": "PR-005 renderer implementation; evidence and status follow in a documentation commit",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
+  "source_fingerprint_sha256": "4a879df2d13c4b76b612100a7a002f3f123ba79058f073b29fbfe65245a3153f",
+  "source_sha256": {
+    "Cargo.lock": "e450186337d88d91621229c699703416b7a1cfb70f219fe61cf271d46dba0966",
+    "crates/render/Cargo.toml": "c311465d620545744fa6a122ea01cd3bcefc11ae64f088f565612eaccfbc1cd2",
+    "crates/render/src/lib.rs": "0218b7526a67c19d2b9b3586adff30a521ce1bbf01ed58254d1e9456aa55f35f"
+  },
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "isolated_target_dir": "/workspace/.eez-pr005-ci.pJUObr",
+  "checks": [
+    {
+      "name": "renderer_test_first_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render",
+      "red_exit_code": 101,
+      "red_observation": "the test-first compile failed because RenderError, Renderer, and ThemeTokens had not been implemented",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 8,
+      "cases": [
+        "dispatches Hero, Features, Testimonials, Cta, and Footer in revision order",
+        "injects sorted CSS custom properties",
+        "rejects unsafe CSS property names and values",
+        "trims surrounding CSS value line breaks before emission",
+        "rejects unsupported renderer and mismatched theme versions",
+        "renders a stable result for the same revision manifest",
+        "escapes hostile revision and theme metadata in HTML attributes",
+        "runs 10,000 hostile HTML/CSS inputs including NUL, CR, and LF without active markup injection"
+      ]
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "formatting, Clippy with warnings denied, workspace tests, and layer validation passed",
+      "workspace_test_counts": {
+        "api": 11,
+        "domain": 10,
+        "render": 8,
+        "storage": 4,
+        "xtask": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      }
+    },
+    {
+      "name": "cargo_xtask_ci",
+      "command": "ci_target=$(mktemp -d /workspace/.eez-pr005-ci.XXXXXX)\nprintf '%s\\n' \"$ci_target\"\nsource .project-tools/env.sh\nCARGO_TARGET_DIR=\"$ci_target\" cargo xtask ci",
+      "exit_code": 0,
+      "fresh_isolated_target": true,
+      "outcome": "workspace check/tests, API WASM, dashboard WASM, and cargo-audit passed",
+      "wasm_sha256": {
+        "eez_api.wasm": "ad66a9ed0e53d600eda725563169ca9f7ea98454967efe0329300ce14f3dd2fc",
+        "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+      },
+      "audit": {
+        "audit_version": "cargo-audit 0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 105,
+        "findings": 0,
+        "database_update": "the command fetched the RustSec advisory database and updated the crates.io index before scanning"
+      }
+    },
+    {
+      "name": "no_comments_self_audit",
+      "reviewer": "Luna xhigh, manual diff scan",
+      "result": "no comments, TODO/FIXME markers, or lint suppressions were added",
+      "independent_comment_sicko": "the prescribed Comment Sicko tool is not exposed in this environment; independent PR review remains pending"
+    },
+    {
+      "name": "interrogate_self_audit",
+      "reviewer": "Luna xhigh, manual adversarial review using the repository interrogate rubric",
+      "result": "no actionable issue found in HTML attribute escaping, CSS token validation, deterministic output, section dispatch, or the 10,000-case attack test",
+      "independent_review": "Sol and @codex review are required on the pushed PR head"
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "scope_notes": [
+    "The renderer emits the static document shell and ordered section wrappers. Section content remains in PR-006.",
+    "Theme token names and values pass a restrictive CSS grammar before emission, and generated attributes escape HTML metacharacters and control characters.",
+    "The 10,000-case test asserts unchanged tag and quote counts, no raw script/style/image tags, and no raw NUL, CR, or LF in HTML output.",
+    "No remote deployment was run. Cloudflare production bindings and credentials remain unavailable."
+  ],
+  "hosted_ci": {
+    "status": "pending; PR #6 has not been opened yet",
+    "required": "hosted CI must pass on the final pushed PR #6 head"
+  },
+  "reviews": {
+    "sol": "required on final PR head",
+    "codex": "required on final PR head"
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "reason": "PR-005 is a local renderer change; Cloudflare production bindings and credentials remain unavailable"
+  }
+}

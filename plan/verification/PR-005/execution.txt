@@ -1,0 +1,54 @@
+PR-005 renderer verification
+
+Evidence refreshed: 2026-10-13T17:53:42Z
+Branch: feat/005_render
+Base commit: c5961dfc77fb60198882fdd7f5909d4e0326933f
+Verified source commit: e4471a0e3d4060ab0c2aa246ec349681ba2b0e1e
+Source fingerprint: 4a879df2d13c4b76b612100a7a002f3f123ba79058f073b29fbfe65245a3153f
+The fingerprint is SHA-256 of sorted `path SHA256\n` lines recorded in results.json.
+
+Source file SHA-256:
+- Cargo.lock e450186337d88d91621229c699703416b7a1cfb70f219fe61cf271d46dba0966
+- crates/render/Cargo.toml c311465d620545744fa6a122ea01cd3bcefc11ae64f088f565612eaccfbc1cd2
+- crates/render/src/lib.rs 0218b7526a67c19d2b9b3586adff30a521ce1bbf01ed58254d1e9456aa55f35f
+
+Toolchain: rustc 1.85.0 and Cargo 1.85.0
+
+Implementation:
+- `Renderer` emits a static HTML document shell and one ordered wrapper for each supported section type.
+- `ThemeTokens` validates lowercase kebab-case property names and a restricted CSS value grammar before adding sorted custom properties.
+- The renderer escapes untrusted metadata and section IDs in HTML attributes. It replaces all control characters, including NUL, CR, and LF.
+- Section content remains in PR-006.
+
+TDD observations:
+- Before implementation, `source .project-tools/env.sh && cargo test -p eez-render` exited 101 because the test-first imports for `RenderError`, `Renderer`, and `ThemeTokens` did not resolve.
+- After implementation, `source .project-tools/env.sh && cargo test -p eez-render --locked` passed all 8 tests. The 10,000-case loop covers hostile section IDs and CSS tokens, including NUL, CR, and LF.
+- The XSS assertions verify unchanged tag and quote counts, reject raw script, style, and image tags, and reject raw NUL, CR, or LF in emitted HTML.
+
+Final local checks:
+- `source .project-tools/env.sh && cargo xtask check` exited 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.
+- `cargo xtask check` counts were API 11, domain 10, render 8, storage 4, xtask 23, bootstrap CLI 2, and PR-001 CLI 5.
+- Fresh isolated target: `/workspace/.eez-pr005-ci.pJUObr`.
+- The exact command sequence was:
+
+  ```sh
+  ci_target=$(mktemp -d /workspace/.eez-pr005-ci.XXXXXX)
+  printf '%s\n' "$ci_target"
+  source .project-tools/env.sh
+  CARGO_TARGET_DIR="$ci_target" cargo xtask ci
+  ```
+
+- The command printed `/workspace/.eez-pr005-ci.pJUObr` and exited 0. Workspace tests, API WASM, dashboard WASM, and cargo-audit passed.
+- API WASM SHA-256: `ad66a9ed0e53d600eda725563169ca9f7ea98454967efe0329300ce14f3dd2fc`.
+- Dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
+- cargo-audit 0.22.2 loaded 1,310 advisories, scanned 105 locked dependencies, and found zero issues. The command fetched the RustSec database and updated the crates.io index.
+- `git diff --check` exited 0.
+
+Self-audits, Luna xhigh:
+- No-comments found no new comments, TODO/FIXME markers, or lint suppressions. The prescribed Comment Sicko subagent type is unavailable in the exposed tools.
+- Interrogate checked HTML attribute boundaries, CSS token grammar, render-manifest version checks, deterministic ordering, section dispatch, and the 10,000-case attack test. No actionable issue remained in that pass.
+- The implementation assignment keeps code work in Luna. Independent Sol and @codex reviews remain required on the pushed PR head.
+
+PR state:
+- PR #6 is not open yet. Hosted CI and independent reviews must pass on the exact pushed head.
+- No remote deployment was run.
