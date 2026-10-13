@@ -21,11 +21,11 @@ rust-version = "1.85"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "serde", "js"] }
 thiserror = "1"
-worker = { version = "0.8", features = ["http", "axum"] }
-axum = "0.8"
-axum-cloudflare-adapter = "0.14"
+worker = { version = "=0.8.3", features = ["http", "axum", "d1"] }
+axum = { version = "0.8", default-features = false, features = ["json"] }
+tower-service = "0.3"
 dioxus = "0.7"
 rmcp = "1.4"
 

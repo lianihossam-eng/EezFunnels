@@ -1,0 +1,59 @@
+PR-002 local verification transcript
+
+Executed: 2026-10-13T11:19:48Z
+Branch: feat/002_worker
+HEAD/base commit: 79d85c74d4f1df54057d5a9c8b9ca2c0235e98a7
+HEAD meaning: merged PR-001 base; verification covers the PR-002 working-tree snapshot identified by the source fingerprint below.
+Source fingerprint SHA-256 over sorted path/hash lines: 36c3e2960562e804944e9d9254584b5ab074ffcc50368e0e721d9af43ed0d601
+Working tree: uncommitted at verification time; no push or PR opened while a separate C-04 method-mismatch decision is pending.
+Project toolchain: rustc 1.85.0 / Cargo 1.85.0
+Auxiliary build toolchain: Rust 1.88.0 for worker-build installation only
+Node/npm/Wrangler: v24.19.0 / 11.9.0 / 4.149.0
+worker-build / cargo-audit: 0.8.3 / 0.22.2
+
+TDD red for C-04 registry:
+$ source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-final-green cargo test -p eez-api errors::tests::every_contract_error_has_a_stable_category_and_status --locked
+Exit: 101 before runtime mapping. `authorization/host_not_allowed` fell back to `unknown/unclassified`.
+
+TDD green for C-04 registry:
+$ source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-final-green cargo test -p eez-api errors::tests::every_contract_error_has_a_stable_category_and_status --locked
+Exit: 0 after adding the two approved registry mappings.
+
+$ set -o pipefail; source .project-tools/env.sh && rm -rf /tmp/eezfunnel-pr002-c04-final && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-c04-final cargo xtask ci 2>&1 | tee /tmp/eezfunnel-pr002-c04-final.log
+Exit: 0 from a fresh isolated target after final source changes.
+Gates: fmt; Clippy with -D warnings; workspace tests; layers; eez-api Worker wasm32 build; dashboard wasm32 build; cargo audit.
+Tests: eez-api 9/9; xtask unit 23/23; bootstrap CLI 2/2; PR-001 CLI 5/5.
+Failure propagation: mocked Worker wasm build failure stops later gates; audit failure propagates; first failed check stops the sequence; mocked Wrangler deployment forwards arguments and propagates failure.
+Audit: 1,309 advisories loaded; 105 locked crate dependencies scanned; no findings; cargo-audit 0.22.2; exit 0.
+Artifacts:
+- eez_api.wasm: 26,611,300 bytes; SHA-256 10aa7ba2aea68ca89aec7aeed411453863de30a1acc624adc5bc0d611e415244
+- eez_dashboard.wasm: 1,432,977 bytes; SHA-256 d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5
+
+$ source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-c04-final cargo test -p eez-api errors::tests::every_contract_error_has_a_stable_category_and_status --locked
+Exit: 0; both `authorization/host_not_allowed` (authorization, 403) and `not_found/route` (not_found, 404) preserve their exact registered meanings and statuses.
+
+$ bash -n scripts/install-worker-build.sh scripts/smoke-pr002.sh && git diff --check
+Exit: 0.
+
+$ rg -n '^ALLOWED_HOSTS' wrangler.toml
+Exit: 0; production is eezfunnel.workers.dev only; localhost:8787 is scoped to env.dev.
+
+$ set -o pipefail; source .project-tools/env.sh && bash scripts/smoke-pr002.sh 2>&1 | tee /tmp/eezfunnel-pr002-c04-smoke.log
+Exit: 0; local Wrangler 4.149.0 only; no Cloudflare credentials or remote mode.
+- Production `eezfunnel.workers.dev` host: HTTP 200, `{"status":"ok"}`.
+- Production `localhost:8787` host: HTTP 403 with `authorization/host_not_allowed`, authorization, message, and correlation ID.
+- Local unknown Axum path: HTTP 404 with `not_found/route`, not_found, message, and correlation ID.
+- Hidden probe GET and POST without token: HTTP 404 with the same registered C-04 route envelope.
+- Local D1 migration `0001_pr002_runtime_probe.sql` applied; valid per-run token completed D1/R2/KV write/read/delete and returned all three as `ok`.
+- Wrangler used separate process groups for production and dev smoke; SIGINT shutdown released port 8787 and left 0 live Wrangler and 0 live Worker processes. Defunct workerd count was 38 before and 42 after this two-run smoke; container PID 1 did not reap them.
+
+A separate local request confirmed a remaining unapproved C-04 case:
+$ curl --silent --show-error --include --write-out '\nstatus=%{http_code}\n' --request POST -H 'Host: localhost:8787' -H 'x-correlation-id: method-not-allowed-check' http://127.0.0.1:8787/health
+Observed HTTP 405, `Allow: GET,HEAD`, empty body. No third mapping was added; `not_found/route` would misstate a method mismatch.
+
+Cloudflare production binding IDs and credentials are unavailable; configured UUIDs are local placeholders. No remote deploy was attempted. Hosted CI cannot run until a PR is pushed/opened. A method-not-allowed C-04 decision remains pending separately from the two approved additions.
+
+Final local review:
+- No-comments Luna xhigh scan: zero actionable findings; zero comments or suppressions added. Dedicated Comment Sicko was not run under the parent restriction against other-model review.
+- Interrogate-style Luna xhigh self-review: no actionable findings within the approved two-code scope. The known 405 method-mismatch gap is documented and awaits separate contract authorization. Model diversity was not used per parent instruction.
+- Process lifecycle: no live listener or Wrangler/Worker process remains after cleanup. Defunct workerd children remain because container PID 1 does not reap them.

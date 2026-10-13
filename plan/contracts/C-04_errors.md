@@ -26,9 +26,11 @@ Stable, transport-independent error taxonomy.
 | validation/section_missing_id           | validation    | 400  |
 | authorization/token_invalid             | authorization | 401  |
 | authorization/token_missing             | authorization | 401  |
+| authorization/host_not_allowed          | authorization | 403  |
 | not_found/funnel                        | not_found     | 404  |
 | not_found/slug                          | not_found     | 404  |
 | not_found/revision                      | not_found     | 404  |
+| not_found/route                         | not_found     | 404  |
 | conflict/publish_stale_revision         | conflict      | 409  |
 | conflict/idempotency_payload_mismatch   | conflict      | 409  |
 | rate_limit/exceeded                     | rate_limit    | 429  |
