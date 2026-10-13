@@ -370,6 +370,15 @@ impl Funnel {
         name: impl Into<String>,
         slug: impl Into<String>,
     ) -> Result<Self, DomainError> {
+        Self::from_state(id, name, slug, None)
+    }
+
+    pub fn from_state(
+        id: FunnelId,
+        name: impl Into<String>,
+        slug: impl Into<String>,
+        published_revision_id: Option<RevisionId>,
+    ) -> Result<Self, DomainError> {
         let name = name.into();
         let slug = slug.into();
         if name.trim().is_empty() {
@@ -382,7 +391,7 @@ impl Funnel {
             id,
             name,
             slug,
-            published_revision_id: Mutex::new(None),
+            published_revision_id: Mutex::new(published_revision_id),
         })
     }
 
@@ -729,19 +738,75 @@ mod tests {
     }
 
     #[test]
+    fn publish_succeeds_from_a_hydrated_published_baseline() {
+        let funnel_id = funnel_id("hydrated-publish-funnel");
+        let baseline_id = revision_id("persisted-baseline");
+        let funnel = Funnel::from_state(
+            funnel_id.clone(),
+            "Hydrated funnel".to_owned(),
+            "hydrated-funnel".to_owned(),
+            Some(baseline_id.clone()),
+        )
+        .expect("valid funnel state loaded from storage");
+        let candidate = revision("hydrated-candidate", &funnel_id, Vec::new());
+
+        assert_eq!(
+            funnel
+                .publish(&candidate, Some(&baseline_id))
+                .expect("expected published baseline is accepted")
+                .revision_id(),
+            candidate.id()
+        );
+        assert_eq!(
+            funnel
+                .published_revision_id()
+                .expect("read new published revision"),
+            Some(candidate.id().clone())
+        );
+    }
+
+    #[test]
+    fn stale_publish_from_a_hydrated_state_keeps_the_loaded_pointer() {
+        let funnel_id = funnel_id("hydrated-stale-funnel");
+        let baseline_id = revision_id("persisted-stale-baseline");
+        let funnel = Funnel::from_state(
+            funnel_id.clone(),
+            "Hydrated stale funnel".to_owned(),
+            "hydrated-stale-funnel".to_owned(),
+            Some(baseline_id.clone()),
+        )
+        .expect("valid funnel state loaded from storage");
+        let candidate = revision("stale-hydrated-candidate", &funnel_id, Vec::new());
+        let stale_expected = revision_id("older-baseline");
+
+        assert_eq!(
+            funnel
+                .publish(&candidate, Some(&stale_expected))
+                .expect_err("stale storage baseline must conflict")
+                .to_string(),
+            "conflict/publish_stale_revision"
+        );
+        assert_eq!(
+            funnel
+                .published_revision_id()
+                .expect("read persisted baseline after stale rejection"),
+            Some(baseline_id)
+        );
+    }
+
+    #[test]
     fn one_hundred_concurrent_publications_from_one_baseline_have_one_winner() {
         let funnel_id = funnel_id("concurrent-funnel");
+        let baseline_id = revision_id("concurrent-baseline");
         let funnel: Arc<Funnel> = Arc::new(
-            Funnel::new(
+            Funnel::from_state(
                 funnel_id.clone(),
                 "Concurrent funnel".to_owned(),
                 "concurrent-funnel".to_owned(),
+                Some(baseline_id.clone()),
             )
             .expect("valid funnel"),
         );
-        let baseline_id = revision_id("concurrent-baseline");
-        let baseline = revision("concurrent-baseline", &funnel_id, Vec::new());
-        assert!(funnel.publish(&baseline, None).is_ok());
 
         let candidates: Vec<_> = (0..100)
             .map(|index| {

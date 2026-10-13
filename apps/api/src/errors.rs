@@ -40,6 +40,7 @@ impl ApiError {
             "validation/invalid_json"
             | "validation/missing_field"
             | "validation/order_duplicate"
+            | "validation/schema_version_missing"
             | "validation/schema_version_unsupported"
             | "validation/section_type_unknown"
             | "validation/section_missing_id" => (
@@ -169,6 +170,11 @@ mod tests {
         ("validation/order_duplicate", ErrorCategory::Validation, 400),
         (
             "validation/schema_version_unsupported",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/schema_version_missing",
             ErrorCategory::Validation,
             400,
         ),
