@@ -204,7 +204,30 @@ mod unix {
             .expect("read Cargo invocations");
         assert_eq!(
             actual,
-            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --locked\naudit\n"
+            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --locked\naudit\n"
+        );
+    }
+
+    #[test]
+    fn ci_propagates_worker_wasm_failure_and_skips_later_gates() {
+        let fixture = Fixture::new();
+        let output = run_ci_with_cargo(
+            &fixture,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-api ]; then exit 17; fi\n",
+        );
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("cargo build -p eez-api --target wasm32-unknown-unknown --locked failed"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = fs::read_to_string(fixture.root.join("cargo-arguments.txt"))
+            .expect("read Cargo invocations");
+        assert_eq!(
+            actual,
+            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\n"
         );
     }
 

@@ -1,0 +1,349 @@
+{
+  "task": "PR-002",
+  "executed_at_utc": "2026-10-13T14:54:07Z",
+  "branch": "feat/002_worker",
+  "head_commit": "9006b207b701ec71d6a8121dfdf21c1b5dc4b8b5",
+  "base_commit": "79d85c74d4f1df54057d5a9c8b9ca2c0235e98a7",
+  "head_commit_role": "PR-002 source and STATUS commit; verification evidence is recorded in the following evidence commit.",
+  "working_tree_state": "The implementation and STATUS correction are committed and locally verified; evidence is bound to this source commit. PR #3 remains open.",
+  "source_fingerprint_sha256": "3b4844681883458eb1086c41a5abddf0b39e3194c515829fb290136a2787c5d3",
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "auxiliary_toolchain": "Rust 1.88.0 used only to install pinned worker-build 0.8.3",
+  "worker_build": "0.8.3",
+  "cargo_audit": "0.22.2; final clean CI exit 0, 1,310 advisories loaded, 105 locked dependencies scanned, no findings",
+  "node": "24.19.0",
+  "npm": "11.9.0",
+  "wrangler": "4.149.0",
+  "isolated_target_dir": "/tmp/eezfunnel-pr002-correlation-final",
+  "checks": [
+    {
+      "name": "cargo_xtask_ci",
+      "shell_command": "set -o pipefail; source .project-tools/env.sh && rm -rf /tmp/eezfunnel-pr002-correlation-final && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-correlation-final cargo xtask ci 2>&1 | tee /tmp/eezfunnel-pr002-correlation-final.log",
+      "exit_code": 0,
+      "verified": true,
+      "outcome": "passed from a fresh isolated target after normalizing correlation IDs at the Worker fetch boundary",
+      "gates": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "cargo test --workspace --locked",
+        "cargo metadata --all-features --format-version 1 --locked plus layer validation",
+        "cargo build -p eez-api --target wasm32-unknown-unknown --locked",
+        "cargo build -p eez-dashboard --target wasm32-unknown-unknown --locked",
+        "cargo audit"
+      ],
+      "tests_passed": {
+        "eez_api_unit": 11,
+        "xtask_unit": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      },
+      "failure_propagation_coverage": [
+        "Worker WASM build failure propagates and later gates are skipped",
+        "cargo audit failure propagates",
+        "first failed check stops CI sequence",
+        "mock Wrangler deployment arguments are forwarded and failure propagates"
+      ],
+      "audit": {
+        "version": "0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 105,
+        "findings": 0,
+        "exit_code": 0
+      },
+      "wasm_artifacts": [
+        {
+          "path": "/tmp/eezfunnel-pr002-correlation-final/wasm32-unknown-unknown/debug/eez_api.wasm",
+          "size_bytes": 26722323,
+          "sha256": "8dbd05a3b06b6af83ff8421edac76ce1a230c2ed8fe927218bc823732b6a2b57"
+        },
+        {
+          "path": "/tmp/eezfunnel-pr002-correlation-final/wasm32-unknown-unknown/debug/eez_dashboard.wasm",
+          "size_bytes": 1432977,
+          "sha256": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+        }
+      ]
+    },
+    {
+      "name": "host_allowlist_parser_tests",
+      "shell_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-final-green cargo test -p eez-api host::tests --locked",
+      "exit_code": 0,
+      "verified": true,
+      "tests_passed": 3,
+      "cases": [
+        "exact host and port matching",
+        "case-insensitive hostname matching",
+        "empty and wildcard rejection"
+      ]
+    },
+    {
+      "name": "correlation_id_tdd_regression",
+      "red_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-final-validation cargo test -p eez-api empty_correlation_id_is_replaced_with_a_uuid --locked",
+      "red_exit_code": 101,
+      "red_observation": "new test failed because empty header value was returned instead of a UUID",
+      "green_command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-release-candidate cargo test -p eez-api --locked",
+      "green_exit_code": 0,
+      "green_api_tests_passed": 9,
+      "outcome": "passed after rejecting empty IDs and preserving valid IDs"
+    },
+    {
+      "name": "wrangler_host_scoping",
+      "command": "rg -n '^ALLOWED_HOSTS' wrangler.toml",
+      "exit_code": 0,
+      "verified": true,
+      "production_hosts": [
+        "eezfunnel.workers.dev"
+      ],
+      "dev_hosts": [
+        "localhost:8787"
+      ]
+    },
+    {
+      "name": "worker_build_install_helper",
+      "shell_command": "source .project-tools/env.sh && bash scripts/install-worker-build.sh",
+      "repeat_executions": 2,
+      "exit_code": 0,
+      "verified": true,
+      "outcome": "passed and idempotent with the pinned tool present",
+      "worker_build_version": "0.8.3",
+      "auxiliary_toolchain": "1.88.0",
+      "project_toolchain_unchanged": "1.85.0"
+    },
+    {
+      "name": "wrangler_local_smoke",
+      "shell_command": "source .project-tools/env.sh && bash scripts/smoke-pr002.sh",
+      "exit_code": 0,
+      "verified": true,
+      "outcome": "passed with local Wrangler only; for both route 404 and method 405 cases, response correlation IDs match the API error and request logs",
+      "wrangler_version": "4.149.0",
+      "persistence": "fresh temporary local directory, removed on exit",
+      "migration_applied": "0001_pr002_runtime_probe.sql to local D1",
+      "health_body": {
+        "status": "ok"
+      },
+      "probe_with_valid_token": {
+        "status": "ok",
+        "d1": "ok",
+        "r2": "ok",
+        "kv": "ok",
+        "correlation_id": "pr002-smoke-storage"
+      },
+      "probe_without_token_post_status": 404,
+      "probe_get_status": 404,
+      "local_probe_token": "random per-run value, not stored in config or evidence",
+      "process_group": "starts production and dev Wrangler in separate setsid process groups; sends SIGINT and waits; port 8787 is checked closed between starts and after cleanup",
+      "port_after_exit": "8787 closed; curl could not connect after cleanup",
+      "active_wrangler_or_workerd_after_exit": 0,
+      "workerd_zombies": {
+        "before_review_fix_smokes": 12,
+        "after_three_review_fix_smokes": 24,
+        "note": "The three local smoke invocations added adopted defunct workerd children because container PID 1 does not reap them. Every smoke cleanup closed port 8787; the final process check found no live Wrangler or Worker process."
+      },
+      "production_host_allowed": {
+        "status": 200,
+        "host": "eezfunnel.workers.dev",
+        "body": {
+          "status": "ok"
+        }
+      },
+      "production_host_denied": {
+        "status": 403,
+        "host": "localhost:8787",
+        "body": {
+          "code": "authorization/host_not_allowed",
+          "category": "authorization",
+          "message": "The request host is not allowed.",
+          "correlation_id": "pr002-production-host-denial"
+        }
+      },
+      "unknown_route": {
+        "status": 404,
+        "body": {
+          "code": "not_found/route",
+          "category": "not_found",
+          "message": "The requested route was not found.",
+          "correlation_id": "pr002-unknown-route"
+        }
+      },
+      "probe_without_token_post": {
+        "status": 404,
+        "body": {
+          "code": "not_found/route",
+          "category": "not_found",
+          "message": "The requested route was not found.",
+          "correlation_id": "pr002-probe-no-token"
+        }
+      },
+      "probe_get": {
+        "status": 404,
+        "body": {
+          "code": "not_found/route",
+          "category": "not_found",
+          "message": "The requested route was not found.",
+          "correlation_id": "pr002-probe-get"
+        }
+      },
+      "live_processes_after_cleanup": {
+        "wrangler": 0,
+        "workerd": 0
+      },
+      "method_not_allowed": {
+        "status": 405,
+        "body": {
+          "code": "validation/operation_not_supported",
+          "category": "validation",
+          "message": "The requested operation is not supported.",
+          "correlation_id": "pr002-method-not-allowed"
+        },
+        "allow_header": "GET,HEAD"
+      },
+      "correlation_id_cases": {
+        "route_404": [
+          "absent -> UUID",
+          "empty -> UUID",
+          "129-character -> UUID",
+          "valid supplied ID preserved"
+        ],
+        "method_405": [
+          "absent -> UUID",
+          "empty -> UUID",
+          "129-character -> UUID",
+          "valid supplied ID preserved"
+        ],
+        "log_consistency": "Every case asserted that response envelope, api_error record, and request record carried the same correlation ID."
+      }
+    },
+    {
+      "name": "wasm_dependency_features",
+      "tokio_command": "source .project-tools/env.sh && cargo tree -e features --target wasm32-unknown-unknown -i tokio --locked -f '{p} features={f}'",
+      "tokio_exit_code": 0,
+      "tokio_features": [],
+      "mio_command": "cargo tree -p eez-api --target wasm32-unknown-unknown -i mio --locked",
+      "mio_exit_code": 101,
+      "mio_expected_exit_code": 101,
+      "mio_absent": true,
+      "axum_enabled_features": [
+        "json"
+      ],
+      "outcome": "passed; Worker WASM gate also verifies the locked graph builds"
+    },
+    {
+      "name": "shell_and_diff_checks",
+      "commands": [
+        "bash -n scripts/install-worker-build.sh scripts/smoke-pr002.sh",
+        "git diff --check"
+      ],
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "c04_registry_and_runtime_envelopes",
+      "verified": true,
+      "registry_codes": {
+        "authorization/host_not_allowed": {
+          "category": "authorization",
+          "status": 403,
+          "message": "The request host is not allowed."
+        },
+        "not_found/route": {
+          "category": "not_found",
+          "status": 404,
+          "message": "The requested route was not found."
+        },
+        "validation/operation_not_supported": {
+          "category": "validation",
+          "status": 405,
+          "message": "The requested operation is not supported."
+        }
+      },
+      "tdd_red": {
+        "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr002-405-red cargo test -p eez-api errors::tests::every_contract_error_has_a_stable_category_and_status --locked",
+        "exit_code": 101,
+        "observation": "the new contract row made the test fail before its registry mapping existed; validation/operation_not_supported resolved to unknown/unclassified"
+      },
+      "tdd_green": "the registry test passed after adding validation/operation_not_supported; the full clean cargo xtask ci passed with all 9 API tests",
+      "host_denial_red": "an earlier smoke run failed the expected HTTP 403 assertion before request-host validation was implemented",
+      "runtime_tests": [
+        "production host accepted with HTTP 200",
+        "production localhost rejected with HTTP 403 C-04 envelope",
+        "unknown Axum path returned HTTP 404 C-04 envelope",
+        "POST to known GET-only /health returned HTTP 405 with validation/operation_not_supported, validation, message, correlation ID, and Allow: GET,HEAD",
+        "hidden probe GET and POST without token returned HTTP 404 C-04 envelopes"
+      ],
+      "runtime_red": {
+        "command": "source .project-tools/env.sh && bash scripts/smoke-pr002.sh",
+        "exit_code": 1,
+        "observation": "after adding the smoke assertion but before adding the Axum method fallback, POST /health returned 405 with an empty body and JSON decoding failed as expected"
+      }
+    },
+    {
+      "name": "fetch_boundary_correlation_id_regression",
+      "red_command": "bash -n scripts/smoke-pr002.sh && bash scripts/smoke-pr002.sh",
+      "red_exit_code": 1,
+      "red_observation": "GET to an unknown route without a correlation ID returned efdbcc85-c4cd-4715-9981-176466b8f8ea and logged request ID d484ea51-c54f-4ff4-8aa4-30d6ba8663b0; the smoke failed on the mismatch.",
+      "green_unit_command": "source .project-tools/env.sh && cargo fmt --all && cargo test -p eez-api --locked && bash -n scripts/smoke-pr002.sh && git diff --check",
+      "green_unit_exit_code": 0,
+      "green_api_tests_passed": 11,
+      "green_runtime_command": "source .project-tools/env.sh && bash scripts/smoke-pr002.sh",
+      "green_runtime_exit_code": 0,
+      "outcome": "Normalization at fetch generates at most one UUID, inserts that value into the request before Axum routing, and preserves the same value in 404/405 fallback responses, API error records, request records, host denial, and storage errors."
+    },
+    {
+      "name": "storage_error_correlation_propagation",
+      "verified": true,
+      "code_path": "The normalized correlation_id is passed into local_probe. Its Err branch supplies that same value to log_api_error and error_response.",
+      "unit_test": "errors::tests::storage_failures_propagate_as_safe_external_errors passed in cargo xtask ci and confirms the safe response preserves the supplied correlation ID."
+    }
+  ],
+  "reviews": {
+    "intent": "Implement the approved C-04 403/404/405 mappings and finish the full PR-002 Worker, Wrangler, D1/R2/KV scope; normalize correlation IDs once at fetch and propagate the exact same value through fallback responses and logs.",
+    "no_comments": {
+      "method": "Luna xhigh manual scan of the final PR diff, source review, and scoped diff comment scan",
+      "actionable_findings": 0,
+      "comments_added": 0,
+      "comments_deleted": 0,
+      "constraint_comments_added": 0,
+      "dedicated_comment_sicko": "not run because parent instruction prohibited reviewer children from other models; manual scan found no new source comments or suppressions",
+      "result": "no source comments, lint suppressions, or comment cleanups were introduced by the latest fix"
+    },
+    "interrogate": {
+      "method": "Luna xhigh adversarial self-review using the interrogate rubric, surrounding fetch/fallback/storage paths, the full PR diff, and final smoke evidence",
+      "independent_model_diversity": "not performed because parent instruction reserved review models and prohibited reviewer children from other models",
+      "act_on": [],
+      "consider": [],
+      "noted": [
+        "The container PID 1 does not reap defunct workerd children; the process-group trap stops all live processes and closes port 8787 after each smoke run."
+      ],
+      "dismissed": []
+    }
+  },
+  "pending": [
+    "Hosted CI must be green on the latest pushed PR #3 head before merge; this local evidence file does not assert a hosted result for the new head.",
+    "Cloudflare production binding IDs and credentials; no remote deployment attempted.",
+    "Sol review and merge of PR #3 remain outstanding."
+  ],
+  "unrun": [
+    "Cloudflare remote deployment and production account integration; intentionally outside the local PR-002 run because account IDs and credentials are unavailable."
+  ],
+  "source_sha256": {
+    "Cargo.lock": "302e178a9cd8297023dd79f0dac81e60cce1a423a4d04d9f69734d90eb21aa28",
+    "Cargo.toml": "ba1fcc2e193a1f511a2f57e6bbe8fddcd1d4151f153a13890fc83754148cfd05",
+    "apps/api/Cargo.toml": "d081572fd689afa175dd9636819916425b21e307c2461837f68cf0285f3c49a0",
+    "apps/api/src/errors.rs": "90d53080debbbfe971e98c1407fb164dafd4378a9df99c6b6d4b032b11ab651c",
+    "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
+    "apps/api/src/lib.rs": "371323a69d238efea791d2c785dc453fd416c6b2f6e471f550d04e6b096b7784",
+    "crates/storage/Cargo.toml": "36c9baec4e945a4ac1d19c260d95562e40efd32417a8529b1007c32cc9fb8407",
+    "crates/storage/src/lib.rs": "dfafc4e12afa570b4ee1bcccddf5b490666d4ce481769ff06837017a459c03f3",
+    "migrations/0001_pr002_runtime_probe.sql": "c3732a3b0999fb1629079e65cd864b5ab28e88e09750d81048f200bba481eee1",
+    "package-lock.json": "889bd8ebc89e4560c747b4eb9aaacb35cc2509fcd5a2340fd2d4250dca55cd87",
+    "package.json": "37e94b0c7bc7dc44e902397662ed802d8433e3bf2e53b802fbd36daa356a2e0d",
+    "plan/STATUS.md": "3defe718a5249b41fa199e5716ae539deece7d8b13e10ca2f371be5398d17ce0",
+    "plan/contracts/C-04_errors.md": "a570db1d9985c1f1ac50e8096dc143a4d1092e788e01d8a10c43a9dbf89f9eb7",
+    "plan/decisions/D7_worker_runtime.md": "d7a4982418c8f0cc7bd31ff954cb3d9a7cd318bf2371c2d8afc671e822f4b8cf",
+    "scripts/install-worker-build.sh": "2d991c856e73e0be315eb4b7d95512218b91fd16beeb41217d66a8deaa56e517",
+    "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
+    "wrangler.toml": "911fcd5b796e3b8d4adab7a345323d56cbc93388a74842d9c20fb8de90233b20",
+    "xtask/src/main.rs": "11ec4b585a04881f8cc26ad45c67ed18152daf839a250ad840b258a60c72ab3c",
+    "xtask/tests/pr001_cli.rs": "96ecb091aef513a5b23e818b5a9bf2b1ec9e90efe02701911f9b81333a82b75c"
+  },
+  "transcript": "execution.txt"
+}

@@ -1,10 +1,10 @@
 name = "eezfunnel"
-main = "build/worker/shim.mjs"
+main = "apps/api/build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
 [build]
-command = "cargo install -q worker-build && worker-build --release"
+command = "cd apps/api && worker-build --release"
 
 [observability]
 enabled = true
@@ -12,7 +12,8 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "eezfunnel"
-database_id = "REPLACE_ME"
+database_id = "00000000-0000-0000-0000-000000000003"
+migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "R2"
@@ -20,11 +21,11 @@ bucket_name = "eezfunnel-assets"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_ME"
+id = "00000000-0000-0000-0000-000000000004"
 
 [vars]
 ENVIRONMENT = "production"
-ALLOWED_HOSTS = "eezfunnel.workers.dev,localhost:8787"
+ALLOWED_HOSTS = "eezfunnel.workers.dev"
 
 [env.dev]
 name = "eezfunnel-dev"
@@ -32,3 +33,17 @@ name = "eezfunnel-dev"
 [env.dev.vars]
 ENVIRONMENT = "development"
 ALLOWED_HOSTS = "localhost:8787"
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "eezfunnel-dev"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "migrations"
+
+[[env.dev.r2_buckets]]
+binding = "R2"
+bucket_name = "eezfunnel-assets-dev"
+
+[[env.dev.kv_namespaces]]
+binding = "KV"
+id = "00000000-0000-0000-0000-000000000002"
