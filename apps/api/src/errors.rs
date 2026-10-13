@@ -49,6 +49,13 @@ impl ApiError {
                 "The request is invalid.",
                 false,
             ),
+            "validation/operation_not_supported" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                405,
+                "The requested operation is not supported.",
+                false,
+            ),
             "authorization/token_invalid" | "authorization/token_missing" => (
                 code.to_owned(),
                 ErrorCategory::Authorization,
@@ -174,6 +181,11 @@ mod tests {
             "validation/section_missing_id",
             ErrorCategory::Validation,
             400,
+        ),
+        (
+            "validation/operation_not_supported",
+            ErrorCategory::Validation,
+            405,
         ),
         (
             "authorization/token_invalid",
