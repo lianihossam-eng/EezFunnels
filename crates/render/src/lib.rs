@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 use eez_domain::{Revision, Section, SectionType};
+use sha2::{Digest, Sha256};
 
 pub const RENDERER_VERSION: &str = "renderer-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenderError {
-    InvalidThemeVersion,
     InvalidTokenName,
     UnsafeTokenValue,
     UnsupportedRendererVersion,
@@ -19,7 +19,6 @@ pub enum RenderError {
 impl Display for RenderError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let message = match self {
-            Self::InvalidThemeVersion => "theme version must not be empty",
             Self::InvalidTokenName => "theme token name is invalid",
             Self::UnsafeTokenValue => "theme token value is not a safe CSS token",
             Self::UnsupportedRendererVersion => "render manifest uses an unsupported renderer",
@@ -38,15 +37,7 @@ pub struct ThemeTokens {
 }
 
 impl ThemeTokens {
-    pub fn new(
-        version: impl Into<String>,
-        mut values: BTreeMap<String, String>,
-    ) -> Result<Self, RenderError> {
-        let version = version.into();
-        if version.trim().is_empty() {
-            return Err(RenderError::InvalidThemeVersion);
-        }
-
+    pub fn new(mut values: BTreeMap<String, String>) -> Result<Self, RenderError> {
         for (name, value) in &mut values {
             if !is_valid_token_name(name) {
                 return Err(RenderError::InvalidTokenName);
@@ -58,12 +49,32 @@ impl ThemeTokens {
             *value = trimmed.to_owned();
         }
 
+        let version = theme_version(&values);
         Ok(Self { version, values })
     }
 
     pub fn version(&self) -> &str {
         &self.version
     }
+}
+
+fn theme_version(values: &BTreeMap<String, String>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"eez-theme-tokens-v1\0");
+    for (name, value) in values {
+        digest.update(name.as_bytes());
+        digest.update([0]);
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+
+    let mut version = String::from("sha256-v1:");
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest.finalize() {
+        version.push(HEX[usize::from(byte >> 4)] as char);
+        version.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    version
 }
 
 fn is_valid_token_name(name: &str) -> bool {
@@ -89,10 +100,53 @@ fn is_safe_css_token_value(value: &str) -> bool {
         return false;
     }
 
-    let lowercase = value.to_ascii_lowercase();
-    !lowercase.contains("url")
-        && !lowercase.contains("expression")
-        && !lowercase.contains("javascript")
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    let mut nesting = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if is_css_identifier_start(byte) {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && is_css_identifier_byte(bytes[index]) {
+                index += 1;
+            }
+
+            let identifier = &value[start..index];
+            if index < bytes.len()
+                && bytes[index] == b'('
+                && (identifier.eq_ignore_ascii_case("url")
+                    || identifier.eq_ignore_ascii_case("expression"))
+            {
+                return false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'(' => match nesting.checked_add(1) {
+                Some(depth) => nesting = depth,
+                None => return false,
+            },
+            b')' => {
+                if nesting == 0 {
+                    return false;
+                }
+                nesting -= 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    nesting == 0
+}
+
+fn is_css_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'-')
+}
+
+fn is_css_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -179,14 +233,23 @@ fn escape_html_attribute(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
 
-    use super::{RenderError, Renderer, ThemeTokens};
+    use super::{escape_html_attribute, RenderError, Renderer, ThemeTokens};
     use eez_domain::{FunnelId, RenderManifest, Revision, RevisionId, Section};
 
     fn revision_with_sections(
         sections: Vec<(&str, &str, usize)>,
         renderer_version: &str,
+    ) -> Revision {
+        let theme = safe_theme_tokens();
+        revision_with_theme_version(sections, renderer_version, theme.version())
+    }
+
+    fn revision_with_theme_version(
+        sections: Vec<(&str, &str, usize)>,
+        renderer_version: &str,
+        theme_version: &str,
     ) -> Revision {
         let revision_id = RevisionId::new("revision-1").expect("valid revision ID");
         let sections = sections
@@ -197,7 +260,7 @@ mod tests {
             .collect();
         let manifest = RenderManifest::new(
             revision_id.clone(),
-            "theme-v1",
+            theme_version,
             renderer_version,
             "assets-hash",
             "config-hash",
@@ -214,13 +277,10 @@ mod tests {
     }
 
     fn safe_theme_tokens() -> ThemeTokens {
-        ThemeTokens::new(
-            "theme-v1",
-            BTreeMap::from([
-                ("color-primary".to_owned(), "#112233".to_owned()),
-                ("spacing-section".to_owned(), "2rem".to_owned()),
-            ]),
-        )
+        ThemeTokens::new(BTreeMap::from([
+            ("color-primary".to_owned(), "#112233".to_owned()),
+            ("spacing-section".to_owned(), "2rem".to_owned()),
+        ]))
         .expect("safe theme tokens")
     }
 
@@ -267,6 +327,60 @@ mod tests {
     }
 
     #[test]
+    fn theme_version_is_bound_to_normalized_token_contents() {
+        let red = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            "red".to_owned(),
+        )]))
+        .expect("red theme");
+        let blue = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            "blue".to_owned(),
+        )]))
+        .expect("blue theme");
+        let normalized_red = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            " red ".to_owned(),
+        )]))
+        .expect("normalized red theme");
+
+        assert_ne!(red.version(), blue.version());
+        assert_eq!(red.version(), normalized_red.version());
+        assert_eq!(
+            red.version(),
+            "sha256-v1:1131ad1f19f9832d429f3b62e5603669c8f5ec8102af4d7929437a15a01eb36d"
+        );
+    }
+
+    #[test]
+    fn accepts_css_identifiers_that_contain_the_letters_url() {
+        let theme = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            "burlywood".to_owned(),
+        )]))
+        .expect("burlywood is a safe CSS identifier");
+
+        assert_eq!(
+            theme.values.get("color-primary").map(String::as_str),
+            Some("burlywood")
+        );
+    }
+
+    #[test]
+    fn css_function_rejection_requires_a_css_function_token() {
+        let theme = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            "URL (red)".to_owned(),
+        )]))
+        .expect("whitespace separates the identifier from a CSS function token");
+
+        assert_eq!(
+            theme.values.get("color-primary").map(String::as_str),
+            Some("URL (red)")
+        );
+    }
+
+    #[test]
     fn rejects_unsafe_token_names_and_values() {
         for (name, value) in [
             ("color-primary; background", "red"),
@@ -275,23 +389,27 @@ mod tests {
                 "red; background-image:url(https://evil.test/x)",
             ),
             ("color-primary", "url(javascript:alert(1))"),
+            ("color-primary", "url(red)"),
+            ("color-primary", "expression(1 + 1)"),
+            ("color-primary", "calc(1px + url(red))"),
+            ("color-primary", "javascript:alert(1)"),
             ("color-primary", "</style><script>alert(1)</script>"),
             ("color-primary", "red\" onmouseover=\"alert(1)"),
             ("color-primary", "red\nblue"),
         ] {
             let tokens = BTreeMap::from([(name.to_owned(), value.to_owned())]);
-            assert!(ThemeTokens::new("theme-v1", tokens).is_err());
+            assert!(ThemeTokens::new(tokens).is_err());
         }
     }
 
     #[test]
     fn trims_line_breaks_at_css_value_boundaries_before_emission() {
-        let tokens = ThemeTokens::new(
-            "theme-v1",
-            BTreeMap::from([("color-primary".to_owned(), "\n red \n".to_owned())]),
-        )
+        let tokens = ThemeTokens::new(BTreeMap::from([(
+            "color-primary".to_owned(),
+            "\n red \n".to_owned(),
+        )]))
         .expect("outer whitespace is normalized");
-        let revision = revision_with_sections(Vec::new(), "renderer-v1");
+        let revision = revision_with_theme_version(Vec::new(), "renderer-v1", tokens.version());
         let html = Renderer::new()
             .render(&revision, &tokens)
             .expect("normalized token renders");
@@ -310,8 +428,7 @@ mod tests {
             RenderError::UnsupportedRendererVersion,
         );
 
-        let wrong_theme =
-            ThemeTokens::new("theme-v2", BTreeMap::new()).expect("non-empty theme version");
+        let wrong_theme = ThemeTokens::new(BTreeMap::new()).expect("empty theme is valid");
         let current_revision = revision_with_sections(Vec::new(), "renderer-v1");
         assert_eq!(
             Renderer::new()
@@ -335,17 +452,17 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.contains("data-revision-id=\"revision-1\""));
-        assert!(first.contains("data-theme-version=\"theme-v1\""));
+        assert!(first.contains(&format!("data-theme-version=\"{}\"", theme.version())));
     }
 
     #[test]
     fn escapes_untrusted_render_manifest_attribute_values() {
         let revision_id = RevisionId::new("revision\" onfocus=\"alert(1)<script>")
             .expect("revision IDs are non-empty");
-        let theme_version = "theme\" onmouseover=\"alert(1)<script>";
+        let theme = safe_theme_tokens();
         let manifest = RenderManifest::new(
             revision_id.clone(),
-            theme_version,
+            theme.version(),
             "renderer-v1",
             "assets-hash",
             "config-hash",
@@ -359,43 +476,250 @@ mod tests {
             manifest,
         )
         .expect("valid revision");
-        let theme = ThemeTokens::new(theme_version, BTreeMap::new())
-            .expect("theme version is escaped in HTML context");
         let html = Renderer::new()
             .render(&revision, &theme)
             .expect("manifest values are escaped");
 
         assert!(html
             .contains("data-revision-id=\"revision&quot; onfocus=&quot;alert(1)&lt;script&gt;\""));
-        assert!(html.contains(
-            "data-theme-version=\"theme&quot; onmouseover=&quot;alert(1)&lt;script&gt;\""
-        ));
+        assert!(html.contains(&format!("data-theme-version=\"{}\"", theme.version())));
         assert!(!html.to_ascii_lowercase().contains("<script"));
     }
 
     #[test]
-    fn ten_thousand_untrusted_html_and_css_inputs_cannot_inject_active_markup() {
-        let payloads = [
-            "\"><script>alert(1)</script>",
-            "' autofocus onfocus='alert(1)",
-            "<img src=x onerror=alert(1)>",
-            "</main><script>document.cookie</script>",
-            "javascript:alert(1)",
-            "\0\r\n<script>alert(1)</script>",
-        ];
-        let css_payloads = [
-            "</style><script>alert(1)</script>",
-            "red; background-image:url(https://evil.test/x)",
-            "url(javascript:alert(1))",
-            "red\" onmouseover=\"alert(1)",
-            "red\nblue",
-        ];
-        let renderer = Renderer::new();
+    fn rejects_a_manifest_with_a_tampered_theme_version() {
         let theme = safe_theme_tokens();
+        let revision = revision_with_theme_version(
+            Vec::new(),
+            "renderer-v1",
+            "sha256-v1:0000000000000000000000000000000000000000000000000000000000000000",
+        );
 
-        for index in 0..10_000 {
-            let id = format!("{}-{index}", payloads[index % payloads.len()]);
-            let revision = revision_with_sections(vec![(id.as_str(), "hero", 0)], "renderer-v1");
+        assert_eq!(
+            Renderer::new()
+                .render(&revision, &theme)
+                .expect_err("manifest theme digest must match the token contents"),
+            RenderError::ThemeVersionMismatch,
+        );
+    }
+
+    struct GeneratedAttackCase {
+        index: usize,
+        id_fragments: u32,
+        css_fragments: u32,
+        id_sequence: Vec<u8>,
+        css_sequence: Vec<u8>,
+        id_length: usize,
+        css_length: usize,
+        id_insert_position: usize,
+        css_insert_position: usize,
+        id: String,
+        css: String,
+    }
+
+    const HTML_ATTACK_FRAGMENTS: [&str; 32] = [
+        "\"",
+        "'",
+        "<",
+        ">",
+        "&",
+        "&quot;",
+        "&#34;",
+        "&#x22;",
+        " ",
+        "=",
+        "/",
+        "script",
+        "svg",
+        "img",
+        "javascript:",
+        "onerror=",
+        "onload=",
+        "onfocus=",
+        "onclick=",
+        "onmouseover=",
+        "\0",
+        "\r",
+        "\n",
+        "é",
+        "🧪",
+        "&#0;",
+        "style=",
+        "href=",
+        "src=",
+        "</main>",
+        "<script>",
+        "alert(",
+    ];
+
+    const CSS_ATTACK_FRAGMENTS: [&str; 32] = [
+        "burlywood",
+        "url",
+        "URL(",
+        "expression(",
+        "calc(",
+        "var(",
+        "linear-gradient(",
+        "red",
+        "blue",
+        "(--x)",
+        " ",
+        "(",
+        ")",
+        ";",
+        ":",
+        "/",
+        "\\",
+        "\"",
+        "'",
+        "<",
+        ">",
+        "{",
+        "}",
+        "javascript",
+        "+",
+        "1px",
+        "--token",
+        "/*",
+        "*/",
+        "%",
+        " rgb",
+        " onload",
+    ];
+
+    fn next_attack_word(state: &mut u64) -> u64 {
+        let mut word = *state;
+        word ^= word >> 12;
+        word ^= word << 25;
+        word ^= word >> 27;
+        *state = word;
+        word.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn bounded_index(word: u64, upper_bound: usize) -> usize {
+        ((u128::from(word) * upper_bound as u128) >> 64) as usize
+    }
+
+    fn generated_fragment_sequence(state: &mut u64) -> (Vec<u8>, u32) {
+        let length = 2 + bounded_index(next_attack_word(state), 8);
+        let mut sequence = Vec::with_capacity(length);
+        let mut mask = 0u32;
+        for _ in 0..length {
+            let fragment_index = ((next_attack_word(state) >> 32) & 31) as u8;
+            sequence.push(fragment_index);
+            mask |= 1u32 << fragment_index;
+        }
+        (sequence, mask)
+    }
+
+    fn materialize_attack_input(
+        fragments: &[&str; 32],
+        sequence: &[u8],
+        insertion_position: usize,
+        marker: &str,
+    ) -> String {
+        let capacity = marker.len()
+            + sequence
+                .iter()
+                .map(|index| fragments[*index as usize].len())
+                .sum::<usize>();
+        let mut value = String::with_capacity(capacity);
+        for position in 0..=sequence.len() {
+            if position == insertion_position {
+                value.push_str(marker);
+            }
+            if let Some(fragment_index) = sequence.get(position) {
+                value.push_str(fragments[*fragment_index as usize]);
+            }
+        }
+        value
+    }
+
+    fn generated_attack_cases() -> Vec<GeneratedAttackCase> {
+        let mut state = 0x6a09_e667_f3bc_c909;
+        (0..10_000)
+            .map(|index| {
+                let (id_sequence, id_fragments) = generated_fragment_sequence(&mut state);
+                let (css_sequence, css_fragments) = generated_fragment_sequence(&mut state);
+                let nonce = next_attack_word(&mut state);
+                let marker = format!("x{index:05x}z{nonce:016x}x");
+                let id_insert_position =
+                    bounded_index(next_attack_word(&mut state), id_sequence.len() + 1);
+                let css_insert_position =
+                    bounded_index(next_attack_word(&mut state), css_sequence.len() + 1);
+                let id = materialize_attack_input(
+                    &HTML_ATTACK_FRAGMENTS,
+                    &id_sequence,
+                    id_insert_position,
+                    &marker,
+                );
+                let css = materialize_attack_input(
+                    &CSS_ATTACK_FRAGMENTS,
+                    &css_sequence,
+                    css_insert_position,
+                    &marker,
+                );
+                GeneratedAttackCase {
+                    index,
+                    id_fragments,
+                    css_fragments,
+                    id_length: id_sequence.len(),
+                    css_length: css_sequence.len(),
+                    id_sequence,
+                    css_sequence,
+                    id_insert_position,
+                    css_insert_position,
+                    id,
+                    css,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ten_thousand_generated_html_and_css_inputs_cannot_inject_active_markup() {
+        let renderer = Renderer::new();
+        let mut section_ids = HashSet::new();
+        let mut css_values = HashSet::new();
+        let mut id_sequences = HashSet::new();
+        let mut css_sequences = HashSet::new();
+        let mut id_lengths = [false; 8];
+        let mut css_lengths = [false; 8];
+        let mut id_insert_positions = [false; 10];
+        let mut css_insert_positions = [false; 10];
+        let mut id_fragment_coverage = 0u32;
+        let mut css_fragment_coverage = 0u32;
+        let mut accepted_css = 0usize;
+        let mut rejected_css = 0usize;
+
+        for case in generated_attack_cases() {
+            section_ids.insert(case.id.clone());
+            css_values.insert(case.css.clone());
+            id_sequences.insert(case.id_sequence.clone());
+            css_sequences.insert(case.css_sequence.clone());
+            id_lengths[case.id_length - 2] = true;
+            css_lengths[case.css_length - 2] = true;
+            id_insert_positions[case.id_insert_position] = true;
+            css_insert_positions[case.css_insert_position] = true;
+            id_fragment_coverage |= case.id_fragments;
+            css_fragment_coverage |= case.css_fragments;
+
+            let tokens = BTreeMap::from([("color-primary".to_owned(), case.css.clone())]);
+            let theme = match ThemeTokens::new(tokens) {
+                Ok(theme) => {
+                    accepted_css += 1;
+                    theme
+                }
+                Err(_) => {
+                    rejected_css += 1;
+                    safe_theme_tokens()
+                }
+            };
+            let revision = revision_with_theme_version(
+                vec![(case.id.as_str(), "hero", 0)],
+                "renderer-v1",
+                theme.version(),
+            );
             let html = renderer
                 .render(&revision, &theme)
                 .expect("hostile ID is escaped");
@@ -403,46 +727,112 @@ mod tests {
 
             assert!(
                 !lower.contains("<script"),
-                "script markup for input {index}"
+                "script markup for input {}",
+                case.index
             );
-            assert!(!lower.contains("<style"), "style tag for input {index}");
-            assert!(!lower.contains("<img"), "image markup for input {index}");
+            assert!(
+                !lower.contains("<style"),
+                "style tag for input {}",
+                case.index
+            );
+            assert!(
+                !lower.contains("<img"),
+                "image markup for input {}",
+                case.index
+            );
+            assert!(
+                !lower.contains("<svg"),
+                "SVG markup for input {}",
+                case.index
+            );
             assert_eq!(
                 html.matches('<').count(),
                 15,
-                "markup changed for input {index}"
+                "markup changed for input {}",
+                case.index
             );
             assert_eq!(
                 html.matches('"').count(),
                 26,
-                "attribute breakout for input {index}"
+                "attribute breakout for input {}",
+                case.index
+            );
+            assert_eq!(
+                html.matches("<section ").count(),
+                1,
+                "unexpected section attributes for input {}",
+                case.index
+            );
+            let expected_section = format!(
+                "<section class=\"section section-hero\" data-section-id=\"{}\" data-section-type=\"hero\" data-order=\"0\"></section>",
+                escape_html_attribute(&case.id),
+            );
+            assert!(
+                html.contains(&expected_section),
+                "section attributes differ from the safe structure for input {}",
+                case.index
             );
             assert!(
                 !html.contains('\n'),
-                "newline escaped its attribute for input {index}"
+                "newline escaped its attribute for input {}",
+                case.index
             );
             assert!(
                 !html.contains('\r'),
-                "carriage return escaped its attribute for input {index}"
+                "carriage return escaped its attribute for input {}",
+                case.index
             );
             assert!(
                 !html.contains('\0'),
-                "NUL escaped its attribute for input {index}"
+                "NUL escaped its attribute for input {}",
+                case.index
             );
-            if id.contains('<') {
+            if case.id.contains('<') {
                 assert!(
                     html.contains("&lt;"),
-                    "hostile tag was not escaped for input {index}"
+                    "hostile tag was not escaped for input {}",
+                    case.index
                 );
             }
-
-            let unsafe_value = css_payloads[index % css_payloads.len()].to_owned();
-            let tokens = BTreeMap::from([("color-primary".to_owned(), unsafe_value)]);
-            assert!(ThemeTokens::new("theme-v1", tokens).is_err());
-
-            let unsafe_name = format!("color-primary\" onerror={index}");
-            let tokens = BTreeMap::from([(unsafe_name, "red".to_owned())]);
-            assert!(ThemeTokens::new("theme-v1", tokens).is_err());
         }
+
+        assert_eq!(section_ids.len(), 10_000);
+        assert_eq!(css_values.len(), 10_000);
+        assert!(
+            id_sequences.len() > 9_000,
+            "IDs must use structurally varied fragment sequences"
+        );
+        assert!(
+            css_sequences.len() > 9_000,
+            "CSS values must use structurally varied fragment sequences"
+        );
+        assert!(
+            id_lengths.into_iter().all(|seen| seen),
+            "all ID sequence lengths must occur"
+        );
+        assert!(
+            css_lengths.into_iter().all(|seen| seen),
+            "all CSS sequence lengths must occur"
+        );
+        assert!(
+            id_insert_positions.into_iter().all(|seen| seen),
+            "all ID marker positions must occur"
+        );
+        assert!(
+            css_insert_positions.into_iter().all(|seen| seen),
+            "all CSS marker positions must occur"
+        );
+        assert_eq!(
+            id_fragment_coverage,
+            u32::MAX,
+            "every HTML attack fragment must occur"
+        );
+        assert_eq!(
+            css_fragment_coverage,
+            u32::MAX,
+            "every CSS attack fragment must occur"
+        );
+        assert!(accepted_css > 0);
+        assert!(rejected_css > 0);
     }
 }
