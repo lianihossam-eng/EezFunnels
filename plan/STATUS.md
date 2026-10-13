@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-004 domain model (`feat/004_domain`)
+Current phase: PR-005 sandboxed render engine (`feat/005_render`)
 Last updated: 2026-10-13
 
 ## Phases
@@ -9,8 +9,8 @@ Last updated: 2026-10-13
 - [x] PR-001 xtask (merged as PR #2; merge commit `79d85c7`)
 - [x] PR-002 Worker + D1 + R2 + KV (merged as PR #3; merge commit `bc641cad`)
 - [x] PR-003 Schema + seed themes (merged as PR #4; merge commit `5140163`)
-- [ ] PR-004 Domain model (implementation verified locally; PR #5 open, corrective update prepared)
-- [ ] PR-005 Render engine
+- [x] PR-004 Domain model (merged as PR #5; merge commit `c5961dfc77fb60198882fdd7f5909d4e0326933f`)
+- [ ] PR-005 Render engine (implementation and local gates verified; follow-up source commit `622952d5`; evidence/status update ready for push)
 - [ ] PR-006 5 sections
 - [ ] PR-007 5 themes
 - [ ] PR-008 Dashboard shell
@@ -36,16 +36,29 @@ behavior are integration-verified at merged main commit
 The insert regression tests were committed first at `b8c7e968b20cf8bd2267951eeab84f134eb4845d`;
 the trigger fix follows at `d3e1898f86403bb5c834f2ed736b072440e0d21e`. The final fresh-target
 `cargo xtask ci`, `cargo xtask check`, local PR-002 and PR-003 Wrangler smokes passed; hosted CI
-run `38431629403` passed on the exact merged PR head, and Sol/@codex reviews were clean. PR-004
-domain implementation plus review fixes is verified locally at source commit
+run `38431629403` passed on the exact merged PR head, and Sol/@codex reviews were clean. PR-004's
+domain implementation and review fixes are verified at source commit
 `6da34d09dae2dc0f958a02323c7f025641b86b30`. `Funnel::from_state` restores a published baseline
-when hydrating a funnel, and C-04 now registers C-01's `validation/schema_version_missing` code as
-HTTP 400 with matching API mapping. The domain suite has 10 passing tests. `cargo xtask check` and
-clean isolated `cargo xtask ci` passed; the audit scanned 105 locked dependencies against 1,310
-advisories with zero findings. Exact commands, TDD observations, source hashes, and self-audits are
-in `plan/verification/PR-004/`. Hosted CI run `38438853320` passed on pushed head
-`180d5af03eb415d018117fb892211af16cf092be`; the evidence refresh that records this run requires a
-new hosted run on its resulting head before merge.
+when hydrating a funnel, and C-04 registers C-01's `validation/schema_version_missing` code as
+HTTP 400 with matching API mapping. The domain suite has 10 passing tests; `cargo xtask check` and
+clean isolated `cargo xtask ci` passed with zero audit findings across 105 locked dependencies and
+1,310 advisories. Hosted CI run `38439241409` passed on exact PR head
+`41b5638175678d7349e4ba93600831d40e5fd099`; Sol and @codex reviews were clean on that head. PR #5
+was merged as `c5961dfc77fb60198882fdd7f5909d4e0326933f`.
+
+PR-005's sandboxed renderer is implemented at source commit
+`622952d5aeadb94c997ff405407f6c9f7461ab45`. `ThemeTokens` binds a stable content-derived digest to
+the immutable normalized token map, CSS filtering matches actual function-token boundaries, and
+the deterministic 10,000-input test generator varies fragment sequences and insertion positions.
+The render suite passes 12 tests; `cargo xtask check` passes and a fresh-target `cargo xtask ci`
+passed. RustSec loaded 1,310 advisories, scanned 113 locked dependencies, and found zero
+vulnerabilities. Fingerprinted command/output evidence is in
+`plan/verification/PR-005/execution.txt` and `results.json`.
+
+PR #6 is open at https://github.com/lianihossam-eng/EezFunnels/pull/6. Hosted CI run
+`38442491344` is green on prior head `c14ba75ccbfe1bf8ebe76361bffc69c8705b3c13`; the follow-up
+source and evidence commits are not yet pushed, so hosted CI and Sol/@codex review must run again on
+the final updated head.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -97,6 +110,7 @@ new hosted run on its resulting head before merge.
 
 ## Next action
 
-Push the PR-004 evidence refresh to existing PR #5, rerun hosted CI, and request Sol/@codex review
-on the resulting exact head. Do not merge until both reviews and hosted CI are clean on that same
-head.
+Push the PR-005 follow-up source and evidence commits to PR #6, update its summary to reflect the
+content-derived theme digest, CSS function-token validation, and variable-sequence XSS corpus, and
+request fresh @codex and Sol reviews on the exact pushed head. Wait for green hosted CI and both
+reviews before merge. Do not deploy remotely.

@@ -28,6 +28,7 @@ axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-service = "0.3"
 dioxus = "0.7"
 rmcp = "1.4"
+sha2 = { version = "0.10", default-features = false }
 
 [profile.release]
 opt-level = "z"

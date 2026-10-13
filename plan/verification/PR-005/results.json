@@ -1,0 +1,121 @@
+{
+  "task": "PR-005",
+  "evidence_refreshed_at_utc": "2026-10-13T18:20:32Z",
+  "branch": "feat/005_render",
+  "base_commit": "c5961dfc77fb60198882fdd7f5909d4e0326933f",
+  "verified_source_commit": "622952d5aeadb94c997ff405407f6c9f7461ab45",
+  "source_commit_role": "PR-005 follow-up source commit: content-bound themes, CSS function-token validation, and variable-sequence attack corpus; evidence and status are updated in a following documentation commit",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
+  "source_fingerprint_sha256": "1f1376a3fa0b1cf18a820959d5e3e8aa2d5576e72068d4e379e5243f016f23c5",
+  "source_sha256": {
+    "Cargo.lock": "d34b118c9f72116d324d2b91da220f1bac8f479b826fc5f77c15749761f3d531",
+    "Cargo.toml": "49dd097ec9b75092285f37e1bdc220f7da961319f4832ceb8d449950391c7229",
+    "crates/render/Cargo.toml": "9372b8094b1927a6f2c3202bcf3b1baa733a2a2abda5b70520711c776d72a416",
+    "crates/render/src/lib.rs": "afaac887af41ad6d41598bf52a8b2c27a283e6131c5c0d5c56fa99451c510f77",
+    "plan/decisions/D9_theme_token_integrity.md": "2d7c022fbf8301e51b7e43a323f55a4a6d3052314e64ef44fa7a855cec0a3f95"
+  },
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "isolated_target_dir": "/workspace/.eez-pr005-ci.nvNMhl",
+  "checks": [
+    {
+      "name": "review_findings_test_first_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "red_exit_code": 101,
+      "red_observation": "On the pre-fix PR-005 implementation, the content-binding regression showed the same caller label for different token maps, burlywood was rejected by substring filtering, and the fixed-template corpus produced only 5 unique CSS values instead of 10000.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 12,
+      "cases": [
+        "dispatches all five supported section types in order",
+        "injects sorted CSS custom properties",
+        "binds normalized token contents to a stable SHA-256 theme version and rejects tampered manifest versions",
+        "accepts burlywood and identifier-plus-parenthesis tokens without false-positive substring rejection",
+        "rejects URL and expression function tokens, declaration separators, CSS strings, schemes, and unsafe names",
+        "escapes untrusted render metadata and section IDs, including HTML metacharacters and controls",
+        "uses a fixed-seed generator with 32 HTML and 32 CSS fragments, variable 2-9 fragment sequences, and varied marker positions across 10000 inputs",
+        "asserts 10000 distinct IDs and CSS inputs, over 9000 structural sequences per set, full fragment/length/position coverage, exact section structure, and no active markup injection"
+      ]
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "formatting, Clippy with warnings denied, workspace tests, and layer validation passed",
+      "workspace_test_counts": {
+        "api": 11,
+        "domain": 10,
+        "render": 12,
+        "storage": 4,
+        "xtask": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      }
+    },
+    {
+      "name": "cargo_xtask_ci",
+      "command": "ci_target=$(mktemp -d /workspace/.eez-pr005-ci.XXXXXX)\nprintf '%s\\n' \"$ci_target\"\nsource .project-tools/env.sh\nrustc --version\ncargo --version\nCARGO_TARGET_DIR=\"$ci_target\" cargo xtask ci",
+      "exit_code": 0,
+      "fresh_isolated_target": true,
+      "outcome": "workspace check/tests, API WASM, dashboard WASM, and cargo-audit passed",
+      "wasm_sha256": {
+        "eez_api.wasm": "ffcef25d219978fa9749e2e02d30663ad58ba27e5a69ac8460b166c7d6b1ad8e",
+        "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+      },
+      "audit": {
+        "audit_version": "cargo-audit 0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 113,
+        "findings": 0,
+        "database_update": "cargo xtask ci fetched and updated the RustSec advisory database and crates.io index before scanning"
+      }
+    },
+    {
+      "name": "cargo_audit_cached_database_json",
+      "command": "source .project-tools/env.sh && cargo audit --db .project-tools/cargo/advisory-db --no-fetch --file Cargo.lock --json",
+      "exit_code": 0,
+      "advisories_loaded": 1310,
+      "locked_crate_dependencies_scanned": 113,
+      "vulnerabilities": 0,
+      "warnings": {}
+    },
+    {
+      "name": "no_comments_self_audit",
+      "reviewer": "Luna xhigh, manual diff scan",
+      "result": "no source comments, TODO/FIXME markers, or lint suppressions were added; raw marker matches were Cargo registry URLs and a CSS comment-delimiter test payload string, not comments",
+      "independent_comment_sicko": "the Comment Sicko subagent type is not exposed in this environment; the prescribed independent tool could not be run"
+    },
+    {
+      "name": "interrogate_self_audit",
+      "reviewer": "Luna xhigh, manual adversarial review using the repository interrogate rubric",
+      "result": "no further actionable issue found in digest canonicalization, token immutability, CSS function-token boundaries, HTML escaping, generated corpus variation, or render-manifest matching",
+      "independent_review": "multi-model local reviewer spawning was unavailable under the approved Luna-only implementation constraint; request fresh @codex and Sol reviews on the pushed exact head"
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "scope_notes": [
+    "ThemeTokens computes a stable sha256-v1 version from the immutable, normalized, ordered token map; render rejects a manifest whose version does not match the token contents.",
+    "CSS rejection identifies actual case-insensitive url( and expression( function tokens. The restricted character grammar excludes escaping, comments, strings, declaration separators, schemes, and CSS attribute breakout; burlywood and URL (red) remain accepted.",
+    "The reproducible 10000-case corpus creates variable-length fragment sequences from 32 HTML and 32 CSS fragments; it varies ordering and marker placement and asserts uniqueness, structural diversity, and fragment/length/position coverage.",
+    "No Cloudflare deployment was run; PR-005 is a local renderer change and production bindings/credentials remain unavailable."
+  ],
+  "hosted_ci": {
+    "status": "pending on the final pushed PR #6 head",
+    "required": "hosted CI must pass on the final pushed PR #6 head",
+    "prior_head": "c14ba75ccbfe1bf8ebe76361bffc69c8705b3c13",
+    "prior_head_run": "38442491344",
+    "prior_head_conclusion": "SUCCESS",
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/6"
+  },
+  "reviews": {
+    "sol": "fresh review required on the final pushed head",
+    "codex": "fresh @codex review required on the final pushed head; previous review on c14ba75 returned three findings addressed by this source commit"
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "reason": "PR-005 is a local renderer change; Cloudflare production bindings and credentials remain unavailable"
+  }
+}
