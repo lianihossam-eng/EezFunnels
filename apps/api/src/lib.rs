@@ -38,6 +38,8 @@ struct ProductProbeResponse {
     themes: &'static str,
     publication: &'static str,
     unsupported_schema_version: &'static str,
+    cross_funnel_published_revision_insert_accepted: bool,
+    null_published_revision_insert_accepted: bool,
     unsupported_schema_publish_accepted: bool,
     unsupported_schema_published_revision_id: Option<String>,
     current_revision_noop_accepted: bool,
@@ -219,6 +221,10 @@ async fn local_product_probe(
                 themes: "ok",
                 publication: "ok",
                 unsupported_schema_version: "rejected",
+                cross_funnel_published_revision_insert_accepted: publication_regressions
+                    .cross_funnel_published_revision_insert_accepted,
+                null_published_revision_insert_accepted: publication_regressions
+                    .null_published_revision_insert_accepted,
                 unsupported_schema_publish_accepted: publication_regressions
                     .unsupported_schema_publish_accepted,
                 unsupported_schema_published_revision_id: publication_regressions

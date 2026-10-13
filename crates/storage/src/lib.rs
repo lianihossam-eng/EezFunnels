@@ -7,6 +7,8 @@ use worker::{Env, Error, Result};
 pub mod repository;
 
 pub struct PublicationRegressionObservations {
+    pub cross_funnel_published_revision_insert_accepted: bool,
+    pub null_published_revision_insert_accepted: bool,
     pub unsupported_schema_publish_accepted: bool,
     pub unsupported_schema_published_revision_id: Option<String>,
     pub current_revision_noop_accepted: bool,
@@ -416,6 +418,33 @@ impl Bindings {
                 slug: "pr003-other-funnel".to_owned(),
             })
             .await?;
+        let null_published_revision_insert_accepted = repository
+            .get_funnel(&other_funnel.id)
+            .await?
+            .is_some_and(|funnel| funnel.published_revision_id.is_none());
+        let cross_funnel_id = D1Type::Text("pr003-cross-funnel-insert");
+        let cross_funnel_name = D1Type::Text("PR-003 Cross Funnel Insert");
+        let cross_funnel_slug = D1Type::Text("pr003-cross-funnel-insert");
+        let published_revision_id = D1Type::Text(&second_revision.id);
+        let cross_funnel_published_revision_insert_accepted = self
+            .database
+            .prepare(
+                "INSERT INTO funnels (id, name, slug, published_revision_id) VALUES (?, ?, ?, ?)",
+            )
+            .bind_refs([
+                &cross_funnel_id,
+                &cross_funnel_name,
+                &cross_funnel_slug,
+                &published_revision_id,
+            ])?
+            .run()
+            .await
+            .is_ok();
+        self.database
+            .prepare("DELETE FROM funnels WHERE id = ?")
+            .bind_refs([&cross_funnel_id])?
+            .run()
+            .await?;
         let foreign_revision = repository
             .create_revision(&NewRevision {
                 id: "pr003-foreign-revision".to_owned(),
@@ -453,6 +482,8 @@ impl Bindings {
         }
 
         Ok(PublicationRegressionObservations {
+            cross_funnel_published_revision_insert_accepted,
+            null_published_revision_insert_accepted,
             unsupported_schema_publish_accepted,
             unsupported_schema_published_revision_id,
             current_revision_noop_accepted,
