@@ -1,24 +1,24 @@
 {
   "task": "PR-006",
-  "evidence_refreshed_at_utc": "2026-10-13T19:05:46Z",
+  "evidence_refreshed_at_utc": "2026-10-13T23:07:17Z",
   "branch": "feat/006_sections",
   "base_commit": "2c67843b61c0eb266dee1219565d4e55d59738da",
-  "verified_source_commit": "ecb6860abb5589cc5c1f1be30b806c3ba0b3127c",
-  "source_commit_role": "PR-006 source commit: typed content for five sections, strict text and URL handling, limits, snapshots and security regressions, plus D10; verification/status documentation follows separately",
-  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
-  "source_fingerprint_sha256": "15accde8a5bb0b91bb9288edecd4f5cf913d523ade9df2b337283a440ac9e395",
+  "verified_source_commit": "92086219f005860ff336fbf03251b4fc80486050",
+  "source_commit_role": "PR-006 review fixes: canonical content SHA-256 bound to RenderManifest::config_hash and explicit HTTPS authority validation, plus regression tests and D10.",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256.",
+  "source_fingerprint_sha256": "435750e59b12e958b96abbb6f874bb16eb12467660315557afd51fcfd2c0c5dd",
   "source_sha256": {
     "Cargo.lock": "8d354e3e289a2e2dd43c54e3db174d3f2da43397b00dec15f8917a268324afdf",
     "Cargo.toml": "61185b4518efc4c99a3f6efd1b6c741e1345c7b2010b329faa1e7a1d7c6f6136",
     "crates/render/Cargo.toml": "c1539b7b961ae27f18207c4f281e9543aca27b8159fe8922c27e7b9f5071960f",
-    "crates/render/src/lib.rs": "f26c0c597213e6355eab66e693324d093a24700ad5109169d46d6d60174bc412",
-    "crates/render/src/renderer_tests.rs": "84f88e269a77fe613ed073ecea7d9c0c074c7fe7d7a3ef6006a59dc1de99f070",
-    "crates/render/src/section_content_tests.rs": "5eb71b29b500f63c36b41807dcfae2a0d420989fa2f4bf6887f4eb8c0083d3b0",
-    "crates/render/src/test_support.rs": "5da0c303de8d1bbbae1cfe68174cba6e77eaeb0d04b51b8b89cfffbde6ee0ed4",
-    "plan/decisions/D10_render_section_content.md": "3c4b4fbe05e4a469ff94d4bd00f05ec53f63bde1cc7bc6cc5377aa7015322054"
+    "crates/render/src/lib.rs": "d2427055a252b1e750c8e5dc777d272d14865c3443c410c6e7c3b72ceec16693",
+    "crates/render/src/renderer_tests.rs": "6d5c0620055f07a20b96ece49fc9509035571b580a10a53a3c8566913de3a820",
+    "crates/render/src/section_content_tests.rs": "c26ff35a12c71f9ae2b79dcd508be3c61b286d57788bdf3afa232b97a8d16e97",
+    "crates/render/src/test_support.rs": "d80307fa79eeeb13b89de24d04ac5f4956e0967e8103e88de9248579b1039ca5",
+    "plan/decisions/D10_render_section_content.md": "c8c63e9b37d14c1b5bbd9e8851dcec736130c0dd6f17defb91090c1629492696"
   },
   "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
-  "isolated_target_dir": "/workspace/.pr006-ci-target-final.uKlxss",
+  "isolated_target_dir": "/workspace/.pr006-p2-ci-final.ccZRp9",
   "checks": [
     {
       "name": "section_content_test_first_red_green",
@@ -37,17 +37,18 @@
         "10,000 generated hostile URLs fail closed across schemes, authorities, user information, delimiters, controls, percent escapes, and root-path breakouts",
         "50-item list limit and 1 MiB aggregate section ID and content-string byte budget",
         "Deterministic renderer/theme validation before content validation"
-      ]
+      ],
+      "note": "This records the initial PR-006 implementation test-first run; the review follow-up regressions are recorded separately below."
     },
     {
       "name": "cargo_xtask_check",
       "command": "source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.",
+      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed after the PR-006 review fixes.",
       "workspace_test_counts": {
         "api": 11,
         "domain": 10,
-        "render": 27,
+        "render": 31,
         "storage": 4,
         "xtask": 23,
         "bootstrap_cli": 2,
@@ -56,13 +57,13 @@
     },
     {
       "name": "cargo_xtask_ci",
-      "command": "set -euo pipefail\nsource .project-tools/env.sh\nci_target=\"$(mktemp -d /workspace/.pr006-ci-target-final.XXXXXX)\"\nprintf 'Fresh CARGO_TARGET_DIR=%s\\n' \"$ci_target\"\nif CARGO_TARGET_DIR=\"$ci_target\" cargo xtask ci 2>&1 | tee /tmp/pr006-ci-final-api.log; then\n  printf 'CI_EXIT=0\\n'\nelse\n  ci_status=${PIPESTATUS[0]}\n  printf 'CI_EXIT=%s\\n' \"$ci_status\"\n  exit \"$ci_status\"\nfi",
+      "command": "set -euo pipefail\nsource .project-tools/env.sh\nci_target=\"$(mktemp -d /workspace/.pr006-p2-ci-final.XXXXXX)\"\nprintf 'Fresh CARGO_TARGET_DIR=%s\\n' \"$ci_target\"\nif CARGO_TARGET_DIR=\"$ci_target\" cargo xtask ci 2>&1 | tee /tmp/pr006-p2-ci-final.log; then\n  printf 'CI_EXIT=0\\n'\nelse\n  ci_status=${PIPESTATUS[0]}\n  printf 'CI_EXIT=%s\\n' \"$ci_status\"\n  exit \"$ci_status\"\nfi",
       "exit_code": 0,
       "fresh_isolated_target": true,
       "target_was_empty_at_start": true,
       "outcome": "Workspace check/tests, API WASM, dashboard WASM, and cargo-audit passed; the captured shell printed CI_EXIT=0.",
       "wasm_sha256": {
-        "eez_api.wasm": "3423257709523c77c75bf7acc916b2e2901ff0431d65fd4ea30d6919aa231697",
+        "eez_api.wasm": "cf310eb5ac527597aec9ff7ba516efbb5b32d7c065ecf3fff37457e51fdf72a6",
         "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
       },
       "wasm_bytes": {
@@ -70,12 +71,13 @@
         "eez_dashboard.wasm": 1432977
       },
       "audit": {
-        "audit_version": "cargo-audit 0.22.2",
+        "audit_version": "0.22.2",
         "advisories_loaded": 1310,
         "locked_crate_dependencies_scanned": 113,
         "findings": 0,
-        "database_update": "cargo xtask ci fetched/updated the RustSec advisory database and crates.io index before scanning"
-      }
+        "database_update": "cargo xtask ci fetched/updated the RustSec advisory database and crates.io index before scanning."
+      },
+      "target_dir": "/workspace/.pr006-p2-ci-final.ccZRp9"
     },
     {
       "name": "cargo_audit_cached_database_json",
@@ -84,40 +86,58 @@
       "advisories_loaded": 1310,
       "locked_crate_dependencies_scanned": 113,
       "vulnerabilities": 0,
-      "warnings": {}
+      "warnings": {},
+      "audit_version": "0.22.2"
     },
     {
       "name": "no_comments_review",
-      "reviewer": "pr006_no_comments report and Luna xhigh diff scan",
-      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added. The added Rust comment-line scan and git diff --check both passed."
+      "reviewer": "Manual Luna xhigh scan of the source diff, plus added-comment/TODO/FIXME/lint-suppression scan.",
+      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added. git diff --check passed."
     },
     {
       "name": "interrogate_self_audit",
-      "reviewer": "Luna xhigh manual adversarial review using the repository interrogate rubric",
-      "result": "No further actionable issue found in exact content matching, validation ordering, text/attribute escaping, URL authority and same-origin checks, checked byte accounting, list limits, or bounded output generation.",
-      "independent_review": "The approved implementation constraint allows Luna for implementation and reserves Sol for PR review. Fresh @codex and Sol reviews are requested on the final pushed PR head."
+      "reviewer": "Luna xhigh manual adversarial review of content binding, canonical encoding, URL parsing, validation ordering, and byte/item limits.",
+      "result": "No further actionable issue found. Both Sol findings now have regression coverage; fresh Sol and @codex PR reviews remain required on the pushed head.",
+      "independent_review": "The user specified Luna for implementation and Sol only for PR review and merge. No additional model review was run."
     },
     {
       "name": "diff_whitespace_check",
       "command": "git diff --check",
       "exit_code": 0
+    },
+    {
+      "name": "review_p2_regressions_red_green",
+      "red_baseline_commit": "6d113d248c24d154e8156d3a31af0a61b55f8c40",
+      "red_command": "CARGO_TARGET_DIR=/workspace/EezFunnels/target cargo test --manifest-path /tmp/pr006-p2-baseline.Vk4j2E/Cargo.toml -p eez-render --test review_p2_regressions --locked",
+      "red_exit_code": 101,
+      "red_observation": "Both regression tests failed at the intended assertions: changed content rendered under the original manifest, and https:example.com/start was accepted for a CTA URL.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 31,
+      "coverage": [
+        "Mutating section text while reusing the original RenderManifest returns SectionContentHashMismatch.",
+        "Canonical content hash is stable across BTreeMap insertion order and changes for section IDs, variants, every field, optional markers, list lengths, and list order.",
+        "https:example.com/start and https:/example.com/start are rejected in CTA links and hero image URLs.",
+        "Existing HTTPS absolute URLs and same-worker root-relative /assets paths remain covered by passing tests."
+      ]
     }
   ],
   "scope_notes": [
     "The renderer owns a closed SectionContent enum and requires a BTreeMap entry for each revision section ID. Missing, unexpected, or mismatched content fails before HTML is returned.",
-    "The renderer emits fixed markup for hero, features, testimonials, CTA, and footer. It escapes text and attributes and does not accept user-provided markup or event handlers.",
-    "Section URLs allow absolute HTTPS or same-worker root-relative paths for /assets routes. Protocol-relative paths, unsafe schemes, malformed hosts, user information, controls, and unsafe percent escapes are rejected.",
+    "RenderManifest::config_hash is the versioned content-sha256-v1 digest of sorted section IDs, typed variants, every UTF-8 field, optional markers, and ordered list lengths and entries, with explicit length prefixes.",
+    "Renderer::render validates the content and then recomputes the digest. Reusing a manifest with changed content returns SectionContentHashMismatch.",
+    "Section URLs accept explicit absolute https:// authorities or same-worker root-relative paths for /assets routes. https:example.com and https:/example.com, protocol-relative paths, unsafe schemes, malformed hosts, user information, controls, and unsafe percent escapes are rejected.",
     "Lists are limited to C-01's 50 items. The checked 1 MiB renderer budget covers section IDs and content strings; storage/API still need the full serialized payload limit because serialization metadata and punctuation are outside this renderer check.",
     "The test corpus includes 10,000 independent generated hostile text values and 10,000 generated hostile URLs. No Cloudflare deployment was run."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "PR #7 is open; hosted CI must pass on the latest pushed head before merge",
-    "required": "hosted CI must pass on the exact final pushed PR head",
+    "status_at_evidence_capture": "PR #7 is still at the old remote head 6d113d2. Updated local source and evidence commits have not yet been pushed; hosted CI must pass on the final pushed head before merge.",
+    "required": "Hosted CI must pass on the exact final pushed PR head.",
     "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/7"
   },
   "reviews": {
-    "sol": "fresh review required on the final pushed head",
-    "codex": "fresh @codex review required on the final pushed head"
+    "sol": "Reply to both existing review threads and obtain a fresh clean Sol review on the final pushed head.",
+    "codex": "Request a fresh @codex review once on the final pushed head."
   },
   "deployment": {
     "remote_deployment_run": false,

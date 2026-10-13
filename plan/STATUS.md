@@ -61,13 +61,16 @@ id/type/order record; `eez-render` owns the typed content map because C-01 leave
 format out of scope. Rendering requires exact ID coverage and a matching content variant. It HTML-
 escapes text and IDs, accepts only HTTPS or same-worker root-relative URLs, limits lists to 50 items,
 and caps aggregate section IDs and content strings at 1 MiB. D10 records this boundary and its
-relationship to the full serialized-payload limit. Source commit `ecb6860abb5589cc5c1f1be30b806c3ba0b3127c`
-passed 27 renderer tests, `cargo xtask check`, and fresh-target `cargo xtask ci`; RustSec scanned
-113 locked dependencies against 1,310 advisories and found zero vulnerabilities. The API and
-dashboard WASM builds passed. Fingerprinted command and source-hash evidence is in
-`plan/verification/PR-006/execution.txt` and `results.json`. PR #7 is open at
-https://github.com/lianihossam-eng/EezFunnels/pull/7. Hosted CI and Sol/@codex review must pass on
-the exact latest pushed head before merge.
+relationship to the full serialized-payload limit. Review fixes in source commit
+`92086219f005860ff336fbf03251b4fc80486050` bind `RenderManifest::config_hash` to a versioned
+SHA-256 of canonical typed section content and reject HTTPS-looking relative spellings without an
+explicit `://` authority. Both regressions failed against the prior PR head and pass after the fix.
+The renderer suite passes 31 tests, `cargo xtask check` passes, and fresh-target `cargo xtask ci`
+passes with 113 audited dependencies and zero findings. Refreshed evidence is in
+`plan/verification/PR-006/execution.txt` and `results.json`. The source and evidence commits are
+local and ready to push; hosted CI and fresh Sol/@codex reviews remain pending on the pushed PR
+head. PR #7 is open at https://github.com/lianihossam-eng/EezFunnels/pull/7. Do not merge until
+hosted CI and both reviews are clean on the exact latest pushed head.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current

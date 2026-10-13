@@ -1,70 +1,48 @@
-PR-006 section renderer verification
+PR-006 section renderer review-follow-up verification
 
-Evidence refreshed: 2026-10-13T19:05:46Z
+Evidence refreshed: 2026-10-13T23:07:17Z
 Branch: feat/006_sections
 Base commit: 2c67843b61c0eb266dee1219565d4e55d59738da
-Verified source commit: ecb6860abb5589cc5c1f1be30b806c3ba0b3127c
-Source fingerprint: 15accde8a5bb0b91bb9288edecd4f5cf913d523ade9df2b337283a440ac9e395
+Verified source commit: 92086219f005860ff336fbf03251b4fc80486050
+Source fingerprint: 435750e59b12e958b96abbb6f874bb16eb12467660315557afd51fcfd2c0c5dd
 The fingerprint is SHA-256 of sorted `path SHA256\n` lines recorded in results.json.
 
 Source file SHA-256:
 - Cargo.lock 8d354e3e289a2e2dd43c54e3db174d3f2da43397b00dec15f8917a268324afdf
 - Cargo.toml 61185b4518efc4c99a3f6efd1b6c741e1345c7b2010b329faa1e7a1d7c6f6136
 - crates/render/Cargo.toml c1539b7b961ae27f18207c4f281e9543aca27b8159fe8922c27e7b9f5071960f
-- crates/render/src/lib.rs f26c0c597213e6355eab66e693324d093a24700ad5109169d46d6d60174bc412
-- crates/render/src/renderer_tests.rs 84f88e269a77fe613ed073ecea7d9c0c074c7fe7d7a3ef6006a59dc1de99f070
-- crates/render/src/section_content_tests.rs 5eb71b29b500f63c36b41807dcfae2a0d420989fa2f4bf6887f4eb8c0083d3b0
-- crates/render/src/test_support.rs 5da0c303de8d1bbbae1cfe68174cba6e77eaeb0d04b51b8b89cfffbde6ee0ed4
-- plan/decisions/D10_render_section_content.md 3c4b4fbe05e4a469ff94d4bd00f05ec53f63bde1cc7bc6cc5377aa7015322054
+- crates/render/src/lib.rs d2427055a252b1e750c8e5dc777d272d14865c3443c410c6e7c3b72ceec16693
+- crates/render/src/renderer_tests.rs 6d5c0620055f07a20b96ece49fc9509035571b580a10a53a3c8566913de3a820
+- crates/render/src/section_content_tests.rs c26ff35a12c71f9ae2b79dcd508be3c61b286d57788bdf3afa232b97a8d16e97
+- crates/render/src/test_support.rs d80307fa79eeeb13b89de24d04ac5f4956e0967e8103e88de9248579b1039ca5
+- plan/decisions/D10_render_section_content.md c8c63e9b37d14c1b5bbd9e8851dcec736130c0dd6f17defb91090c1629492696
 
-Implementation:
-- `eez-render` owns a closed `SectionContent` enum for hero, features, testimonials, CTA, and footer. `Renderer::render` takes a map keyed by immutable domain section IDs and rejects missing, extra, or type-mismatched content.
-- Each section has a rendered snapshot. Text, section IDs, and attributes are escaped; the renderer accepts no user markup or event-handler attributes.
-- URLs must be absolute HTTPS or same-worker root-relative paths. Protocol-relative paths, unsafe schemes, invalid hosts, user information, controls, and unsafe percent escapes fail closed.
-- The renderer enforces C-01's 50-item list cap and a checked aggregate 1 MiB byte budget for section IDs and content strings. D10 records that the storage/API layer must also enforce the full serialized-payload limit.
-- The previous 1,019-line renderer test module was split into focused test modules. All files remain below 1,000 lines.
+Changes verified:
+- `content_config_hash` computes a versioned SHA-256 over deterministic typed section content, including sorted IDs, variants, all fields, option markers, and ordered list boundaries.
+- `Renderer::render` validates the map and compares the digest against `RenderManifest::config_hash` before emitting HTML.
+- HTTPS links and images require an explicit `https://` authority. Same-worker root-relative `/assets/*` paths remain accepted.
+- D10 documents the manifest binding and the requirement to use a new revision ID after content edits.
 
-Test-first red/green:
-- Before implementing the content model, `source .project-tools/env.sh && cargo test -p eez-render --locked` exited 101 because the new tests referenced the not-yet-implemented content types and content-aware render API.
-- After implementation, the same command exited 0: 27 passed, 0 failed.
-- Coverage includes one snapshot per section, exact content-ID/type matching, hostile HTML text and controls, every URL sink, valid `/assets/*` root paths, 10,000 generated hostile text values, 10,000 generated hostile URLs, the 50-item limit, and the 1 MiB byte cap.
-- The text corpus asserts exact fixed section structure after escaping. The URL corpus includes schemes, authorities, user information, malformed hosts, delimiters, controls, percent escapes, and root-path breakout attempts.
+Test-first regressions:
+- Baseline: PR-006 prior head `6d113d248c24d154e8156d3a31af0a61b55f8c40`.
+- A temporary isolated archive of that source ran `review_p2_regressions`; exit 101. The assertions failed because changed section content rendered under the same manifest and `https:example.com/start` was accepted for a CTA URL.
+- Green: `source .project-tools/env.sh && cargo test -p eez-render --locked`; exit 0, 31 passed, 0 failed. The regression test also covers both ambiguous spellings at CTA and image sinks.
 
-Workspace check:
-- Exact command: `source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check`
-- Exit code: 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.
-- Test counts: API 11, domain 10, render 27, storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5.
+Workspace checks:
+- `source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check`; exit 0.
+- API 11, domain 10, render 31, storage 4, xtask 23, bootstrap CLI 2, PR-001 CLI 5 tests passed. Formatting, Clippy with warnings denied, and layer checks passed.
+- `git diff --check`; exit 0. Manual source-diff scan found no added comments, TODO/FIXME markers, or lint suppressions.
 
 Fresh-target CI:
-- Target: `/workspace/.pr006-ci-target-final.uKlxss`, created empty for this run.
-- Exact command sequence:
+- Target created empty: `/workspace/.pr006-p2-ci-final.ccZRp9`.
+- Command: `CARGO_TARGET_DIR=/workspace/.pr006-p2-ci-final.ccZRp9 cargo xtask ci` after sourcing `.project-tools/env.sh`.
+- Exit: `CI_EXIT=0`. Workspace checks/tests, API WASM, dashboard WASM, and cargo-audit passed.
+- Rust/Cargo: rustc 1.85.0; Cargo 1.85.0. cargo-audit 0.22.2.
+- API WASM SHA-256: cf310eb5ac527597aec9ff7ba516efbb5b32d7c065ecf3fff37457e51fdf72a6 (28170360 bytes).
+- Dashboard WASM SHA-256: d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5 (1432977 bytes).
+- RustSec loaded 1,310 advisories and scanned 113 locked dependencies with zero findings. A cached-database JSON audit also exited 0 with zero vulnerabilities and no warnings.
 
-  ```sh
-  set -euo pipefail
-  source .project-tools/env.sh
-  ci_target="$(mktemp -d /workspace/.pr006-ci-target-final.XXXXXX)"
-  printf 'Fresh CARGO_TARGET_DIR=%s\n' "$ci_target"
-  if CARGO_TARGET_DIR="$ci_target" cargo xtask ci 2>&1 | tee /tmp/pr006-ci-final-api.log; then
-    printf 'CI_EXIT=0\n'
-  else
-    ci_status=${PIPESTATUS[0]}
-    printf 'CI_EXIT=%s\n' "$ci_status"
-    exit "$ci_status"
-  fi
-  ```
-
-- The task completed with `CI_EXIT=0`. It ran workspace checks/tests, API WASM, dashboard WASM, and cargo-audit.
-- Rust/Cargo: rustc 1.85.0; Cargo 1.85.0. cargo-audit: 0.22.2.
-- API WASM SHA-256: `3423257709523c77c75bf7acc916b2e2901ff0431d65fd4ea30d6919aa231697` (28,170,360 bytes).
-- Dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5` (1,432,977 bytes).
-- cargo-audit updated the RustSec advisory database, loaded 1,310 advisories, and scanned 113 locked dependencies with zero findings.
-- Cached-database JSON check: `source .project-tools/env.sh && cargo audit --db .project-tools/cargo/advisory-db --no-fetch --file Cargo.lock --json` exited 0; it reported 1,310 advisories, 113 dependencies, zero vulnerabilities, and no warnings.
-
-Self-reviews, Luna xhigh:
-- No-comments: the `pr006_no_comments` report and manual diff scan were clean. No code comments, TODO/FIXME markers, or lint suppressions were added. The added Rust comment-line scan and `git diff --check` passed.
-- Interrogate: manual adversarial review found no further actionable issue in content matching, validation ordering, HTML escaping, HTTPS/root-relative URL boundaries, byte accounting, or item limits. The implementation remained Luna-only; fresh @codex and Sol reviews are requested on the final PR head.
-- `cargo fmt --all -- --check` and `git diff --check` exited 0.
-
-PR/deployment state at evidence capture:
-- PR #7 is open at https://github.com/lianihossam-eng/EezFunnels/pull/7. Hosted CI and Sol/@codex reviews must pass on the exact latest pushed head before merge.
-- No remote deployment was run. This renderer change does not require Cloudflare credentials or production bindings.
+Review and publication state:
+- PR #7 remains open at https://github.com/lianihossam-eng/EezFunnels/pull/7. Updated source/evidence commits are local and not yet pushed at evidence capture.
+- Reply to both Sol review threads and request a fresh @codex review after pushing the final head. Sol and hosted CI must be clean on that exact head before merge.
+- No Cloudflare deployment or production binding check was run.
