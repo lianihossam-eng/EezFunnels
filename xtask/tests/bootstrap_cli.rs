@@ -3,13 +3,16 @@ use std::process::Command;
 #[test]
 fn xtask_unknown_task_and_broken_cargo_exit_nonzero() {
     let binary = env!("CARGO_BIN_EXE_xtask");
-    let unknown = Command::new(binary).arg("ci").output().expect("run xtask");
+    let unknown = Command::new(binary)
+        .arg("unknown")
+        .output()
+        .expect("run xtask");
     assert_eq!(unknown.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(unknown.stderr).expect("UTF-8"),
-        "usage: cargo xtask <check|layers>\n"
+        "usage: cargo xtask <check|ci|layers|deploy [wrangler-args...]>\n"
     );
-    for task in ["check", "layers"] {
+    for task in ["check", "ci", "layers"] {
         let failed = Command::new(binary)
             .arg(task)
             .env("CARGO", "/no-such-eez-cargo-executable")
