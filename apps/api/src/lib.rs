@@ -38,6 +38,11 @@ struct ProductProbeResponse {
     themes: &'static str,
     publication: &'static str,
     unsupported_schema_version: &'static str,
+    unsupported_schema_publish_accepted: bool,
+    unsupported_schema_published_revision_id: Option<String>,
+    current_revision_noop_accepted: bool,
+    publication_baseline_cas_successes: usize,
+    distinct_candidate_cas_successes: usize,
     publication_race_funnel_id: &'static str,
     publication_race_revision_ids: Vec<String>,
     correlation_id: String,
@@ -199,25 +204,37 @@ async fn local_product_probe(
 
     let result = async {
         let bindings = eez_storage::Bindings::from_env(env)?;
-        bindings.verify_product_repository_round_trip().await?;
+        let publication_regressions = bindings.verify_product_repository_round_trip().await?;
         let revision_ids = bindings.prepare_publication_race().await?;
-        Ok::<_, worker::Error>(revision_ids)
+        Ok::<_, worker::Error>((publication_regressions, revision_ids))
     }
     .await;
 
     match result {
-        Ok(publication_race_revision_ids) => Json(ProductProbeResponse {
-            status: "ok",
-            funnels: "ok",
-            revisions: "ok",
-            themes: "ok",
-            publication: "ok",
-            unsupported_schema_version: "rejected",
-            publication_race_funnel_id: "pr003-race-funnel",
-            publication_race_revision_ids,
-            correlation_id,
-        })
-        .into_response(),
+        Ok((publication_regressions, publication_race_revision_ids)) => {
+            Json(ProductProbeResponse {
+                status: "ok",
+                funnels: "ok",
+                revisions: "ok",
+                themes: "ok",
+                publication: "ok",
+                unsupported_schema_version: "rejected",
+                unsupported_schema_publish_accepted: publication_regressions
+                    .unsupported_schema_publish_accepted,
+                unsupported_schema_published_revision_id: publication_regressions
+                    .unsupported_schema_published_revision_id,
+                current_revision_noop_accepted: publication_regressions
+                    .current_revision_noop_accepted,
+                publication_baseline_cas_successes: publication_regressions
+                    .publication_baseline_cas_successes,
+                distinct_candidate_cas_successes: publication_regressions
+                    .distinct_candidate_cas_successes,
+                publication_race_funnel_id: "pr003-race-funnel",
+                publication_race_revision_ids,
+                correlation_id,
+            })
+            .into_response()
+        }
         Err(source) => {
             let error = ApiError::from_storage_error(&source);
             log_api_error(&error, &correlation_id, &format!("{source:?}"));
@@ -250,10 +267,13 @@ async fn local_publication_race(
         );
         return error_response(&error, correlation_id);
     };
+    let expected_published_revision_id = query_parameter(query, "expected_published_revision_id");
 
     let result = async {
         let bindings = eez_storage::Bindings::from_env(env)?;
-        bindings.publish_race_candidate(revision_id).await
+        bindings
+            .publish_race_candidate(revision_id, expected_published_revision_id)
+            .await
     }
     .await;
     match result {
