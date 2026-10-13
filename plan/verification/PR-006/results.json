@@ -1,0 +1,126 @@
+{
+  "task": "PR-006",
+  "evidence_refreshed_at_utc": "2026-10-13T19:01:49Z",
+  "branch": "feat/006_sections",
+  "base_commit": "2c67843b61c0eb266dee1219565d4e55d59738da",
+  "verified_source_commit": "ecb6860abb5589cc5c1f1be30b806c3ba0b3127c",
+  "source_commit_role": "PR-006 source commit: typed content for five sections, strict text and URL handling, limits, snapshots and security regressions, plus D10; verification/status documentation follows separately",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256",
+  "source_fingerprint_sha256": "15accde8a5bb0b91bb9288edecd4f5cf913d523ade9df2b337283a440ac9e395",
+  "source_sha256": {
+    "Cargo.lock": "8d354e3e289a2e2dd43c54e3db174d3f2da43397b00dec15f8917a268324afdf",
+    "Cargo.toml": "61185b4518efc4c99a3f6efd1b6c741e1345c7b2010b329faa1e7a1d7c6f6136",
+    "crates/render/Cargo.toml": "c1539b7b961ae27f18207c4f281e9543aca27b8159fe8922c27e7b9f5071960f",
+    "crates/render/src/lib.rs": "f26c0c597213e6355eab66e693324d093a24700ad5109169d46d6d60174bc412",
+    "crates/render/src/renderer_tests.rs": "84f88e269a77fe613ed073ecea7d9c0c074c7fe7d7a3ef6006a59dc1de99f070",
+    "crates/render/src/section_content_tests.rs": "5eb71b29b500f63c36b41807dcfae2a0d420989fa2f4bf6887f4eb8c0083d3b0",
+    "crates/render/src/test_support.rs": "5da0c303de8d1bbbae1cfe68174cba6e77eaeb0d04b51b8b89cfffbde6ee0ed4",
+    "plan/decisions/D10_render_section_content.md": "3c4b4fbe05e4a469ff94d4bd00f05ec53f63bde1cc7bc6cc5377aa7015322054"
+  },
+  "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
+  "isolated_target_dir": "/workspace/.pr006-ci-target-final.uKlxss",
+  "checks": [
+    {
+      "name": "section_content_test_first_red_green",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "red_exit_code": 101,
+      "red_observation": "Before the content model and render API were implemented, the new tests failed to compile because SectionContent, its typed item structs, and the content-aware Renderer::render API did not exist.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
+      "green_exit_code": 0,
+      "tests_passed": 27,
+      "cases": [
+        "Snapshots for hero with optional image, features grid, testimonials list, CTA button, and footer links and copyright",
+        "Exact section ID coverage and content-type matching",
+        "HTML escaping for content text, section IDs, and manifest attributes, including control characters",
+        "HTTPS and same-worker root-relative URL validation at every image and link sink",
+        "10,000 generated hostile text values preserve the exact fixed section structure and cannot inject active markup",
+        "10,000 generated hostile URLs fail closed across schemes, authorities, user information, delimiters, controls, percent escapes, and root-path breakouts",
+        "50-item list limit and 1 MiB aggregate section ID and content-string byte budget",
+        "Deterministic renderer/theme validation before content validation"
+      ]
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.",
+      "workspace_test_counts": {
+        "api": 11,
+        "domain": 10,
+        "render": 27,
+        "storage": 4,
+        "xtask": 23,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      }
+    },
+    {
+      "name": "cargo_xtask_ci",
+      "command": "set -euo pipefail\nsource .project-tools/env.sh\nci_target=\"$(mktemp -d /workspace/.pr006-ci-target-final.XXXXXX)\"\nprintf 'Fresh CARGO_TARGET_DIR=%s\\n' \"$ci_target\"\nif CARGO_TARGET_DIR=\"$ci_target\" cargo xtask ci 2>&1 | tee /tmp/pr006-ci-final-api.log; then\n  printf 'CI_EXIT=0\\n'\nelse\n  ci_status=${PIPESTATUS[0]}\n  printf 'CI_EXIT=%s\\n' \"$ci_status\"\n  exit \"$ci_status\"\nfi",
+      "exit_code": 0,
+      "fresh_isolated_target": true,
+      "target_was_empty_at_start": true,
+      "outcome": "Workspace check/tests, API WASM, dashboard WASM, and cargo-audit passed; the captured shell printed CI_EXIT=0.",
+      "wasm_sha256": {
+        "eez_api.wasm": "3423257709523c77c75bf7acc916b2e2901ff0431d65fd4ea30d6919aa231697",
+        "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
+      },
+      "wasm_bytes": {
+        "eez_api.wasm": 28170360,
+        "eez_dashboard.wasm": 1432977
+      },
+      "audit": {
+        "audit_version": "cargo-audit 0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 113,
+        "findings": 0,
+        "database_update": "cargo xtask ci fetched/updated the RustSec advisory database and crates.io index before scanning"
+      }
+    },
+    {
+      "name": "cargo_audit_cached_database_json",
+      "command": "source .project-tools/env.sh && cargo audit --db .project-tools/cargo/advisory-db --no-fetch --file Cargo.lock --json",
+      "exit_code": 0,
+      "advisories_loaded": 1310,
+      "locked_crate_dependencies_scanned": 113,
+      "vulnerabilities": 0,
+      "warnings": {}
+    },
+    {
+      "name": "no_comments_review",
+      "reviewer": "pr006_no_comments report and Luna xhigh diff scan",
+      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added. The added Rust comment-line scan and git diff --check both passed."
+    },
+    {
+      "name": "interrogate_self_audit",
+      "reviewer": "Luna xhigh manual adversarial review using the repository interrogate rubric",
+      "result": "No further actionable issue found in exact content matching, validation ordering, text/attribute escaping, URL authority and same-origin checks, checked byte accounting, list limits, or bounded output generation.",
+      "independent_review": "The approved implementation constraint allows Luna for implementation and reserves Sol for PR review. Fresh @codex and Sol reviews are requested on the final pushed PR head."
+    },
+    {
+      "name": "diff_whitespace_check",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "scope_notes": [
+    "The renderer owns a closed SectionContent enum and requires a BTreeMap entry for each revision section ID. Missing, unexpected, or mismatched content fails before HTML is returned.",
+    "The renderer emits fixed markup for hero, features, testimonials, CTA, and footer. It escapes text and attributes and does not accept user-provided markup or event handlers.",
+    "Section URLs allow absolute HTTPS or same-worker root-relative paths for /assets routes. Protocol-relative paths, unsafe schemes, malformed hosts, user information, controls, and unsafe percent escapes are rejected.",
+    "Lists are limited to C-01's 50 items. The checked 1 MiB renderer budget covers section IDs and content strings; storage/API still need the full serialized payload limit because serialization metadata and punctuation are outside this renderer check.",
+    "The test corpus includes 10,000 independent generated hostile text values and 10,000 generated hostile URLs. No Cloudflare deployment was run."
+  ],
+  "hosted_ci": {
+    "status_at_evidence_capture": "not_started; PR #7 is not open yet",
+    "required": "hosted CI must pass on the exact final pushed PR head",
+    "pull_request": null
+  },
+  "reviews": {
+    "sol": "fresh review required on the final pushed head",
+    "codex": "fresh @codex review required on the final pushed head"
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "reason": "PR-006 is a renderer-only change; Cloudflare production bindings and credentials are not needed for local verification."
+  }
+}
