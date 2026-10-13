@@ -162,6 +162,12 @@ version = "0.1.0"
 [[package]]
 name = "eez-commands"
 version = "0.1.0"
+dependencies = [
+ "eez-domain",
+ "eez-render",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "eez-dashboard"
@@ -170,6 +176,10 @@ version = "0.1.0"
 [[package]]
 name = "eez-domain"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "eez-render"
@@ -184,6 +194,7 @@ dependencies = [
 name = "eez-storage"
 version = "0.1.0"
 dependencies = [
+ "eez-domain",
  "serde",
  "worker",
 ]

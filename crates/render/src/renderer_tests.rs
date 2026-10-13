@@ -5,6 +5,7 @@ use crate::test_support::{
     content_map, revision_with_contents, revision_with_sections, revision_with_theme_version,
     revision_with_theme_version_and_contents, safe_theme_tokens,
 };
+use eez_domain::ThemePreset;
 use eez_domain::{FunnelId, RenderManifest, Revision, RevisionId};
 
 #[test]
@@ -55,6 +56,55 @@ fn injects_theme_tokens_as_sorted_css_custom_properties() {
 
     assert!(html.contains("style=\"--color-primary:#112233;--spacing-section:2rem\""));
     assert!(!html.contains("<style"));
+    assert!(html.contains("data-renderer-version=\"renderer-v1\""));
+}
+
+#[test]
+fn preset_theme_visual_snapshots_match_tokens_and_renderer_stylesheet() {
+    let snapshots = [
+        (
+            ThemePreset::Minimal,
+            include_str!("../snapshots/theme-minimal.properties"),
+        ),
+        (
+            ThemePreset::Bold,
+            include_str!("../snapshots/theme-bold.properties"),
+        ),
+        (
+            ThemePreset::Elegant,
+            include_str!("../snapshots/theme-elegant.properties"),
+        ),
+        (
+            ThemePreset::Playful,
+            include_str!("../snapshots/theme-playful.properties"),
+        ),
+        (
+            ThemePreset::Corporate,
+            include_str!("../snapshots/theme-corporate.properties"),
+        ),
+    ];
+    let stylesheet = include_str!("../snapshots/theme.css").trim();
+
+    for (preset, expected_properties) in snapshots {
+        let theme = ThemeTokens::from_preset(preset).expect("preset CSS tokens are safe");
+        let revision =
+            revision_with_theme_version(Vec::new(), super::RENDERER_VERSION, theme.version());
+        let html = Renderer::new()
+            .render(&revision, &theme, &BTreeMap::new())
+            .expect("preset theme renders");
+        let style_start = html.find(" style=\"").expect("theme style attribute") + 8;
+        let style_end = style_start
+            + html[style_start..]
+                .find('"')
+                .expect("theme style attribute end");
+
+        assert_eq!(&html[style_start..style_end], expected_properties.trim());
+        assert!(html.contains(&format!("<style>{stylesheet}</style>")));
+        assert!(html.contains("data-renderer-version=\"renderer-v2\""));
+        assert!(html.contains("background-color:var(--color-background)"));
+        assert!(html.contains("border-radius:var(--radius-card)"));
+        assert!(html.contains("background-color:var(--color-primary)"));
+    }
 }
 
 #[test]
@@ -151,7 +201,7 @@ fn trims_line_breaks_at_css_value_boundaries_before_emission() {
 
 #[test]
 fn rejects_renderer_and_theme_versions_outside_the_manifest() {
-    let wrong_renderer = revision_with_sections(Vec::new(), "renderer-v2");
+    let wrong_renderer = revision_with_sections(Vec::new(), "renderer-v3");
     assert_eq!(
         Renderer::new()
             .render(&wrong_renderer, &safe_theme_tokens(), &BTreeMap::new())
