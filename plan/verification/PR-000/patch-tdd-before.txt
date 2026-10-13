@@ -1,0 +1,24 @@
+   Compiling xtask v0.1.0 (/workspace/EezFunnels/xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/main.rs (target/debug/deps/xtask-67ba53d1c1a07002)
+
+running 1 test
+test layers::tests::live_registry_patch_helper_cannot_hide_a_workspace_backdoor ... FAILED
+
+failures:
+
+---- layers::tests::live_registry_patch_helper_cannot_hide_a_workspace_backdoor stdout ----
+
+thread 'layers::tests::live_registry_patch_helper_cannot_hide_a_workspace_backdoor' panicked at xtask/src/layers/tests.rs:343:9:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err("unclassified resolved local package: hidden-helper")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    layers::tests::live_registry_patch_helper_cannot_hide_a_workspace_backdoor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p xtask --bin xtask`

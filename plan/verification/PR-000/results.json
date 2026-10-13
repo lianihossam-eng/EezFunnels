@@ -1,0 +1,127 @@
+{
+  "task": "PR-000",
+  "executed_at_utc": "2026-10-13T06:35:06.396000+00:00",
+  "rust_toolchain": "1.85.0",
+  "checks": [
+    {
+      "name": "workspace_check",
+      "command": [
+        "cargo",
+        "xtask",
+        "check"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed",
+      "tests_passed": 21
+    },
+    {
+      "name": "wasm_build",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "eez-dashboard",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--locked"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed"
+    },
+    {
+      "name": "cli_help",
+      "command": [
+        "cargo",
+        "run",
+        "-p",
+        "eez-cli",
+        "--locked",
+        "--",
+        "--help"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed"
+    },
+    {
+      "name": "cli_unimplemented_command",
+      "command": [
+        "cargo",
+        "run",
+        "-p",
+        "eez-cli",
+        "--locked",
+        "--",
+        "funnels",
+        "list"
+      ],
+      "cwd": ".",
+      "exit_code": 1,
+      "expected_exit_code": "nonzero",
+      "verified": true,
+      "outcome": "expected_failure"
+    },
+    {
+      "name": "xtask_unknown_task",
+      "command": [
+        "cargo",
+        "xtask",
+        "unknown"
+      ],
+      "cwd": ".",
+      "exit_code": 1,
+      "expected_exit_code": "nonzero",
+      "verified": true,
+      "outcome": "expected_failure"
+    },
+    {
+      "name": "nested_alias",
+      "command": [
+        "cargo",
+        "xtask",
+        "layers"
+      ],
+      "cwd": "apps/cli",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "verified": true,
+      "outcome": "passed"
+    }
+  ],
+  "wasm_artifact": {
+    "path": "target/wasm32-unknown-unknown/debug/eez_dashboard.wasm",
+    "verified_format": true
+  },
+  "unrun": [
+    "hosted GitHub CI",
+    "cargo xtask ci (PR-001)",
+    "audit (PR-001)",
+    "Worker startup and Cloudflare deployment (PR-002+)",
+    "product behavior tests"
+  ],
+  "patched_helper_repro": {
+    "before_exit_code": 0,
+    "before_outcome": "incorrect_success",
+    "after_exit_code": 1,
+    "after_expected_diagnostic": "unclassified resolved local package: hidden-helper",
+    "verified": true,
+    "before_transcript": "patch-bypass-before.txt",
+    "after_transcript": "patch-bypass-after.txt"
+  },
+  "source_sha256": {
+    "xtask/src/main.rs": "51d530a202166119c7b93a6132159698f45582e59503e2d5521af030de1fd44c",
+    "xtask/src/layers.rs": "59335a6151bdd1a738d801544d9a8a368ed5a735ba9aad7f26b9a2590acf71dd",
+    "xtask/src/layers/tests.rs": "41618bc7257047ef699752d860dedfb4c360d632e3eaff851b0fee32df0548ae",
+    "xtask/tests/bootstrap_cli.rs": "8836274d14823962027047f0b1c273af8e9c6911d7ed304835015298ea09dbb8",
+    "apps/cli/src/main.rs": "f90c845d65c6729db5fa87e83ed4d0766a99594b63aedc1b7a5a4f5b65ef9ae7",
+    "Cargo.lock": "74a6c84539c93b7af14b90207cd79b0904abfb35e2a4eb6fd9a3c70c89640553"
+  }
+}
