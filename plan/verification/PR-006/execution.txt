@@ -1,6 +1,6 @@
 PR-006 section renderer verification
 
-Evidence refreshed: 2026-10-13T19:01:49Z
+Evidence refreshed: 2026-10-13T19:05:46Z
 Branch: feat/006_sections
 Base commit: 2c67843b61c0eb266dee1219565d4e55d59738da
 Verified source commit: ecb6860abb5589cc5c1f1be30b806c3ba0b3127c
@@ -66,5 +66,5 @@ Self-reviews, Luna xhigh:
 - `cargo fmt --all -- --check` and `git diff --check` exited 0.
 
 PR/deployment state at evidence capture:
-- PR #7 had not been opened yet. Hosted CI and Sol/@codex reviews must pass on the final pushed PR head.
+- PR #7 is open at https://github.com/lianihossam-eng/EezFunnels/pull/7. Hosted CI and Sol/@codex reviews must pass on the exact latest pushed head before merge.
 - No remote deployment was run. This renderer change does not require Cloudflare credentials or production bindings.

@@ -1,6 +1,6 @@
 {
   "task": "PR-006",
-  "evidence_refreshed_at_utc": "2026-10-13T19:01:49Z",
+  "evidence_refreshed_at_utc": "2026-10-13T19:05:46Z",
   "branch": "feat/006_sections",
   "base_commit": "2c67843b61c0eb266dee1219565d4e55d59738da",
   "verified_source_commit": "ecb6860abb5589cc5c1f1be30b806c3ba0b3127c",
@@ -111,9 +111,9 @@
     "The test corpus includes 10,000 independent generated hostile text values and 10,000 generated hostile URLs. No Cloudflare deployment was run."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "not_started; PR #7 is not open yet",
+    "status_at_evidence_capture": "PR #7 is open; hosted CI must pass on the latest pushed head before merge",
     "required": "hosted CI must pass on the exact final pushed PR head",
-    "pull_request": null
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/7"
   },
   "reviews": {
     "sol": "fresh review required on the final pushed head",

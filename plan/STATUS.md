@@ -65,8 +65,9 @@ relationship to the full serialized-payload limit. Source commit `ecb6860abb5589
 passed 27 renderer tests, `cargo xtask check`, and fresh-target `cargo xtask ci`; RustSec scanned
 113 locked dependencies against 1,310 advisories and found zero vulnerabilities. The API and
 dashboard WASM builds passed. Fingerprinted command and source-hash evidence is in
-`plan/verification/PR-006/execution.txt` and `results.json`. PR #7 has not been opened yet; hosted
-CI and Sol/@codex review remain pending on the final pushed head.
+`plan/verification/PR-006/execution.txt` and `results.json`. PR #7 is open at
+https://github.com/lianihossam-eng/EezFunnels/pull/7. Hosted CI and Sol/@codex review must pass on
+the exact latest pushed head before merge.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -118,6 +119,5 @@ CI and Sol/@codex review remain pending on the final pushed head.
 
 ## Next action
 
-Push the verified PR-006 branch and open PR #7 from `feat/006_sections`. Request @codex and Sol
-review on the final head. Do not merge before both reviews and hosted CI are clean on that exact
-head. Do not deploy remotely.
+Request @codex and Sol review on PR #7's latest head, and verify hosted CI on that same commit. Do
+not merge before both reviews and hosted CI are clean on the exact head. Do not deploy remotely.
