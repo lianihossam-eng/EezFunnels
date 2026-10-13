@@ -201,6 +201,12 @@ assert response["themes"] == "ok"
 assert response["publication"] == "ok"
 assert response["unsupported_schema_version"] == "rejected"
 observed = {
+    "cross_funnel_published_revision_insert_accepted": response[
+        "cross_funnel_published_revision_insert_accepted"
+    ],
+    "null_published_revision_insert_accepted": response[
+        "null_published_revision_insert_accepted"
+    ],
     "unsupported_schema_publish_accepted": response["unsupported_schema_publish_accepted"],
     "unsupported_schema_published_revision_id": response[
         "unsupported_schema_published_revision_id"
@@ -211,6 +217,10 @@ observed = {
 }
 print(f"publication_regression_observations={json.dumps(observed, sort_keys=True)}")
 failures = []
+if observed["cross_funnel_published_revision_insert_accepted"]:
+    failures.append("cross-funnel publication pointer was accepted on insert")
+if not observed["null_published_revision_insert_accepted"]:
+    failures.append("NULL published revision pointer was rejected on insert")
 if observed["unsupported_schema_publish_accepted"]:
     failures.append("unsupported schema version was publishable")
 if observed["unsupported_schema_published_revision_id"] is not None:
