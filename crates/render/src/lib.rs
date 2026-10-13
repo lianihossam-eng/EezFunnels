@@ -26,7 +26,7 @@ const THEME_STYLESHEET: &str = concat!(
     ".button{display:inline-block;padding:.75rem 1.25rem;background-color:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}",
     ".section-cta{text-align:center;background-color:var(--color-surface);border-radius:var(--radius-card)}",
     ".section-footer{border-top:1px solid var(--color-border);color:var(--color-muted)}",
-    ".footer-links{display:flex;flex-wrap:wrap;gap:1rem;padding-left:0;list-style:none}.footer-links a{color:var(--color-primary)}"
+    ".section-footer nav ul{display:flex;flex-wrap:wrap;gap:1rem;padding-left:0;list-style:none}.section-footer nav a{color:var(--color-primary)}"
 );
 
 #[derive(Clone, Debug, Eq, PartialEq)]
