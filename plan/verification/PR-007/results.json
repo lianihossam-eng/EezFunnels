@@ -1,12 +1,12 @@
 {
   "task": "PR-007",
-  "evidence_refreshed_at_utc": "2026-10-13T23:31:22Z",
+  "evidence_refreshed_at_utc": "2026-10-13T23:43:05Z",
   "branch": "feat/007_themes",
   "base_commit": "96701762c384e47264cdd8092c5f0c3496c7adac",
-  "verified_source_commit": "c99057e26b52b1c6567fb52c2c6b92ddde5fcd18",
-  "source_commit_role": "PR-007 implementation and same-ID fork guard: five typed preset themes and JSON token maps, renderer-v2 token application with renderer-v1 compatibility, theme.set, migration/catalog parity, and enforcement of C-01's new-revision-ID rule.",
+  "verified_source_commit": "c4751dd9e7519c3c80b3cf136685d49673fbdd52",
+  "source_commit_role": "PR-007 implementation and same-ID fork guard plus review fix: five typed preset themes and JSON token maps, renderer-v2 token application with renderer-v1 compatibility, theme.set, migration/catalog parity, enforcement of C-01's new-revision-ID rule, and CSS selectors matched to emitted nonempty footer markup.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256.",
-  "source_fingerprint_sha256": "0c30a69600cd2192992030e68a6b103f078fa7e6d85714a0e86077b0b1e423f7",
+  "source_fingerprint_sha256": "a1f2fe36f3a1ede67d11cbdb48f38ec1ecaeb31768ffbf6dbca3770e87da0945",
   "source_sha256": {
     "Cargo.lock": "4b023aac6be867f317efdd58d9ca70e1733d7359cf9702a19f77077569574f11",
     "Cargo.toml": "61185b4518efc4c99a3f6efd1b6c741e1345c7b2010b329faa1e7a1d7c6f6136",
@@ -21,10 +21,10 @@
     "crates/render/snapshots/theme-elegant.properties": "e9879887b8a316cf3a38818b4121c0f5b0073d0f8958d9bdd228e703545d6194",
     "crates/render/snapshots/theme-minimal.properties": "df87bc2f9d993e2c968c8aad857d9b763fb7442ddfca786f761e9328150320ac",
     "crates/render/snapshots/theme-playful.properties": "e819c2de382322629618675e3ea6f7aff5605221b6da588a4ca90015376fc6fd",
-    "crates/render/snapshots/theme.css": "cf17cbb7c6fb36ef83ab35d3abe42121af341795d9402c925aae7e4d228bacdb",
-    "crates/render/src/lib.rs": "900ba66912334ad60c9fcb14bbf34e09c26f797644952644854565725681a4d5",
+    "crates/render/snapshots/theme.css": "9b817c3207ff4adbc4c38d00adbbd26fbb8efb681dffc16b2a9b2b2e866c7954",
+    "crates/render/src/lib.rs": "e85bf09646c6434d5890e3413ae146d01ac15c846ea1552a8a2d93cb101ffcf3",
     "crates/render/src/renderer_tests.rs": "d081d8dc5b5ae5774f40490c432caa9b1c8dd7fc52a08cc6850049c794b528f2",
-    "crates/render/src/section_content_tests.rs": "f435bbebbf6e0a726905e92a240e6fe7b96a7c5984ac70251f132b448e82fdb2",
+    "crates/render/src/section_content_tests.rs": "e32cf26f27e99ba3d89a989687dce037a3a2baf950c9d5d14b26e172701752df",
     "crates/storage/Cargo.toml": "3b5e255eb82e81e6cb85d6332927fec226a097f7f2ebad0a0663175bac23fec3",
     "crates/storage/src/lib.rs": "69b4562314942ef501d395fc062b43cdad2c6b364ee3ec92e6517abf9fa36263",
     "crates/storage/src/theme_seed_tests.rs": "042b9c6ba4eb9ca138f76b21f47b269f13a8b3b5ea4c625ce98d0ed59800e5ad",
@@ -32,7 +32,7 @@
     "plan/decisions/D11_theme_presets.md": "181399d45c91b76265edb1789cce97f53c36a63bd8d271dd88c87e2ed0ba924a"
   },
   "rust_toolchain": "rustc 1.85.0 (4d91de4e4 2025-02-17); Cargo 1.85.0 (d73d2caf9 2024-12-31)",
-  "isolated_target_dir": "/workspace/.pr007-final2-ci.1MNRod",
+  "isolated_target_dir": "/workspace/.pr007-footer-ci.c4751dd",
   "checks": [
     {
       "name": "preset_catalog_tdd",
@@ -56,12 +56,24 @@
       "red_observation": "The visual regression could not compile before ThemeTokens::from_preset was implemented.",
       "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked",
       "green_exit_code": 0,
-      "tests_passed": 32,
+      "tests_passed": 33,
       "coverage": [
         "All five presets match exact sorted CSS property snapshots and the shared trusted stylesheet snapshot.",
-        "The stylesheet consumes all preset layout, typography, and color tokens.",
+        "The stylesheet consumes all preset layout, typography, and color tokens, including list and link styles on the renderer-v2 footer markup that is actually emitted.",
         "renderer-v1 output remains unstyled and keeps renderer-v1 metadata; renderer-v2 emits renderer-v2 metadata and the theme stylesheet.",
         "Existing unsafe CSS, HTML escaping, section content, URL, and generated hostile-input regressions remain green."
+      ]
+    },
+    {
+      "name": "renderer_v2_footer_styles_regression",
+      "red_command": "source .project-tools/env.sh && cargo test -p eez-render --locked renderer_v2_styles_nonempty_footer_links_using_emitted_markup",
+      "red_exit_code": 101,
+      "red_observation": "The new nonempty footer test failed because `.section-footer nav ul` was absent from the stylesheet while rendered footer HTML emitted `<nav aria-label=\"Footer\"><ul><li><a...`; the prior `.footer-links` selector matched no element.",
+      "green_command": "source .project-tools/env.sh && cargo test -p eez-render --locked renderer_v2_styles_nonempty_footer_links_using_emitted_markup",
+      "green_exit_code": 0,
+      "tests_passed": 1,
+      "coverage": [
+        "The emitted nonempty footer contains the existing nav/list markup, and the renderer-v2 snapshot styles that list and its links through selectors scoped to `.section-footer`."
       ]
     },
     {
@@ -109,15 +121,21 @@
       "tests_passed": 1
     },
     {
-      "name": "cargo_xtask_check",
-      "command": "source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check",
+      "name": "format_check",
+      "command": "source .project-tools/env.sh && cargo fmt --all -- --check",
       "exit_code": 0,
-      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.",
+      "outcome": "Formatting check passed."
+    },
+    {
+      "name": "cargo_xtask_check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "outcome": "Clippy with warnings denied, workspace tests, and layer validation passed; cargo fmt --all -- --check also passed separately.",
       "workspace_test_counts": {
         "api": 11,
         "commands": 2,
         "domain": 13,
-        "render": 32,
+        "render": 33,
         "storage": 5,
         "xtask": 23,
         "bootstrap_cli": 2,
@@ -126,13 +144,13 @@
     },
     {
       "name": "cargo_xtask_ci",
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.pr007-final2-ci.1MNRod cargo xtask ci",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.pr007-footer-ci.c4751dd cargo xtask ci",
       "exit_code": 0,
       "fresh_isolated_target": true,
       "target_was_empty_at_start": true,
-      "outcome": "Workspace checks/tests, API WASM, dashboard WASM, and cargo-audit passed; the captured shell printed CI_EXIT=0.",
+      "outcome": "Workspace checks/tests, API WASM, dashboard WASM, and cargo-audit passed; the command exited 0.",
       "wasm_sha256": {
-        "eez_api.wasm": "4a882938ff6b2485922a333d7f13a28b58546ba8dda2159c06f6f36b4b3e247d",
+        "eez_api.wasm": "fb6c9bacaa57cb1a133dd1ce46102ad5429de00c11a93bdc6bbab7a9b655b7fa",
         "eez_dashboard.wasm": "d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5"
       },
       "wasm_bytes": {
@@ -146,7 +164,7 @@
         "findings": 0,
         "database_update": "cargo xtask ci fetched/updated the RustSec advisory database and crates.io index before scanning."
       },
-      "target_dir": "/workspace/.pr007-final2-ci.1MNRod"
+      "target_dir": "/workspace/.pr007-footer-ci.c4751dd"
     },
     {
       "name": "local_d1_worker_smoke",
@@ -158,13 +176,13 @@
     {
       "name": "no_comments_review",
       "reviewer": "Manual Luna self-audit of the PR-007 source diff and added-comment/TODO/FIXME/lint-suppression scan.",
-      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added. git diff --check passed."
+      "result": "Clean. No source comments, TODO/FIXME markers, or lint suppressions were added; git diff --check passed."
     },
     {
       "name": "interrogate_self_audit",
       "reviewer": "Manual Luna adversarial review of preset JSON parity, CSS token validation, renderer-version compatibility, immutable revision behavior, and same-ID rejection.",
-      "result": "No further actionable issue found. The same-ID and renderer-v1 metadata gaps found during self-review have focused red/green regression tests.",
-      "independent_review": "No separate model review was run during implementation; Sol review is reserved for the PR gate."
+      "result": "No further actionable issue found. The footer selector mismatch found in review is covered by a nonempty-rendered-footer regression and now targets the emitted markup; the renderer-v1 byte-preservation snapshot remains green.",
+      "independent_review": "Sol identified the original selector mismatch on the prior PR head; a fresh Sol review is pending on the final pushed head."
     },
     {
       "name": "diff_whitespace_check",
@@ -178,15 +196,16 @@
     "theme.set is a pure command: it receives a new revision ID, creates a validated immutable revision with renderer-v2 and the selected preset digest, preserves section content and asset/config hashes, and returns renderer-ready tokens. Reusing the source revision ID is rejected.",
     "Renderer-v2 emits a trusted constant stylesheet that consumes the theme tokens. Renderer-v1 manifests retain the previous unstyled representation and their renderer-v1 metadata; unsupported versions remain rejected.",
     "D11 records catalog ownership, migration parity, command and renderer version behavior. C-01 and other frozen contracts are unchanged.",
-    "The local Worker/D1 smoke used local resources only. No remote bindings, production settings, or deployment commands were used."
+    "The local Worker/D1 smoke used local resources only. No remote bindings, production settings, or deployment commands were used.",
+    "Sol review found that the prior `.footer-links` CSS matched no footer DOM nodes. The regression proved the issue with a nonempty renderer-v2 footer; the fix targets the existing `.section-footer nav ul` and `.section-footer nav a` markup, leaving renderer-v1 output unchanged."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "PR #8 has not yet been opened; hosted CI must pass on its exact final pushed head.",
-    "required": "Hosted CI must pass on the exact final pushed PR head before merge.",
+    "status_at_evidence_capture": "The source fix and refreshed evidence are ready for push; hosted CI must pass on PR #8 exact final pushed head.",
+    "required": "Hosted CI must pass on the exact final pushed PR head before review completion and merge.",
     "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/8"
   },
   "reviews": {
-    "sol": "Fresh Sol review and merge are pending after hosted CI is green on the exact PR head.",
+    "sol": "Fresh Sol review and merge are pending after hosted CI is green on the exact final pushed PR head.",
     "codex": "Request one @codex review on the final pushed head after hosted CI is green."
   },
   "deployment": {

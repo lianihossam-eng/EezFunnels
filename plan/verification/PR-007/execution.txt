@@ -1,49 +1,48 @@
 PR-007 preset themes verification
 
-Evidence refreshed: 2026-10-13T23:31:22Z
+Evidence refreshed: 2026-10-13T23:43:05Z
 Branch: feat/007_themes
 Base commit: 96701762c384e47264cdd8092c5f0c3496c7adac
-Verified source commit: c99057e26b52b1c6567fb52c2c6b92ddde5fcd18
-Source fingerprint: 0c30a69600cd2192992030e68a6b103f078fa7e6d85714a0e86077b0b1e423f7
-The fingerprint is SHA-256 of sorted `path SHA256\n` lines recorded in results.json.
+Verified source commit: c4751dd9e7519c3c80b3cf136685d49673fbdd52
+Source fingerprint: a1f2fe36f3a1ede67d11cbdb48f38ec1ecaeb31768ffbf6dbca3770e87da0945
 
 Implementation:
-- `ThemePreset` owns five stable preset IDs, names, and thirteen tokens. Its JSON uses sorted keys.
-- `ThemeTokens::from_preset` validates tokens and derives the content-based theme version.
-- Migration 0003 updates the existing five theme rows. Storage checks the migrated catalog against the domain catalog.
-- `theme.set` returns renderer-ready tokens and an immutable revision using renderer-v2. Reusing the source revision ID fails with `validation/revision_id_unchanged`.
-- Renderer-v2 includes a trusted stylesheet that consumes all theme tokens. Renderer-v1 retains its unstyled output and renderer-v1 HTML metadata.
-- D11 documents catalog ownership, migration parity, theme command behavior, and renderer compatibility. C-01 is unchanged.
+- `ThemePreset` owns five stable preset IDs, names, and thirteen deterministic tokens. JSON uses sorted keys.
+- `ThemeTokens::from_preset` validates every token and derives the content-based theme version.
+- Migration 0003 updates existing D1 theme rows; storage checks migrated catalog parity against the domain catalog.
+- `theme.set` returns validated renderer-ready tokens and an immutable renderer-v2 revision. Reusing the source revision ID fails with `validation/revision_id_unchanged`.
+- Renderer-v2 emits a trusted stylesheet; renderer-v1 keeps its unstyled output and renderer-v1 metadata. D11 records catalog ownership, migration parity, command behavior, and compatibility.
+- Sol identified that `.footer-links` matched no emitted footer element on the prior PR head. The fix targets existing `.section-footer nav ul` and `.section-footer nav a` markup, without changing footer markup or renderer-v1 bytes.
 
 Test-first regressions:
-- The new preset catalog tests failed before `ThemePreset` and deterministic JSON serialization existed; after implementation, all 13 domain tests passed.
-- The per-preset visual regression failed before `ThemeTokens::from_preset` existed; after implementation, all 32 renderer tests passed with exact token and stylesheet snapshots.
-- The command tests failed before `ThemeSetCommand` existed; after implementation, both command tests passed.
-- The storage parity regression failed with `missing seed for minimal` before migration 0003; after implementation, all five storage tests passed.
-- A legacy renderer test failed because a renderer-v1 manifest emitted renderer-v2 metadata. The renderer now emits the validated manifest version; all 32 renderer tests pass.
-- A same-ID fork assertion failed because a fork could reuse the source revision ID. `Revision::fork_with_theme` now rejects reuse; the focused domain test passes.
-- Exact commands, exit codes, and observations are in results.json.
+- Preset catalog tests failed before `ThemePreset` and deterministic JSON serialization existed; after implementation, all 13 domain tests passed.
+- Visual theme tests failed before `ThemeTokens::from_preset` existed; all five presets now match exact token and stylesheet snapshots.
+- The new `renderer_v2_styles_nonempty_footer_links_using_emitted_markup` test first failed because the stylesheet lacked `.section-footer nav ul`; the emitted nonempty footer used a plain nav/list, so the old `.footer-links` selector matched nothing. After the CSS fix, the focused test passed.
+- Command tests failed before `ThemeSetCommand` existed; both command tests now pass.
+- Storage parity failed with `missing seed for minimal` before migration 0003; all five storage tests now pass.
+- Renderer-v1 metadata and same-ID revision regressions each failed before their fixes and pass now.
+- The full renderer suite passes 33 tests; domain, commands, and storage pass 13, 2, and 5 tests.
 
 Workspace checks:
-- `source .project-tools/env.sh && cargo fmt --all -- --check && cargo xtask check`; exit 0.
-- API 11, commands 2, domain 13, render 32, storage 5, xtask 23, bootstrap CLI 2, and PR-001 CLI 5 tests passed. Formatting, Clippy with warnings denied, and layer checks passed.
-- `git diff --check`; exit 0. Manual no-comments and adversarial self-audits found no added source comments, TODO/FIXME markers, lint suppressions, or remaining actionable issue.
+- `source .project-tools/env.sh && cargo fmt --all -- --check`; exit 0.
+- `source .project-tools/env.sh && cargo xtask check`; exit 0. API 11, commands 2, domain 13, renderer 33, storage 5, xtask 23, bootstrap CLI 2, and PR-001 CLI 5 tests passed. Clippy with warnings denied and layer validation passed.
+- `git diff --check`; exit 0. Manual no-comments and adversarial self-audits found no added comments, TODO/FIXME markers, lint suppressions, or remaining actionable issue in the source diff.
 
 Local migration/runtime smoke:
 - `bash scripts/smoke-pr003.sh`; exit 0.
-- Wrangler applied migrations 0001 through 0003 to local D1. The product repository probe confirmed seed/catalog parity; publication and correlation-ID regression scenarios passed, and port 8787 was closed after cleanup.
+- Wrangler applied migrations 0001 through 0003 to local D1. Product repository catalog parity, publication and correlation-ID regressions passed; port 8787 was closed after cleanup.
 - No remote binding or deployment was used.
 
 Fresh-target CI:
-- Empty target: `/workspace/.pr007-final2-ci.1MNRod`.
-- Command: `source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.pr007-final2-ci.1MNRod cargo xtask ci`.
-- Source commit: `c99057e26b52b1c6567fb52c2c6b92ddde5fcd18`; exit: `CI_EXIT=0`.
+- Empty target: `/workspace/.pr007-footer-ci.c4751dd`.
+- Command: `source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.pr007-footer-ci.c4751dd cargo xtask ci`.
+- Source commit: `c4751dd9e7519c3c80b3cf136685d49673fbdd52`; exit: 0.
 - Rust/Cargo: rustc 1.85.0; Cargo 1.85.0. cargo-audit 0.22.2.
-- API WASM SHA-256: 4a882938ff6b2485922a333d7f13a28b58546ba8dda2159c06f6f36b4b3e247d (29241068 bytes).
-- Dashboard WASM SHA-256: d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5 (1432977 bytes).
-- RustSec loaded 1,310 advisories and scanned 113 locked dependencies with zero findings. The captured command output is `/tmp/pr007-final2-ci.log`.
+- API WASM SHA-256: `fb6c9bacaa57cb1a133dd1ce46102ad5429de00c11a93bdc6bbab7a9b655b7fa` (29,241,068 bytes).
+- Dashboard WASM SHA-256: `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5` (1,432,977 bytes).
+- RustSec loaded 1,310 advisories and scanned 113 locked dependencies with zero findings.
 
 Review and publication state at evidence capture:
-- PR #8 has not yet been opened. Hosted CI must pass on the exact final pushed PR head.
-- Request one @codex review on that final head after hosted CI is green. Sol review and merge remain pending.
+- PR #8 is open. The footer review finding is fixed and covered by the regression above. Source and refreshed evidence are ready for push.
+- Hosted CI must pass on the exact final pushed PR head. Then request one @codex review and Sol review on that same head; do not merge before all gates are clean on the exact SHA.
 - No remote deployment or production binding check was run.

@@ -77,13 +77,16 @@ creates an immutable revision with a validated theme digest and renderer-v2; it 
 source revision ID. Renderer-v2 emits a trusted stylesheet that consumes the token set, while
 renderer-v1 keeps its unstyled output and version metadata. D11 records the ownership and
 compatibility decisions. Test-first regressions cover preset serialization, renderer snapshots,
-command behavior, migration parity, renderer-v1 metadata, and same-ID revision forks. The domain,
-command, renderer, and storage suites pass 13, 2, 32, and 5 tests. `cargo xtask check`, fresh-target
-`cargo xtask ci` on source commit `c99057e26b52b1c6567fb52c2c6b92ddde5fcd18`, and the local-only
+command behavior, migration parity, renderer-v1 metadata, same-ID revision forks, and the nonempty
+renderer-v2 footer selector against its emitted markup. The domain, command, renderer, and storage
+suites pass 13, 2, 33, and 5 tests. `cargo xtask check`, fresh-target `cargo xtask ci` on source
+commit `c4751dd9e7519c3c80b3cf136685d49673fbdd52`, and the local-only
 `scripts/smoke-pr003.sh` all pass. RustSec scanned 113 locked dependencies against 1,310 advisories
 with zero findings. Fingerprinted output is in `plan/verification/PR-007/execution.txt` and
-`results.json`. Hosted CI and fresh @codex/Sol review are still required on PR #8's final head;
-do not merge before they are clean on that exact SHA. No remote deployment was run.
+`results.json`. The fix addresses Sol's review finding that `.footer-links` matched no emitted
+footer elements; it styles the existing `.section-footer nav ul` and anchor markup without changing
+renderer-v1 bytes. Hosted CI and fresh @codex/Sol review are required on PR #8's final head; do not
+merge before they are clean on that exact SHA. No remote deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -135,6 +138,6 @@ do not merge before they are clean on that exact SHA. No remote deployment was r
 
 ## Next action
 
-Push the PR-007 source and evidence, then request one @codex review on PR #8's final head and verify
-hosted CI on that exact commit. Do not merge before @codex/Sol reviews and hosted CI are clean on
-the same head. Do not deploy remotely.
+Push the PR-007 source and refreshed evidence, verify hosted CI on the final PR #8 head, then request
+one @codex review and Sol review on that same head. Do not merge until both reviews and hosted CI
+are clean on the exact SHA. Do not deploy remotely.
