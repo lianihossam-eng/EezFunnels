@@ -1,0 +1,65 @@
+PR-004 local verification transcript
+
+Executed: 2026-10-13T17:06:38Z
+Branch: feat/004_domain
+Base commit: 5140163ab122d38554b001299faf6b0eb93fd77d
+Verified source commit: e0c38979d88923e570020624d91ce7e181b742f9
+Source file SHA-256: crates/domain/src/lib.rs 2b7645ced584a087cac89f200f31b1860fb698e8fc61319a287fab18dadfea97
+Source fingerprint: 00ed007c9537e132a6d601aa75d001adc6742b25b882f7c35e9b4be79cfaca03
+The fingerprint is SHA-256 of the sorted `path SHA256\n` lines in results.json.
+
+Toolchain: rustc 1.85.0 / Cargo 1.85.0
+
+Scope and boundary:
+- Added pure-Rust funnel, revision, section, render-manifest, schema-version, compatibility, and
+  publication domain types. No dependency, contract, storage, API, or serialization changes.
+- C-01 schema v1 is the only supported registry entry. Tests assert the exact codes for missing
+  schema version, unsupported version, unknown section type, missing section ID, and duplicate
+  order. The configured 100-section boundary is covered at 100 and 101.
+- Revisions hold private immutable snapshots; construction rejects a manifest for a different
+  revision, duplicate section IDs/orders, and over-limit sections, and normalizes sections by order.
+- Publication tests reject stale, no-op, and cross-funnel candidates without changing the current
+  pointer. The concurrency test releases 100 publisher threads through a Barrier against one
+  already-published baseline. `Funnel` serializes the compare-and-set under its internal Mutex;
+  exactly one candidate succeeds. Durable cross-request CAS remains storage-owned.
+- The C-04 contract remains unchanged. The C-01-listed domain errors have exact assertions. Other
+  local domain diagnostics do not add new C-04 promises; the API integration must map them to the
+  approved registry. `PublicationStateUnavailable` emits only `internal/unexpected`.
+- Section content/nesting/render behavior remains in later PRs; this model enforces the C-01_CONFIG
+  max section count. No Cloudflare deployment or remote binding check was run.
+
+TDD:
+- Before implementation, the test-first domain API imports failed to compile (exit 101) because
+  the domain types and compatibility API did not exist. The behavior suite was then implemented
+  and passed against the new model.
+- Green targeted command: `source .project-tools/env.sh && cargo test -p eez-domain --locked` —
+  exit 0, 8 tests passed.
+
+Final local checks:
+- An initial `cargo xtask check` identified three unnecessary `.to_owned()` calls in the new
+  fixtures; those calls were removed before the final successful checks below.
+- `source .project-tools/env.sh && cargo xtask check` — exit 0. Formatting, Clippy with warnings
+  denied, layer validation, and workspace tests passed. Counts: API 11, domain 8, storage 4,
+  xtask 23, bootstrap CLI 2, PR-001 CLI 5.
+- Clean isolated CI command: `set -euo pipefail; source .project-tools/env.sh;
+  CARGO_TARGET_DIR=/workspace/.eez-pr004-final-target.3wp4Q5 cargo xtask ci` — exit 0. `check`,
+  workspace tests, API WASM, dashboard WASM, and cargo-audit all passed. API WASM SHA-256:
+  `eaf7d0b5dfc88d16bdb8f3d1f14179be149f729aebaa4d397c93cd71642f16ef`; dashboard WASM SHA-256:
+  `d6a424372d522e6ae19269e9199b6eb4014f2765e2840c8c9b88a3ab793d85b5`.
+- cargo-audit 0.22.2 fetched/loaded 1,310 advisories, scanned 105 locked dependencies, and reported
+  zero findings.
+- An earlier clean attempt under `/tmp/eezfunnel-pr004-target.ccSNI1` stopped during compilation
+  because `/tmp` is a separate full 17 GiB volume (80 KiB free). It was retried in a newly-created
+  empty target on `/workspace`, which had 30 GiB free. Only the failed PR-004 temporary target was
+  removed; the final `/workspace` clean-target run passed.
+- `git diff --check` — exit 0.
+
+Self-audits, Luna xhigh:
+- No-comments: no comments were added/deleted, and no TODO/FIXME or lint suppression was introduced.
+- Interrogate: manually challenged version/section validation, manifest/revision identity,
+  immutable snapshots, pointer-preserving failures, mutex synchronization, and the shared-baseline
+  race; no actionable correctness finding remained. Independent-model reviewers were not used
+  under the Luna-only implementation constraint.
+
+Hosted CI has not run yet: PR #5 is not open at the time of this evidence snapshot. Run hosted CI
+and request Sol review on the exact final pushed PR head before merge.
