@@ -1,6 +1,6 @@
 {
   "task": "PR-001",
-  "executed_at_utc": "2026-10-13T07:50:13+00:00",
+  "executed_at_utc": "2026-10-13T07:57:23+00:00",
   "base_commit": "1256e01f92e0fc20368db6a4f57b2cb311d3073a",
   "rust_toolchain": "1.85.0",
   "isolated_target_dir": "/tmp/eezfunnel-pr001-final-target",
@@ -81,7 +81,9 @@
       "outcome": "passed",
       "cargo_audit_version": "0.22.2",
       "audit_toolchain": "1.88.0",
-      "project_rust_toolchain_unchanged": "1.85.0"
+      "project_rust_toolchain_unchanged": "1.85.0",
+      "idempotent_rerun": true,
+      "captured_in_transcript": true
     },
     {
       "name": "cargo_audit_scan",
@@ -110,8 +112,10 @@
       "real_deploy_run": false
     }
   ],
+  "pending": [
+    "hosted GitHub CI on PR #2 head 5d57c8d at last poll; any new push requires a fresh run"
+  ],
   "unrun": [
-    "hosted GitHub CI on the current PR head (PR #2 is not open yet)",
     "deployment against a real Cloudflare account (Wrangler and credentials are unavailable)",
     "product behavior beyond the PR-000 bootstrap"
   ],

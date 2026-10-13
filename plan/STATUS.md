@@ -1,12 +1,12 @@
 # Eez Funnel - Status
 
-Current phase: PR-001 (xtask implementation verified locally; pull request pending)
+Current phase: PR-001 (xtask implementation verified locally; PR #2 open; hosted CI pending)
 Last updated: 2026-10-13
 
 ## Phases
 
 - [x] PR-000 Bootstrap (merged as PR #1 into `main`, merge commit `1256e01`)
-- [ ] PR-001 xtask (local implementation verified; PR #2 not yet opened)
+- [ ] PR-001 xtask (local implementation verified; [PR #2](https://github.com/lianihossam-eng/EezFunnels/pull/2) open; CI pending on `5d57c8d`)
 - [ ] PR-002 Worker + D1 + R2 + KV
 - [ ] PR-003 Schema + seed themes
 - [ ] PR-004 Domain model
@@ -50,12 +50,13 @@ unverified.
 
 ## Blockers
 
-PR #2 has not been opened, so hosted CI has not yet run on its head. Hosted `cargo xtask ci` must pass
-on the current PR head before merge. A Cloudflare environment with Wrangler and its required
-credentials is also needed to verify deployment behavior against a real account.
+Hosted CI was pending on PR #2 head `5d57c8d` at the last status check. Hosted `cargo xtask ci` must
+pass on the current PR head before merge; any new push requires a fresh green run. A Cloudflare
+environment with Wrangler and its required credentials is also needed to verify deployment behavior
+against a real account.
 
 ## Next action
 
-Open PR #2 against `main`, then wait for hosted CI on its current head and the reserved PR review.
-PR-001 introduces the required `cargo xtask ci` merge gate for itself and every later PR. Local
-checks do not authorize a merge or establish production readiness.
+Wait for hosted CI on PR #2's current head and the reserved PR review. PR-001 introduces the required
+`cargo xtask ci` merge gate for itself and every later PR. Local checks do not authorize a merge or
+establish production readiness.
