@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+eez-domain = { path = "../domain" }
+
 [package.metadata.eez]
 layer = 1
