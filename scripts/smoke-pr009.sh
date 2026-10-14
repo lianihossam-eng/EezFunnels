@@ -581,7 +581,7 @@ if ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$s
   printf 'The database accepted a direct insert beyond the workspace funnel limit\n' >&2
   exit 1
 fi
-rg -q 'workspace funnel limit reached' "$state_dir/over-cap-insert.log"
+grep -q 'workspace funnel limit reached' "$state_dir/over-cap-insert.log"
 
 python3 - "$state_dir/seed-list-overflow.sql" <<'PY'
 import sys
