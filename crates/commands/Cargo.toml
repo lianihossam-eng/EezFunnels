@@ -11,5 +11,7 @@ layer = 3
 [dependencies]
 eez-domain = { path = "../domain" }
 eez-render = { path = "../render" }
+eez-storage = { path = "../storage" }
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true

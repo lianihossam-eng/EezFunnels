@@ -181,6 +181,56 @@ pub enum ThemePreset {
     Corporate,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunnelBlueprint {
+    Tripwire,
+    Vsl,
+    Webinar,
+    Launch,
+    LeadGen,
+}
+
+impl FunnelBlueprint {
+    pub const ALL: [Self; 5] = [
+        Self::Tripwire,
+        Self::Vsl,
+        Self::Webinar,
+        Self::Launch,
+        Self::LeadGen,
+    ];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Tripwire => "tripwire",
+            Self::Vsl => "vsl",
+            Self::Webinar => "webinar",
+            Self::Launch => "launch",
+            Self::LeadGen => "lead_gen",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tripwire => "Tripwire",
+            Self::Vsl => "Video sales letter",
+            Self::Webinar => "Webinar",
+            Self::Launch => "Product launch",
+            Self::LeadGen => "Lead generation",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Tripwire => "A focused page for a small first offer.",
+            Self::Vsl => "A presentation-led offer with customer proof.",
+            Self::Webinar => "An event page for a live or recorded session.",
+            Self::Launch => "A product announcement with benefits and proof.",
+            Self::LeadGen => "A useful resource offered in exchange for a lead.",
+        }
+    }
+}
+
 const THEME_PRESETS: [ThemePreset; 5] = [
     ThemePreset::Minimal,
     ThemePreset::Bold,
