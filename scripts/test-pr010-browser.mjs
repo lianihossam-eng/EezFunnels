@@ -353,6 +353,51 @@ try {
   const criticalAxeFindings = axe.filter((finding) => finding.impact === "critical");
   assert.deepEqual(criticalAxeFindings, [], `Critical axe findings: ${JSON.stringify(criticalAxeFindings)}`);
 
+  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  {
+    const historyTitle = page.locator('[id="setting-section.hero.title"]');
+    const savedTitle = await historyTitle.inputValue();
+    const undoButton = page.getByRole("button", { name: "Undo" });
+    const redoButton = page.getByRole("button", { name: "Redo" });
+    const historySaveButton = page.getByRole("button", { name: "Save revision" });
+
+    let historyPreview = editorPreviewResponse(page, primaryId);
+    await historyTitle.fill("PR-012 undo shortcut headline");
+    assert.equal((await historyPreview).status(), 200);
+    assert.equal(await undoButton.isDisabled(), false);
+    assert.equal(await redoButton.isDisabled(), true);
+
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+z");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: savedTitle },
+    );
+    assert.equal(await undoButton.isDisabled(), true);
+    assert.equal(await redoButton.isDisabled(), false);
+    assert.equal(await historySaveButton.isDisabled(), true);
+
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+y");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: "PR-012 undo shortcut headline" },
+    );
+    assert.equal(await undoButton.isDisabled(), false);
+    assert.equal(await redoButton.isDisabled(), true);
+
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+z");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: savedTitle },
+    );
+    assert.equal(await historySaveButton.isDisabled(), true);
+  }
+
   const heroRow = page.locator('[data-editor-section="hero"]');
   await heroRow.focus();
   await page.keyboard.press("Space");
@@ -361,6 +406,21 @@ try {
   assert.equal(await page.locator('[aria-live="polite"]').innerText(), "Moved Hero to position 2 of 3.");
   await page.keyboard.press("Space");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-editor-section")), "hero");
+  assert.equal(await page.locator('[aria-live="polite"]').innerText(), "Dropped Hero at position 2 of 3.");
+
+  let orderHistoryPreview = editorPreviewResponse(page, primaryId);
+  await page.keyboard.press("Control+z");
+  assert.equal((await orderHistoryPreview).status(), 200);
+  await waitForOrder(page, ["hero", "features", "cta"]);
+  assert.equal(await page.locator('[aria-live="polite"]').innerText(), "Undid moving Hero to position 1 of 3.");
+  assert.equal(await page.getByRole("button", { name: "Redo" }).isDisabled(), false);
+  orderHistoryPreview = editorPreviewResponse(page, primaryId);
+  await page.getByRole("button", { name: "Redo" }).click();
+  assert.equal((await orderHistoryPreview).status(), 200);
+  await waitForOrder(page, ["features", "hero", "cta"]);
+  assert.equal(await page.locator('[aria-live="polite"]').innerText(), "Redid moving Hero to position 2 of 3.");
+
+  await heroRow.focus();
   await page.keyboard.press("Space");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Escape");
@@ -714,7 +774,7 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010/011 browser: navigation, keyboard, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  console.log(`PR-010/011/012 browser: navigation, keyboard, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,

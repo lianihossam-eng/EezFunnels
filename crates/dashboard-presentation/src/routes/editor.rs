@@ -7,7 +7,7 @@ use super::{
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::{SortEvent, SortableList};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod inspector;
 #[cfg(feature = "browser")]
@@ -67,6 +67,129 @@ struct EditorPreviewCapture {
     settings_changes: Vec<EditorSettingChange>,
 }
 
+const EDITOR_HISTORY_LIMIT: usize = 100;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorDraftSnapshot {
+    order: Vec<String>,
+    settings_changes: BTreeMap<String, EditorSettingValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EditorJsonPath {
+    Order,
+    SettingChange(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorJsonChange {
+    path: EditorJsonPath,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EditorJsonDiff {
+    moved_section_id: Option<String>,
+    changes: Vec<EditorJsonChange>,
+}
+
+impl EditorJsonDiff {
+    fn between(
+        before: &EditorDraftSnapshot,
+        after: &EditorDraftSnapshot,
+        moved_section_id: Option<String>,
+    ) -> Option<Self> {
+        let mut changes = Vec::new();
+        if before.order != after.order {
+            changes.push(EditorJsonChange {
+                path: EditorJsonPath::Order,
+                before: Some(serde_json::to_value(&before.order).ok()?),
+                after: Some(serde_json::to_value(&after.order).ok()?),
+            });
+        }
+
+        let setting_ids = before
+            .settings_changes
+            .keys()
+            .chain(after.settings_changes.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for setting_id in setting_ids {
+            let before_value = before
+                .settings_changes
+                .get(&setting_id)
+                .map(serde_json::to_value)
+                .transpose()
+                .ok()?;
+            let after_value = after
+                .settings_changes
+                .get(&setting_id)
+                .map(serde_json::to_value)
+                .transpose()
+                .ok()?;
+            if before_value != after_value {
+                changes.push(EditorJsonChange {
+                    path: EditorJsonPath::SettingChange(setting_id),
+                    before: before_value,
+                    after: after_value,
+                });
+            }
+        }
+        Some(Self {
+            moved_section_id,
+            changes,
+        })
+    }
+
+    fn apply(&self, snapshot: &EditorDraftSnapshot, forward: bool) -> Option<EditorDraftSnapshot> {
+        let mut next = snapshot.clone();
+        for change in &self.changes {
+            let (expected, replacement) = if forward {
+                (&change.before, &change.after)
+            } else {
+                (&change.after, &change.before)
+            };
+            match &change.path {
+                EditorJsonPath::Order => {
+                    let current = Some(serde_json::to_value(&next.order).ok()?);
+                    if &current != expected {
+                        return None;
+                    }
+                    next.order = serde_json::from_value(replacement.clone()?).ok()?;
+                }
+                EditorJsonPath::SettingChange(setting_id) => {
+                    let current = next
+                        .settings_changes
+                        .get(setting_id)
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .ok()?;
+                    if &current != expected {
+                        return None;
+                    }
+                    match replacement {
+                        Some(value) => {
+                            let setting = serde_json::from_value(value.clone()).ok()?;
+                            next.settings_changes.insert(setting_id.clone(), setting);
+                        }
+                        None => {
+                            next.settings_changes.remove(setting_id);
+                        }
+                    }
+                }
+            }
+        }
+        Some(next)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EditorHistory {
+    entries: Vec<EditorJsonDiff>,
+    cursor: usize,
+}
+
 #[cfg(any(feature = "browser", test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EditorSaveCapture {
@@ -90,6 +213,7 @@ struct EditorState {
     preview_error: bool,
     keyboard_section: Option<String>,
     keyboard_original_order: Option<Vec<String>>,
+    history: EditorHistory,
     announcement: String,
     saving: bool,
     retryable: bool,
@@ -127,6 +251,7 @@ impl EditorState {
             return;
         }
         self.loading = false;
+        self.reset_history();
         match response {
             Ok(response) if response.funnel.id == funnel_id => {
                 let order = response
@@ -158,6 +283,11 @@ impl EditorState {
         if self.saving || self.retryable || self.stale {
             return None;
         }
+        let before = if self.keyboard_section.is_some() || self.keyboard_original_order.is_some() {
+            None
+        } else {
+            Some(self.history_snapshot()?)
+        };
         let (moved_section_id, position, section_count) = {
             let document = self.document.as_mut()?;
             if from >= document.order.len() || to >= document.order.len() || from == to {
@@ -174,6 +304,9 @@ impl EditorState {
             position,
             section_count
         );
+        if let Some(before) = before {
+            self.record_history_from(before, Some(moved_section_id));
+        }
         Some(self.begin_preview())
     }
 
@@ -272,23 +405,29 @@ impl EditorState {
     }
 
     fn finish_keyboard_drag(&mut self) {
-        if let Some(section_id) = self.keyboard_section.take() {
+        let original_order = self.keyboard_original_order.take();
+        let moved_section_id = self.keyboard_section.take();
+        if let Some(section_id) = moved_section_id.as_deref() {
             if let Some(document) = self.document.as_ref() {
                 let position = document
                     .order
                     .iter()
-                    .position(|id| id == &section_id)
+                    .position(|id| id == section_id)
                     .unwrap_or(0)
                     + 1;
                 self.announcement = format!(
                     "Dropped {} at position {} of {}.",
-                    self.section_name(&section_id),
+                    self.section_name(section_id),
                     position,
                     document.order.len()
                 );
             }
         }
-        self.keyboard_original_order = None;
+        if let (Some(original_order), Some(mut before)) = (original_order, self.history_snapshot())
+        {
+            before.order = original_order;
+            self.record_history_from(before, moved_section_id);
+        }
     }
 
     fn cancel_keyboard_drag(&mut self) -> Option<EditorPreviewCapture> {
@@ -371,6 +510,7 @@ impl EditorState {
         self.retryable = false;
         self.stale = false;
         self.save_error = None;
+        self.reset_history();
         Some(self.begin_preview())
     }
 
@@ -416,6 +556,168 @@ impl EditorState {
         {
             document.selected_section = Some(section_id.to_owned());
         }
+    }
+
+    fn undo(&mut self) -> Option<EditorPreviewCapture> {
+        if !self.can_undo() {
+            return None;
+        }
+        let index = self.history.cursor.checked_sub(1)?;
+        let diff = self.history.entries.get(index)?.clone();
+        let snapshot = self.history_snapshot()?;
+        let Some(restored) = diff.apply(&snapshot, false) else {
+            self.reset_history();
+            return None;
+        };
+        if !self.apply_history_snapshot(restored) {
+            self.reset_history();
+            return None;
+        }
+        self.history.cursor = index;
+        self.announce_history_change(&diff, false);
+        Some(self.begin_preview())
+    }
+
+    fn redo(&mut self) -> Option<EditorPreviewCapture> {
+        if !self.can_redo() {
+            return None;
+        }
+        let index = self.history.cursor;
+        let diff = self.history.entries.get(index)?.clone();
+        let snapshot = self.history_snapshot()?;
+        let Some(restored) = diff.apply(&snapshot, true) else {
+            self.reset_history();
+            return None;
+        };
+        if !self.apply_history_snapshot(restored) {
+            self.reset_history();
+            return None;
+        }
+        self.history.cursor = index.saturating_add(1);
+        self.announce_history_change(&diff, true);
+        Some(self.begin_preview())
+    }
+
+    fn can_undo(&self) -> bool {
+        !self.history_locked() && self.history.cursor > 0
+    }
+
+    fn can_redo(&self) -> bool {
+        !self.history_locked() && self.history.cursor < self.history.entries.len()
+    }
+
+    fn history_locked(&self) -> bool {
+        self.loading
+            || self.saving
+            || self.retryable
+            || self.stale
+            || self.keyboard_section.is_some()
+            || self.keyboard_original_order.is_some()
+            || self.document.is_none()
+    }
+
+    fn history_snapshot(&self) -> Option<EditorDraftSnapshot> {
+        let document = self.document.as_ref()?;
+        Some(EditorDraftSnapshot {
+            order: document.order.clone(),
+            settings_changes: document.settings_changes.clone(),
+        })
+    }
+
+    fn record_history_from(
+        &mut self,
+        before: EditorDraftSnapshot,
+        moved_section_id: Option<String>,
+    ) {
+        let Some(after) = self.history_snapshot() else {
+            return;
+        };
+        let Some(diff) = EditorJsonDiff::between(&before, &after, moved_section_id) else {
+            return;
+        };
+        if diff.changes.is_empty() {
+            return;
+        }
+        self.history.entries.truncate(self.history.cursor);
+        self.history.entries.push(diff);
+        if self.history.entries.len() > EDITOR_HISTORY_LIMIT {
+            self.history.entries.remove(0);
+        }
+        self.history.cursor = self.history.entries.len();
+    }
+
+    fn announce_history_change(&mut self, diff: &EditorJsonDiff, forward: bool) {
+        let action = if forward { "Redid" } else { "Undid" };
+        let mut changes = Vec::new();
+        for change in &diff.changes {
+            match &change.path {
+                EditorJsonPath::Order => {
+                    let Some(section_id) = diff.moved_section_id.as_deref() else {
+                        changes.push("section order".to_owned());
+                        continue;
+                    };
+                    let position = self.document.as_ref().and_then(|document| {
+                        document
+                            .order
+                            .iter()
+                            .position(|id| id == section_id)
+                            .map(|index| (index.saturating_add(1), document.order.len()))
+                    });
+                    let Some((position, count)) = position else {
+                        changes.push("section order".to_owned());
+                        continue;
+                    };
+                    changes.push(format!(
+                        "moving {} to position {} of {}",
+                        self.section_name(section_id),
+                        position,
+                        count
+                    ));
+                }
+                EditorJsonPath::SettingChange(setting_id) => {
+                    let label = self
+                        .document
+                        .as_ref()
+                        .and_then(|document| {
+                            document
+                                .settings_schema
+                                .fields
+                                .iter()
+                                .find(|field| field.id == *setting_id)
+                        })
+                        .map(|field| field.label.as_str())
+                        .unwrap_or(setting_id);
+                    changes.push(format!("change to {}", label));
+                }
+            }
+        }
+        self.announcement = format!("{} {}.", action, changes.join(" and "));
+    }
+
+    fn apply_history_snapshot(&mut self, snapshot: EditorDraftSnapshot) -> bool {
+        let Some(document) = self.document.as_mut() else {
+            return false;
+        };
+        let effective_color = document
+            .settings_values
+            .get("theme.primary_color")
+            .and_then(|value| value.effective_value.clone());
+        document.order = snapshot.order;
+        document.settings_changes = snapshot.settings_changes;
+        let mut settings_values = document.saved_settings_values.clone();
+        for (setting_id, setting) in &document.settings_changes {
+            settings_values.insert(setting_id.clone(), setting.clone());
+        }
+        if let Some(primary_color) = settings_values.get_mut("theme.primary_color") {
+            primary_color.effective_value =
+                effective_color.or_else(|| primary_color.effective_value.clone());
+        }
+        document.settings_values = settings_values;
+        true
+    }
+
+    fn reset_history(&mut self) {
+        self.history = EditorHistory::default();
     }
 }
 
@@ -517,7 +819,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
     #[cfg(feature = "browser")]
     let mut state = use_signal(|| EditorState::for_route(id.clone()));
     #[cfg(not(feature = "browser"))]
-    let state = use_signal(|| EditorState::for_route(id.clone()));
+    let mut state = use_signal(|| EditorState::for_route(id.clone()));
     #[cfg(feature = "browser")]
     let retry_route_id = id.clone();
     #[cfg(feature = "browser")]
@@ -547,6 +849,27 @@ pub(super) fn FunnelDetail(id: String) -> Element {
         .unwrap_or_else(|| "Funnel editor".to_owned());
 
     rsx! {
+        div {
+            class: "editor-page",
+            onkeydown: move |event: KeyboardEvent| {
+                let modifiers = event.modifiers();
+                if !modifiers.ctrl() || modifiers.shift() || modifiers.alt() || modifiers.meta() {
+                    return;
+                }
+                let capture = match event.key() {
+                    Key::Character(value) if value.eq_ignore_ascii_case("z") => {
+                        state.with_mut(EditorState::undo)
+                    }
+                    Key::Character(value) if value.eq_ignore_ascii_case("y") => {
+                        state.with_mut(EditorState::redo)
+                    }
+                    _ => None,
+                };
+                if capture.is_some() {
+                    event.prevent_default();
+                    schedule_editor_preview(state, capture);
+                }
+            },
         section { class: "page-heading",
             p { class: "eyebrow", "Funnels / Editor" }
             h1 { "{title}" }
@@ -607,6 +930,28 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                         }
                     }
                     button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        "aria-keyshortcuts": "Control+Z",
+                        disabled: !view.can_undo(),
+                        onclick: move |_| {
+                            let capture = state.with_mut(EditorState::undo);
+                            schedule_editor_preview(state, capture);
+                        },
+                        "Undo"
+                    }
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        "aria-keyshortcuts": "Control+Y",
+                        disabled: !view.can_redo(),
+                        onclick: move |_| {
+                            let capture = state.with_mut(EditorState::redo);
+                            schedule_editor_preview(state, capture);
+                        },
+                        "Redo"
+                    }
+                    button {
                         class: "primary-button",
                         r#type: "button",
                         disabled: !view.can_save(),
@@ -636,7 +981,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                     }
                     EditorSortableList { state }
                     p { class: "editor-keyboard-help",
-                        "Focus a section and press Space. Use the arrow keys to reorder it, Space to drop, or Escape to cancel."
+                        "Focus a section and press Space. Use the arrow keys to reorder it, Space to drop, or Escape to cancel. Undo with Ctrl+Z. Redo with Ctrl+Y."
                     }
                     p { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true",
                         "{view.announcement}"
@@ -656,6 +1001,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                     }
                 }
             }
+        }
         }
     }
 }
@@ -805,7 +1151,18 @@ fn EditorSectionRow(
                     class: "editor-move-button",
                     r#type: "button",
                     "aria-label": "Move {title} up",
-                    onkeydown: move |event: KeyboardEvent| event.stop_propagation(),
+                    onkeydown: move |event: KeyboardEvent| {
+                        let key = event.key();
+                        let modifiers = event.modifiers();
+                        let history_shortcut = modifiers.ctrl()
+                            && !modifiers.shift()
+                            && !modifiers.alt()
+                            && !modifiers.meta()
+                            && matches!(&key, Key::Character(value) if value.eq_ignore_ascii_case("z") || value.eq_ignore_ascii_case("y"));
+                        if !history_shortcut {
+                            event.stop_propagation();
+                        }
+                    },
                     disabled: disabled || index == 0,
                     onclick: move |_| {
                         let capture = state.with_mut(|state| state.move_section_by_id(&up_section_id, -1));
@@ -824,7 +1181,18 @@ fn EditorSectionRow(
                     class: "editor-move-button",
                     r#type: "button",
                     "aria-label": "Move {title} down",
-                    onkeydown: move |event: KeyboardEvent| event.stop_propagation(),
+                    onkeydown: move |event: KeyboardEvent| {
+                        let key = event.key();
+                        let modifiers = event.modifiers();
+                        let history_shortcut = modifiers.ctrl()
+                            && !modifiers.shift()
+                            && !modifiers.alt()
+                            && !modifiers.meta()
+                            && matches!(&key, Key::Character(value) if value.eq_ignore_ascii_case("z") || value.eq_ignore_ascii_case("y"));
+                        if !history_shortcut {
+                            event.stop_propagation();
+                        }
+                    },
                     disabled: disabled || index + 1 >= count,
                     onclick: move |_| {
                         let capture = state.with_mut(|state| state.move_section_by_id(&down_section_id, 1));
@@ -1139,6 +1507,288 @@ mod tests {
             }),
         );
         state
+    }
+
+    #[test]
+    fn editor_keeps_one_hundred_setting_edits_undoable_and_redoable() {
+        let mut state = loaded_editor_state();
+        for index in 0..100 {
+            state
+                .set_setting(
+                    "section.hero.title",
+                    EditorSettingValue {
+                        kind: "text".to_owned(),
+                        value: serde_json::json!(format!("history-edit-{index}")),
+                        effective_value: None,
+                    },
+                )
+                .expect("each accepted title edit schedules a preview");
+        }
+
+        for _ in 0..50 {
+            state.undo().expect("each prior edit can be undone");
+        }
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get("section.hero.title"))
+                .map(|value| &value.value),
+            Some(&serde_json::json!("history-edit-49"))
+        );
+
+        for _ in 0..50 {
+            state.redo().expect("each undone edit can be redone");
+        }
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get("section.hero.title"))
+                .map(|value| &value.value),
+            Some(&serde_json::json!("history-edit-99"))
+        );
+    }
+
+    #[test]
+    fn editor_undo_distinguishes_missing_changes_from_nullable_values() {
+        let mut state = loaded_editor_state();
+        let attribution_id = "section.testimonials.items.0.attribution";
+        state
+            .set_setting(
+                attribution_id,
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::Value::Null,
+                    effective_value: None,
+                },
+            )
+            .expect("nullable attribution edit schedules a preview");
+
+        assert!(state
+            .document
+            .as_ref()
+            .is_some_and(|document| document.settings_changes.contains_key(attribution_id)));
+        state.undo().expect("nullable change can be undone");
+        assert!(!state
+            .document
+            .as_ref()
+            .is_some_and(|document| document.settings_changes.contains_key(attribution_id)));
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get(attribution_id))
+                .map(|value| &value.value),
+            Some(&serde_json::json!("Founder"))
+        );
+
+        state.redo().expect("nullable change can be redone");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_changes.get(attribution_id))
+                .map(|value| &value.value),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get(attribution_id))
+                .map(|value| &value.value),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    #[test]
+    fn editor_new_edit_discards_redo_history() {
+        let mut state = loaded_editor_state();
+        for title in ["First edit", "Second edit"] {
+            state
+                .set_setting(
+                    "section.hero.title",
+                    EditorSettingValue {
+                        kind: "text".to_owned(),
+                        value: serde_json::json!(title),
+                        effective_value: None,
+                    },
+                )
+                .expect("title edit schedules a preview");
+        }
+        state.undo().expect("second edit can be undone");
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Branched edit"),
+                    effective_value: None,
+                },
+            )
+            .expect("new branch edit schedules a preview");
+
+        assert!(!state.can_redo());
+        state.undo().expect("branched edit can be undone");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get("section.hero.title"))
+                .map(|value| &value.value),
+            Some(&serde_json::json!("First edit"))
+        );
+        state.redo().expect("branched edit can be redone");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.settings_values.get("section.hero.title"))
+                .map(|value| &value.value),
+            Some(&serde_json::json!("Branched edit"))
+        );
+    }
+
+    #[test]
+    fn keyboard_reorder_is_one_history_edit_and_escape_records_none() {
+        let mut state = loaded_editor_state();
+        assert!(state.start_keyboard_drag("hero"));
+        state.move_section_by_id("hero", 1);
+        state.move_section_by_id("hero", 1);
+        assert!(!state.can_undo());
+        state.finish_keyboard_drag();
+
+        assert!(state.can_undo());
+        state.undo().expect("dropped reorder is one undo step");
+        assert_eq!(state.announcement, "Undid moving Hero to position 1 of 3.");
+        assert_eq!(
+            state.document.as_ref().map(|document| {
+                document
+                    .order
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["hero", "features", "cta"])
+        );
+        state.redo().expect("dropped reorder is one redo step");
+        assert_eq!(state.announcement, "Redid moving Hero to position 3 of 3.");
+        assert_eq!(
+            state.document.as_ref().map(|document| {
+                document
+                    .order
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["features", "cta", "hero"])
+        );
+
+        state.start_keyboard_drag("hero");
+        state.move_section_by_id("hero", -1);
+        state
+            .cancel_keyboard_drag()
+            .expect("Escape restores the order changed during the drag");
+        assert!(state.can_undo());
+        state
+            .undo()
+            .expect("only the dropped reorder is in history");
+        assert_eq!(
+            state.document.as_ref().map(|document| {
+                document
+                    .order
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["hero", "features", "cta"])
+        );
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn setting_history_announcement_replaces_stale_reorder_text() {
+        let mut state = loaded_editor_state();
+        state
+            .move_section(0, 2)
+            .expect("move hero to the last position");
+        assert!(state.announcement.starts_with("Moved Hero to position 3"));
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Updated headline"),
+                    effective_value: None,
+                },
+            )
+            .expect("headline edit schedules a preview");
+
+        state.undo().expect("headline edit can be undone");
+        assert_eq!(state.announcement, "Undid change to Headline.");
+        state.redo().expect("headline edit can be redone");
+        assert_eq!(state.announcement, "Redid change to Headline.");
+    }
+
+    #[test]
+    fn successful_save_clears_history_and_locks_undo_while_in_flight() {
+        let mut state = loaded_editor_state();
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Saved headline"),
+                    effective_value: None,
+                },
+            )
+            .expect("edit schedules preview");
+        let capture = state.begin_save().expect("dirty editor can save");
+
+        assert!(state.undo().is_none());
+        assert!(!state.can_undo());
+
+        let saved_values = state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values
+            .clone();
+        state
+            .finish_save(&capture, "revision-2".to_owned(), saved_values)
+            .expect("saved revision refreshes preview");
+        assert!(!state.can_undo());
+        assert!(!state.can_save());
+    }
+
+    #[test]
+    fn editor_history_stays_locked_for_retryable_and_stale_saves() {
+        for (stale, retryable) in [(false, true), (true, false)] {
+            let mut state = loaded_editor_state();
+            state
+                .set_setting(
+                    "section.hero.title",
+                    EditorSettingValue {
+                        kind: "text".to_owned(),
+                        value: serde_json::json!("Pending headline"),
+                        effective_value: None,
+                    },
+                )
+                .expect("edit schedules preview");
+            let capture = state.begin_save().expect("dirty editor can save");
+            assert!(state.fail_save(
+                &capture,
+                stale,
+                retryable,
+                "save result unavailable".to_owned()
+            ));
+
+            assert!(state.undo().is_none());
+            assert!(state.redo().is_none());
+            assert!(!state.can_undo());
+            assert!(!state.can_redo());
+        }
     }
 
     #[test]
