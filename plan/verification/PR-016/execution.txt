@@ -1,0 +1,26 @@
+PR-016 native CLI verification
+Evidence refreshed: 2026-10-14T21:26:45Z
+Branch: feat/016_cli
+Base commit: af25dec5e0469e796016906e9210e85f86ca2fd9
+Verified source commit: 814776eaa3419f8c334dfe223e5e4ba8273c53a9
+Source fingerprint: 2e478194caec63987521d1993eaf00472f8c57d6df7fa9240d1b777062a6f3d4 (14 files)
+Fingerprint inputs and compressed/raw log hashes are recorded in results.json.
+
+Implementation:
+- Adds endpoint configuration, funnel list/create/publish, immutable mutation retry tickets, and Wrangler deploy forwarding.
+- Create and publish save exact idempotent requests before sending; tickets pin endpoint/body/key and expire at 23 hours.
+- Bounds ordinary success bodies at 2 MiB, editor reads at 8 MiB, and error bodies at 16 KiB.
+- The release matrix builds and tests on Linux, macOS, and Windows for PRs; release artifact upload remains tag-only.
+- Independent review findings for response size, endpoint normalization/size, native test coverage, expired ticket cleanup, and stale plan status were resolved.
+
+Validation (all listed commands exited 0):
+- `source .project-tools/env.sh && cargo xtask check`: workspace tests, formatting, Clippy, and layer checks passed. Log: `plan/verification/PR-016/logs/cargo-check-final.log.gz`.
+- `source .project-tools/env.sh && cargo xtask ci`: full checks, WASM/assets, local Worker/D1 smoke, and audit step completed. RustSec loaded 1,329 advisories and scanned 355 locked dependencies. Four yanked-status requests returned 403 in this captured run; the pipeline still exited 0. Log: `plan/verification/PR-016/logs/cargo-ci-final.log.gz`.
+- `source .project-tools/env.sh && cargo +1.88.0 audit`: exit 0, 355 dependencies, zero findings. Log: `plan/verification/PR-016/logs/audit-final.log.gz`.
+- `source .project-tools/env.sh && cargo +1.85.0 test --locked -p eez-cli`: 6 unit and 11 process tests passed using the release workflow toolchain. Log: `plan/verification/PR-016/logs/rust-1.85-cli-tests.log.gz`.
+- `bash scripts/smoke-pr016.sh`: local Worker/D1 integration passed from outside the checkout and verified cleanup. Log: `plan/verification/PR-016/logs/smoke-pr016.log.gz`.
+- `git diff --check`, shell syntax, and added-line audit passed with no comments or TODO/FIXME/HACK markers. Log: `plan/verification/PR-016/logs/static-audit.log.gz`.
+
+Delivery:
+- Hosted CI and @codex exact-head review are pending the PR. The review comment will identify the exact SHA and concrete review request.
+- No remote D1 operation, production deployment, or cloud environment publication ran.

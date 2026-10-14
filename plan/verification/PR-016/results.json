@@ -1,0 +1,148 @@
+{
+  "task": "PR-016",
+  "evidence_refreshed_at_utc": "2026-10-14T21:26:45Z",
+  "branch": "feat/016_cli",
+  "base_commit": "af25dec5e0469e796016906e9210e85f86ca2fd9",
+  "verified_source_commit": "814776eaa3419f8c334dfe223e5e4ba8273c53a9",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for the source files listed in source_sha256; plan/STATUS.md and verification artifacts are excluded.",
+  "source_fingerprint_sha256": "2e478194caec63987521d1993eaf00472f8c57d6df7fa9240d1b777062a6f3d4",
+  "source_file_count": 14,
+  "source_sha256": {
+    ".github/workflows/release.yml": "829c53351fa8335e38698dfe5a5f76825c3d1e219dbbfb74f0dce9b14e1253a6",
+    "Cargo.lock": "9bf2e6451ce0bd43e201ba51aa4515b66b859790d9cffb43294e7077731590f8",
+    "apps/cli/Cargo.toml": "81ee00813d642e02d7dec8cf7bbb6fa002e4ccaf369d1d49251a2e0dd470dc30",
+    "apps/cli/README.md": "8a26edd8a202dce99900b56fdcf9c26f60ee7714d0906138520ed67c7bdd55b6",
+    "apps/cli/src/main.rs": "f0e78af1ad33d967edfc47b775310607d7d20e635564bcb56a9e8a92ab2412bd",
+    "apps/cli/src/deploy.rs": "bf27065be0be7bc66f4db8345a495eebb20fdf4a19308d0151c4cfbf3295356b",
+    "apps/cli/src/funnels.rs": "da9a7e9419adbba964cbc8ed3c095e6b8394ce2583a2d67148472ead11f8fbd9",
+    "apps/cli/src/state.rs": "93c854f028ba7dc2ab5a2cb7aeb849779dcf3f5e1224a6fb82a733bb3979edfe",
+    "apps/cli/src/types.rs": "583d36c3762613b8c65a0735e80682b150915d3f020b177f344adcdef6c2b966",
+    "apps/cli/tests/process.rs": "d59b3788c6cce15fd01f6a7b009ef10951faad70ef958cfe384a2405c1ea7bcb",
+    "xtask/tests/bootstrap_cli.rs": "d11b8c7b09f93a413997189da8b10921f82bd1213449c478a5a5cc0389459511",
+    "scripts/smoke-pr016.sh": "66893708c73651173636c2c6ced6a885ca06b521d6c3ea7c90d545bc9a01958f",
+    "plan/decisions/D20_native_cli.md": "6514f8d6b3e7e494d53fc443ec7c41b63b3d877fcdae73c8d65949c3c9357439",
+    "plan/coverage.md": "f27873de0f54d6cd901b81beaf99172542fa350792d06c62b59cb72d66743ea2"
+  },
+  "implementation": {
+    "commands": [
+      "config set endpoint",
+      "funnels list",
+      "funnels create",
+      "funnels publish",
+      "funnels retry",
+      "deploy"
+    ],
+    "mutation_recovery": "Durable immutable operation tickets pin endpoint, route, body, and idempotency UUID; retries expire after 23 hours.",
+    "response_bounds_bytes": {
+      "ordinary_success": 2097152,
+      "editor_read_success": 8388608,
+      "errors": 16384
+    },
+    "release_matrix": "PRs build and test the CLI natively on Linux, macOS, and Windows; artifact upload remains tag-only.",
+    "review_findings_resolved": [
+      "editor response bound",
+      "endpoint raw/normalized and serialized size bounds",
+      "native platform tests",
+      "expired ticket cleanup",
+      "plan status handoff"
+    ]
+  },
+  "validation": {
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "nonzero_test_suite_counts": [
+        15,
+        6,
+        11,
+        29,
+        34,
+        13,
+        35,
+        5,
+        26,
+        2,
+        6
+      ],
+      "log": {
+        "path": "plan/verification/PR-016/logs/cargo-check-final.log.gz",
+        "sha256": "e387cd38fa9ae2bf5cd094b6c65a33fe3cb0fb9c895cc7b192309afc7fbd9e61",
+        "raw_sha256": "9f0d6d926898b1213345d427e41156376c4331eade44282468742a3ff5cc512a",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "advisories_loaded": 1329,
+      "locked_dependencies_scanned": 355,
+      "worker_smoke_markers": [
+        "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400",
+        "list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403"
+      ],
+      "registry_note": "The captured full CI log contains four 403 responses while querying crate yanked status; the pipeline returned exit 0. The standalone audit also completed successfully.",
+      "log": {
+        "path": "plan/verification/PR-016/logs/cargo-ci-final.log.gz",
+        "sha256": "923fc6079589cf1dfe3c20e20b8e940b42dc8376439714fb66f5208b505cbe82",
+        "raw_sha256": "1dc8e31cfb7a9441ac25ee95b93aaa74c4015ac4dd8fb1750da0b54b9db619a0",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "standalone_audit": {
+      "command": "source .project-tools/env.sh && cargo +1.88.0 audit",
+      "exit_code": 0,
+      "locked_dependencies_scanned": 355,
+      "findings": 0,
+      "log": {
+        "path": "plan/verification/PR-016/logs/audit-final.log.gz",
+        "sha256": "e8afde70d50891df205dcac80a1f88b1a5b63791f975a94500613baec6108ea2",
+        "raw_sha256": "1ac5e7a6dae5832eb32c5d909751b169a9f1911bec9e5339d2305d316cfdd264",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "rust_1_85_cli_tests": {
+      "command": "source .project-tools/env.sh && cargo +1.85.0 test --locked -p eez-cli",
+      "exit_code": 0,
+      "unit_tests": 6,
+      "process_tests": 11,
+      "log": {
+        "path": "plan/verification/PR-016/logs/rust-1.85-cli-tests.log.gz",
+        "sha256": "6844c7ee7512a2e364c1ac743ef986c0dee74bab71404284cfe340d636b62e6d",
+        "raw_sha256": "dd3050878f135761ae6b9246d3e3f160a2b81a5aa6f780bfb26c49168e0a0124",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "local_worker_d1_smoke": {
+      "command": "bash scripts/smoke-pr016.sh",
+      "exit_code": 0,
+      "scope": "Isolated local D1 and Worker; CLI invoked outside checkout; script asserts port and Worker process cleanup.",
+      "log": {
+        "path": "plan/verification/PR-016/logs/smoke-pr016.log.gz",
+        "sha256": "c7c5f583d4284ee0827e18c5217239f3e5c2019daca8ffe2d0163ea02530967d",
+        "raw_sha256": "09cacf9bf1486c07456ec0236e30572eaf4ff7f3fd4709e703e98f1bb7a43c2f",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "static_audit": {
+      "exit_code": 0,
+      "added_source_comments": 0,
+      "TODO_FIXME_HACK": 0,
+      "log": {
+        "path": "plan/verification/PR-016/logs/static-audit.log.gz",
+        "sha256": "89e303bc84aa7abc379c127262153c1e01159183d1606f1e253c89575f245851",
+        "raw_sha256": "92138b0d747cf04a158a983208ee274be4da058fe705fd27c394e6e173675d38",
+        "compression": "gzip -n; gzip -cd restores captured output"
+      }
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  },
+  "delivery": {
+    "hosted_ci": "Pending on the PR exact head.",
+    "codex_review": "Request @codex review on the PR exact head; user requested @codex tagging for review/edit/question requests.",
+    "remote_database_or_deployment": false,
+    "cloud_environment_published": false
+  }
+}
