@@ -867,17 +867,16 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                 }
                 let capture = match event.key() {
                     Key::Character(value) if value.eq_ignore_ascii_case("z") => {
+                        event.prevent_default();
                         state.with_mut(EditorState::undo)
                     }
                     Key::Character(value) if value.eq_ignore_ascii_case("y") => {
+                        event.prevent_default();
                         state.with_mut(EditorState::redo)
                     }
-                    _ => None,
+                    _ => return,
                 };
-                if capture.is_some() {
-                    event.prevent_default();
-                    schedule_editor_preview(state, capture);
-                }
+                schedule_editor_preview(state, capture);
             },
         section { class: "page-heading",
             p { class: "eyebrow", "Funnels / Editor" }
