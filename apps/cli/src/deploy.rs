@@ -97,12 +97,11 @@ mod tests {
             std::fs::create_dir_all(&node_dir).unwrap();
             std::fs::write(node_dir.join("node.exe"), "").unwrap();
             let actual = windows_launcher(vec![bin, node_dir.clone()]).unwrap();
+            assert_eq!(actual.executable, node_dir.join("node.exe"));
+            assert_eq!(actual.prefix.len(), 1);
             assert_eq!(
-                actual,
-                Launcher {
-                    executable: node_dir.join("node.exe"),
-                    prefix: vec![script.into_os_string()]
-                }
+                PathBuf::from(&actual.prefix[0]).canonicalize().unwrap(),
+                script.canonicalize().unwrap()
             );
         }
     }
