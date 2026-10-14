@@ -1,6 +1,6 @@
 {
   "task": "PR-008",
-  "evidence_refreshed_at_utc": "2026-10-14T01:49:08Z",
+  "evidence_refreshed_at_utc": "2026-10-14T01:59:32Z",
   "branch": "feat/008_dashboard",
   "base_commit": "7ade40e9ed3cb917d380d762beeb5a01916f1e83",
   "verified_source_commit": "cf05024e0130185648cb83fadf9fdabd70754d63",
@@ -97,10 +97,17 @@
       "outcome": "Workspace checks/tests, strict layer validation, API WASM build, dashboard browser WASM/wasm-bindgen asset bundle, and cargo audit all passed.",
       "wasm_sha256": {
         "eez_api.wasm": {
+          "path": "/workspace/.eezfunnel-pr008-architecture-final-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
           "bytes": 52042835,
           "sha256": "2b6e4f6b9ea35a003045d90f5d8cdb062d596cdc925bcbca216c061b23852932"
         },
         "eez_dashboard.wasm": {
+          "path": "/workspace/.eezfunnel-pr008-architecture-final-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
+          "bytes": 1523290,
+          "sha256": "d215532c4cad60ff19a8a331cb6a1457af1794b0e9cb2cd505acd16a4892b879"
+        },
+        "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
+          "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
           "bytes": 632043,
           "sha256": "93eb64c2e67a8ece0c46a0bce888bb1be7cbe76b9f0d9ed1f7ce6f755f8ea81d"
         }
@@ -245,9 +252,10 @@
     "No remote binding or production deployment was run."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Pending for the new evidence head. Prior run 38494723514 passed on superseded head 1755fd8b13444d4d70a4164a8924ca10eab444b7; verify hosted CI on the pushed final head.",
-    "previous_run_id": 38494723514,
-    "previous_head": "1755fd8b13444d4d70a4164a8924ca10eab444b7"
+    "status_at_evidence_capture": "Run 38497769183 passed on evidence head 73a8d12e89bd5d790379e10325991398fc1918f4. These documentation-only corrections create a new PR head and require a hosted run on that exact SHA.",
+    "previous_run_id": 38497769183,
+    "previous_head": "73a8d12e89bd5d790379e10325991398fc1918f4",
+    "previous_conclusion": "SUCCESS"
   },
   "reviews": {
     "codex": "The prior hydration P1 on c5d440c was fixed by the outer mount container. A later L4 layering finding on 1755fd8 was resolved by the L1 presentation extraction in cf05024. Request one new review only after hosted CI is green on the exact pushed evidence head.",

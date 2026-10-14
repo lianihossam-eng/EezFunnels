@@ -1,6 +1,6 @@
 PR-008 Dashboard shell verification
 
-Evidence refreshed: 2026-10-14T01:49:08Z
+Evidence refreshed: 2026-10-14T01:59:32Z
 Branch: feat/008_dashboard
 Base commit: 7ade40e9ed3cb917d380d762beeb5a01916f1e83
 Verified source commit: cf05024e0130185648cb83fadf9fdabd70754d63
@@ -23,6 +23,7 @@ Checks:
 - `source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr008-architecture-final-ci cargo +1.85.0 test -p eez-dashboard-presentation --locked`: exit 0; 6 tests. Log SHA-256: `601eebc6736f001e07ca3cfb8dba2beeefa75e161a8f022356f20d9699617c32`.
 - `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0; fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, presentation 6, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 5. Final log SHA-256: `9424c6c1b5ee79ab76aa6a4ac39321b9b827c1c8a1b04cd3d0dc6d869195d207`.
 - Fresh-target `cargo xtask ci` at `/workspace/.eezfunnel-pr008-architecture-final-ci`: exit 0 (`CI_EXIT=0`). It passed workspace checks/tests, API WASM, dashboard browser WASM/wasm-bindgen asset generation, and cargo audit. Audit 0.22.2 loaded 1,310 advisories, scanned 345 locked dependencies, and reported zero findings. Log SHA-256: `0958c4e9f5dcf9c44e89154a8c3fd5e6869a8cff806280e27abeac4200cbc1a7`.
+- Raw WASM outputs are distinguished from the browser asset: API debug `eez_api.wasm` is 52,042,835 bytes; dashboard Cargo release `eez_dashboard.wasm` is 1,523,290 bytes; wasm-bindgen output `apps/dashboard/dist/assets/eezfunnel_bg.wasm` is 632,043 bytes. Hashes and paths are listed in results.json.
 - `git diff --check` passed. The no-comments review found no comments, TODO/FIXME markers, or lint suppressions added or removed. `#![forbid(unsafe_code)]` remains in the app and presentation crates; `expect` calls remain test-only.
 
 Local-only Wrangler smoke after the final feature split:
