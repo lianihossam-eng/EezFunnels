@@ -1028,6 +1028,8 @@ dependencies = [
  "eez-domain",
  "serde",
  "serde_json",
+ "sha2",
+ "uuid",
  "web-sys",
 ]
 
