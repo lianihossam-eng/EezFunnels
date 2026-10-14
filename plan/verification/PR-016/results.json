@@ -1,6 +1,6 @@
 {
   "task": "PR-016",
-  "evidence_refreshed_at_utc": "2026-10-14T21:39:24Z",
+  "evidence_refreshed_at_utc": "2026-10-14T22:06:34Z",
   "branch": "feat/016_cli",
   "base_commit": "af25dec5e0469e796016906e9210e85f86ca2fd9",
   "verified_source_commit": "9d5922001c5160673bfb56c76e22a1b856173e2d",
@@ -74,8 +74,8 @@
       ],
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-check-final.log.gz",
-        "sha256": "ebb33d636379d134c3dec388d903142df9c1b5b98968ec7258bcae8aabf94b06",
-        "raw_sha256": "d2f33b290529781c63f411c759a0b47b5fdf0bf837993d9abf0ab3e5eda61550",
+        "sha256": "590ac79c55136c0949bc4c466aeca9761d451a766499bbee585e4bee0bdf8f05",
+        "raw_sha256": "2730cd6cfbef0181bfff1b4fa5b94931df70cde9df6936896e4d811ebe3f455c",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -91,8 +91,8 @@
       "registry_note": "Final exact-source local run completed without yanked-status 403 responses. An earlier run with four 403 responses is retained in initial_registry_retry.",
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-ci-final.log.gz",
-        "sha256": "94438ac3e54e85afc6a5a6ee3cac26be47a6b437ece29a1cda07766b432c1145",
-        "raw_sha256": "052b2ba54f5ae4f2cd8ffdf771f29dca9fc8bc14db16bcad179246d963b87f76",
+        "sha256": "598a6378e5eb9bb2d1255b6eeefc1ee2bed30e8655dc400bedbeae4adac4c385",
+        "raw_sha256": "4460ab6c1de5e73a3d20f3a23db7e07f50e1369ff9822eb9c586a127b0ddaf3e",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -115,8 +115,8 @@
       "process_tests": 11,
       "log": {
         "path": "plan/verification/PR-016/logs/rust-1.85-cli-tests.log.gz",
-        "sha256": "6df0f7f3bf27fa2220cd4b3203e9bbace5d699c5de16ff8bbf2922e04bc7ecc1",
-        "raw_sha256": "08d153c6401fd2eb5a565e1707959530dcabcd0822d53d6566c5a5967f02f558",
+        "sha256": "e6e623beee9658642c462c6d0bbec3f7476e100b302496ef6eed172e13a561e0",
+        "raw_sha256": "0c5658bf8e3c111314d3b0fb9ef17091f85bdb1264ef04d4e2ebf486b4597126",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -158,9 +158,10 @@
     }
   },
   "delivery": {
-    "hosted_ci": "Pending on updated PR exact head.",
-    "codex_review": "Request @codex review on the final exact head after the Windows and macOS portability fixes.",
+    "hosted_ci": "Passed on exact PR head 32dd5bd7240e37d865a0b7c6b9ee78a690c741ac: CI run 38641945016 and native Linux, Apple Silicon macOS, and Windows release-matrix run 38641945005.",
+    "codex_review": "Completed on exact PR head 32dd5bd7240e37d865a0b7c6b9ee78a690c741ac; @codex reported no major issues after the portability fixes.",
     "remote_database_or_deployment": false,
-    "cloud_environment_published": false
+    "cloud_environment_published": false,
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/17"
   }
 }

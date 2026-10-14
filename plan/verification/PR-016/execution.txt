@@ -1,5 +1,5 @@
 PR-016 native CLI verification
-Evidence refreshed: 2026-10-14T21:39:24Z
+Evidence refreshed: 2026-10-14T22:06:34Z
 Branch: feat/016_cli
 Base commit: af25dec5e0469e796016906e9210e85f86ca2fd9
 Verified source commit: 9d5922001c5160673bfb56c76e22a1b856173e2d
@@ -24,5 +24,6 @@ Validation (all listed commands exited 0):
 - An earlier full CI run had four yanked-status 403 responses; a successful exact-source rerun is recorded at `plan/verification/PR-016/logs/cargo-ci-final.log.gz`. Earlier log: `plan/verification/PR-016/logs/cargo-ci-initial-registry-403.log.gz`.
 
 Delivery:
-- Hosted CI and @codex exact-head review are pending the updated PR head. The review comment will identify the final SHA and request confirmation of the portability fixes.
+- PR #17: https://github.com/lianihossam-eng/EezFunnels/pull/17. Hosted CI run `38641945016` and native Linux, Apple Silicon macOS, and Windows release matrix run `38641945005` passed on exact head `32dd5bd7240e37d865a0b7c6b9ee78a690c741ac`.
+- `@codex` reviewed that exact head after the portability fixes and reported no major issues. Review requests and responses are recorded on PR #17.
 - No remote D1 operation, production deployment, or cloud environment publication ran.
