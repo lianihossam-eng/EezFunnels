@@ -1,0 +1,18 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: {"selectedLabel":"Desktop (1280 px)","frameClientWidth":1280,"browsingContextWidth":1280,"documentWidth":1280,"featureColumns":4,"featureGridWidth":1104,"funnelWidth":1280,"sectionOrder":["hero","features","cta"],"canvas":{"clientWidth":401,"scrollWidth":1280},"pageWidth":{"clientWidth":1360,"scrollWidth":1360}}
+
+4 !== 3
+
+    at file:///workspace/EezFunnels/scripts/test-pr010-browser.mjs:426:14 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 4,
+  expected: 3,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0

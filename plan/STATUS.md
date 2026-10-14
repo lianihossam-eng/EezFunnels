@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-012 Undo/redo (`feat/012_history`; PR #13 open; local gates and evidence pass; hosted CI/review state tracked on the current PR head)
+Current phase: PR-013 Responsive preview (`feat/013_responsive`; based on merged main `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -17,8 +17,8 @@ Last updated: 2026-10-14
 - [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
-- [ ] PR-012 Undo/redo (`feat/012_history`; PR #13 open; source fixes `1c7b40b` and `b0cd5ed` pass local gates; hosted CI and Sol re-review are required on the current PR head)
-- [ ] PR-013 Responsive preview
+- [x] PR-012 Undo/redo (PR #13 merged at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`; hosted CI run `38611264446` passed on reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27`)
+- [ ] PR-013 Responsive preview (`feat/013_responsive`; implementation in progress)
 - [ ] PR-014 Publication /f/:slug
 - [ ] PR-015 Command registry
 - [ ] PR-016 CLI
@@ -196,6 +196,23 @@ https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`; Sol rev
 Fresh two-reviewer interrogate found zero actionable findings, and no-comments found no comments,
 actionable TODO/FIXME markers, suppressions, or workaround prose. Exact source-fingerprint evidence
 is recorded in `plan/verification/PR-012/`.
+
+PR-012 is complete. The final reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27` passed
+hosted CI run `38611264446`, including `cargo xtask ci`, migration, and browser coverage. PR #13
+merged on main at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`. The browser regression verifies DOM
+mutations and input events; actual screen-reader speech delivery was not tested. No remote D1
+operation, Cloudflare deployment, or environment publication was performed.
+
+PR-013's implementation is verified at source commit `d2db41f7dcd94635b89fc183f3313d5e2ec4c7f4`.
+The private viewport switcher sets the preview iframe to 375, 768, or 1280 CSS pixels and keeps the
+selection outside editor/history/API state. Hydrated browser snapshots measure the actual iframe
+and funnel widths, feature-grid columns/card widths, and section order; the narrow dashboard keeps
+horizontal overflow inside the preview canvas. `cargo xtask check`, `cargo xtask ci` (including
+local smoke and audit), the migration harness, and responsive browser suite pass; axe reports zero
+critical findings. Interrogate's redundant duplicate snapshot assertion was removed and the browser
+suite rerun. No renderer, API, contract, migration, dependency, or lockfile surface changed. Exact
+source and log fingerprints are recorded in `plan/verification/PR-013/`. The browser verifies
+responsive geometry and DOM accessibility state; it does not test assistive-technology speech.
 
 The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
 Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel

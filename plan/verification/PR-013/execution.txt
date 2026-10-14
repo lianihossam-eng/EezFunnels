@@ -1,0 +1,30 @@
+PR-013 responsive preview verification
+Evidence refreshed: 2026-10-14T18:54:03Z
+Branch: feat/013_responsive
+Base commit: a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8 (exact origin/main SHA)
+Verified source commit: d2db41f7dcd94635b89fc183f3313d5e2ec4c7f4
+Source fingerprint: 9ce690087fb88e73c54efa8027c5f5954b1af158495825f2a4c1d05feb922e4b (121 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.
+
+Implementation and boundaries:
+- A private `PreviewViewport` enum provides Mobile 375 px, Tablet 768 px, and Desktop 1280 px.
+- The private preview component owns transient viewport selection. Changing width does not add editor history, change draft/save state, or issue preview/save requests. A preview refresh retains the selection while the component remains mounted.
+- The iframe receives the exact selected width, with its border removed so the browsing context measures exactly the chosen CSS pixels. The focusable preview canvas owns horizontal scrolling; a 1280 px preview does not widen the dashboard page at its narrow viewport.
+- The named viewport button group uses native buttons and `aria-pressed`; iframe title, empty sandbox, and existing `srcdoc` security behavior remain intact.
+- Responsive coverage captures measured iframe, browsing-context, document, feature-grid, feature-card, and section-order geometry at all three sizes. This is a structured layout snapshot, not a pixel-comparison PNG. Critical axe findings: 0.
+- The browser test verifies accessible names/pressed state and DOM behavior, but does not establish screen-reader speech delivery.
+- No API, renderer, storage, migration, contract, dependency, or lockfile changes.
+
+Validation:
+- `source .project-tools/env.sh && cargo xtask check`: PASS. Log `cargo-check.log`; SHA-256 `251913c764af347447907d970b7110e615147bb88618994315da0fe3fbc11b56`.
+- `source .project-tools/env.sh && cargo xtask ci`: PASS; workspace tests, dashboard WASM, local migration and PR-009 smoke, and audit. RustSec loaded 1,314 advisories, scanned 346 locked dependencies, and reported zero vulnerabilities. Log `cargo-ci.log`; SHA-256 `dd224599a41460386d7bbba73561d38372e5f7912f53cda2dbcaa75137401803`.
+- `npm run test:pr010:migration`: PASS; zero/multi-revision preflight and valid backfill. Log `migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `node scripts/test-pr010-browser.mjs`: PASS; PR-010/011/012/013 hydrated browser coverage, including responsive snapshots, inspector, preview/save, duplicate-key rejection, CAS/idempotency, and race checks. Axe critical findings: 0. Log `browser-final.log`; SHA-256 `c552e794706fb5447c9c94a4e8c696a5bf6e7f1aeda070445b5b3216579eaba9`.
+- `git diff --check --cached -- . ':(exclude)plan/verification/PR-013/*.log'` and frozen-surface path checks: PASS. Raw captured logs are retained verbatim; two contain tool-output trailing/blank whitespace and are excluded from the whitespace check. Their exact hashes are recorded in results.json. No contract, renderer, command/API, migration, manifest, or lockfile files changed.
+- Interrogate reported one low-severity duplicate snapshot assertion; it was removed, and the final browser suite passed. No correctness or security issue was reported.
+- No-comments audit against origin/main: zero added/modified/deleted code comments, TODO/FIXME markers, suppressions, workaround prose, constraint comments, or MUST KILL findings. Comment Sicko independently confirmed.
+- `browser-red.log` records the expected failing-first browser run before the responsive component existed. `browser-final.log` records the final passing run.
+
+Delivery boundaries:
+- No remote database operation, Cloudflare deployment, publication, PR review, or merge was performed.
+- Production readiness remains false pending hosted CI and GPT-6.1-Sol review of the PR.
