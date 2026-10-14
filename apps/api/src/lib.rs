@@ -92,6 +92,10 @@ pub async fn fetch(
         error_response(&error, correlation_id.clone())
     } else if request_path == "/api/funnels" {
         funnel_collection_response(&env, request, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/preview") {
+        funnel_editor_preview_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/revisions") {
+        funnel_editor_save_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = request_path.strip_prefix("/api/funnels/") {
         funnel_item_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
@@ -169,6 +173,7 @@ fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
 }
 
 const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_EDITOR_REQUEST_BYTES: usize = 16 * 1024;
 
 async fn funnel_collection_response(
     env: &Env,
@@ -248,14 +253,177 @@ async fn unreadable_create_payload_response(
     }
 }
 
+async fn funnel_editor_preview_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::POST {
+        return method_not_allowed_for(&correlation_id, "POST");
+    }
+    if !valid_funnel_route_id(funnel_id) {
+        return funnel_route_not_found_response(&correlation_id);
+    }
+    let body = match to_bytes(
+        axum::body::Body::new(request.into_body()),
+        MAX_EDITOR_REQUEST_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
+    };
+    let body = match std::str::from_utf8(&body) {
+        Ok(body) => body,
+        Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
+    };
+    let parameters = match editor_command_parameters(funnel_id, body) {
+        Ok(parameters) => parameters,
+        Err(code) => return editor_payload_error_response(&correlation_id, code),
+    };
+    match execute_funnel_command(env, "funnel.editor.preview", &parameters, None).await {
+        Ok(result) => {
+            let mut response = json_success_response(result, StatusCode::OK, &correlation_id, None);
+            response
+                .headers_mut()
+                .insert("cache-control", HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => funnel_command_error_response(error, &correlation_id),
+    }
+}
+
+async fn funnel_editor_save_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::PUT {
+        return method_not_allowed_for(&correlation_id, "PUT");
+    }
+    if !valid_funnel_route_id(funnel_id) {
+        return funnel_route_not_found_response(&correlation_id);
+    }
+    let idempotency_key = match request_idempotency_key(request.headers()) {
+        Ok(key) => key,
+        Err(code) => {
+            let error = ApiError::from_code(code);
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
+    };
+    let body = match to_bytes(
+        axum::body::Body::new(request.into_body()),
+        MAX_EDITOR_REQUEST_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(_) => {
+            return unreadable_editor_payload_response(env, &idempotency_key, &correlation_id).await
+        }
+    };
+    let body = match std::str::from_utf8(&body) {
+        Ok(body) => body,
+        Err(_) => {
+            return unreadable_editor_payload_response(env, &idempotency_key, &correlation_id).await
+        }
+    };
+    let parameters = match editor_command_parameters(funnel_id, body) {
+        Ok(parameters) => parameters,
+        Err(code) => {
+            return execute_unreadable_editor_payload(env, &idempotency_key, code, &correlation_id)
+                .await
+        }
+    };
+    match execute_funnel_command(
+        env,
+        "funnel.revision.save",
+        &parameters,
+        Some(&idempotency_key),
+    )
+    .await
+    {
+        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Err(error) => funnel_command_error_response(error, &correlation_id),
+    }
+}
+
+async fn unreadable_editor_payload_response(
+    env: &Env,
+    idempotency_key: &str,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    execute_unreadable_editor_payload(
+        env,
+        idempotency_key,
+        "validation/invalid_json",
+        correlation_id,
+    )
+    .await
+}
+
+async fn execute_unreadable_editor_payload(
+    env: &Env,
+    idempotency_key: &str,
+    fresh_error_code: &'static str,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    match execute_funnel_command(env, "funnel.revision.save", "null", Some(idempotency_key)).await {
+        Err(error) => funnel_command_error_response(error, correlation_id),
+        Ok(_) => editor_payload_error_response(correlation_id, fresh_error_code),
+    }
+}
+
+fn editor_command_parameters(funnel_id: &str, body: &str) -> Result<String, &'static str> {
+    let mut value: Value = serde_json::from_str(body).map_err(|_| "validation/invalid_json")?;
+    let object = value.as_object_mut().ok_or("validation/invalid_json")?;
+    if object
+        .keys()
+        .any(|key| key != "base_revision_id" && key != "section_ids")
+    {
+        return Err("validation/invalid_json");
+    }
+    object.insert("funnel_id".to_owned(), Value::String(funnel_id.to_owned()));
+    serde_json::to_string(&value).map_err(|_| "internal/unexpected")
+}
+
+fn editor_payload_error_response(
+    correlation_id: &str,
+    code: &'static str,
+) -> Response<axum::body::Body> {
+    let error = ApiError::from_code(code);
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
+}
+
 async fn funnel_item_response(
     env: &Env,
     request: HttpRequest,
     funnel_id: &str,
     correlation_id: String,
 ) -> Response<axum::body::Body> {
+    if request.method() == Method::GET {
+        if !valid_funnel_route_id(funnel_id) {
+            return funnel_route_not_found_response(&correlation_id);
+        }
+        let parameters = serde_json::json!({ "funnel_id": funnel_id }).to_string();
+        return match execute_funnel_command(env, "funnel.editor.read", &parameters, None).await {
+            Ok(result) => {
+                let mut response =
+                    json_success_response(result, StatusCode::OK, &correlation_id, None);
+                response
+                    .headers_mut()
+                    .insert("cache-control", HeaderValue::from_static("no-store"));
+                response
+            }
+            Err(error) => funnel_command_error_response(error, &correlation_id),
+        };
+    }
     if request.method() != Method::DELETE {
-        return method_not_allowed_for(&correlation_id, "DELETE");
+        return method_not_allowed_for(&correlation_id, "GET,DELETE");
     }
     let valid_route_id = valid_funnel_route_id(funnel_id);
     let idempotency_key = match request_idempotency_key(request.headers()) {
@@ -332,6 +500,16 @@ fn valid_funnel_route_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn funnel_subroute<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    let prefix = path.strip_suffix(suffix)?;
+    let funnel_id = prefix.strip_prefix("/api/funnels/")?;
+    if funnel_id.is_empty() || funnel_id.contains('/') {
+        None
+    } else {
+        Some(funnel_id)
+    }
 }
 
 fn funnel_command_error_response(

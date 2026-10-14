@@ -30,6 +30,7 @@ tower-service = "0.3"
 dioxus = { version = "=0.7.10", default-features = false, features = ["minimal", "router", "document"] }
 dioxus-fullstack-core = { version = "=0.7.10", default-features = false }
 dioxus-web = { version = "=0.7.10", default-features = false }
+dioxus-dnd = { version = "=3.1.0", default-features = false, features = ["web"] }
 wasm-bindgen = "=0.2.129"
 rmcp = "1.4"
 sha2 = { version = "0.10", default-features = false }
