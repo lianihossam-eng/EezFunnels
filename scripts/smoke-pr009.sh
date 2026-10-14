@@ -472,6 +472,22 @@ request() {
     -H "Host: localhost:$port" "$@" "$base_url$path"
 }
 
+assert_error_response() {
+  local response_file="$1"
+  local actual_status="$2"
+  local expected_status="$3"
+  local expected_code="$4"
+  python3 - "$response_file" "$actual_status" "$expected_status" "$expected_code" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == sys.argv[3], (sys.argv[2], response)
+assert response["code"] == sys.argv[4], response
+PY
+}
+
 seed_expired_receipt() {
   local key="$1"
   local command_id="${2:-funnel.create}"
@@ -612,6 +628,49 @@ with open(sys.argv[1], encoding="utf-8") as response_file:
 assert sys.argv[2] == "400", (sys.argv[2], response)
 assert response["code"] == "validation/invalid_json", response
 PY
+
+python3 - "$state_dir/oversized-create.bin" "$state_dir/invalid-utf8-create.bin" <<'PY'
+import sys
+
+with open(sys.argv[1], "wb") as oversized:
+    oversized.write(b'{"name":"' + b'x' * 130 + b'","blueprint":"tripwire"}' + b' ' * 16384)
+with open(sys.argv[2], "wb") as invalid_utf8:
+    invalid_utf8.write(b'{"name":"bad\xffname","blueprint":"tripwire"}')
+PY
+
+oversized_active_status="$(request POST /api/funnels "$state_dir/oversized-active.json" \
+  "$state_dir/oversized-active.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-1' --data-binary "@$state_dir/oversized-create.bin")"
+assert_error_response "$state_dir/oversized-active.json" "$oversized_active_status" 409 \
+  conflict/idempotency_payload_mismatch
+oversized_fresh_status="$(request POST /api/funnels "$state_dir/oversized-fresh.json" \
+  "$state_dir/oversized-fresh.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-oversized-fresh' --data-binary "@$state_dir/oversized-create.bin")"
+assert_error_response "$state_dir/oversized-fresh.json" "$oversized_fresh_status" 400 validation/invalid_json
+seed_expired_receipt pr009-create-oversized-expired
+oversized_expired_status="$(request POST /api/funnels "$state_dir/oversized-expired.json" \
+  "$state_dir/oversized-expired.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-oversized-expired' --data-binary "@$state_dir/oversized-create.bin")"
+assert_error_response "$state_dir/oversized-expired.json" "$oversized_expired_status" 400 \
+  validation/invalid_json
+
+invalid_utf8_active_status="$(request POST /api/funnels "$state_dir/invalid-utf8-active.json" \
+  "$state_dir/invalid-utf8-active.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-1' --data-binary "@$state_dir/invalid-utf8-create.bin")"
+assert_error_response "$state_dir/invalid-utf8-active.json" "$invalid_utf8_active_status" 409 \
+  conflict/idempotency_payload_mismatch
+invalid_utf8_fresh_status="$(request POST /api/funnels "$state_dir/invalid-utf8-fresh.json" \
+  "$state_dir/invalid-utf8-fresh.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-invalid-utf8-fresh' --data-binary "@$state_dir/invalid-utf8-create.bin")"
+assert_error_response "$state_dir/invalid-utf8-fresh.json" "$invalid_utf8_fresh_status" 400 \
+  validation/invalid_json
+seed_expired_receipt pr009-create-invalid-utf8-expired
+invalid_utf8_expired_status="$(request POST /api/funnels "$state_dir/invalid-utf8-expired.json" \
+  "$state_dir/invalid-utf8-expired.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-invalid-utf8-expired' \
+  --data-binary "@$state_dir/invalid-utf8-create.bin")"
+assert_error_response "$state_dir/invalid-utf8-expired.json" "$invalid_utf8_expired_status" 400 \
+  validation/invalid_json
 
 for blueprint in vsl webinar launch lead_gen; do
   blueprint_payload="{\"name\":\"Blueprint $blueprint\",\"blueprint\":\"$blueprint\"}"
