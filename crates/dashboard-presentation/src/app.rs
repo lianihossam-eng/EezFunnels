@@ -9,7 +9,7 @@ use dioxus::router::components::HistoryProvider;
 use crate::routes::RouteView;
 
 #[component]
-pub(crate) fn WebApp(initial_path: String) -> Element {
+pub fn WebApp(initial_path: String) -> Element {
     let initial_path = initial_path.clone();
 
     rsx! {

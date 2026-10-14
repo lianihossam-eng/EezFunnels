@@ -108,7 +108,7 @@ pub async fn fetch(
     {
         asset_response(&env, request).await?
     } else if request.method() == Method::GET {
-        match eez_dashboard::render_document(&request_path) {
+        match eez_dashboard_presentation::render_document(&request_path) {
             Some(document) => dashboard_response(document),
             None => {
                 let mut router = router();

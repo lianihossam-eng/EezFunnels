@@ -25,7 +25,8 @@ mod unix {
                 "crates/storage",
                 "crates/commands",
                 "apps/api",
-                "apps/dashboard/assets",
+                "crates/dashboard-presentation/assets",
+                "apps/dashboard",
                 "apps/cli",
                 "xtask",
             ] {
@@ -33,12 +34,12 @@ mod unix {
                     .expect("create workspace fixture package");
             }
             fs::write(
-                workspace.join("apps/dashboard/assets/bootstrap.js"),
+                workspace.join("crates/dashboard-presentation/assets/bootstrap.js"),
                 "export {};\n",
             )
             .expect("write fixture bootstrap");
             fs::write(
-                workspace.join("apps/dashboard/assets/dashboard.css"),
+                workspace.join("crates/dashboard-presentation/assets/dashboard.css"),
                 "body {}\n",
             )
             .expect("write fixture stylesheet");
@@ -125,6 +126,11 @@ mod unix {
                 serde_json::json!({"layer": 1}),
             ),
             (
+                "eez-dashboard-presentation",
+                "crates/dashboard-presentation",
+                serde_json::json!({"layer": 1}),
+            ),
+            (
                 "eez-storage",
                 "crates/storage",
                 serde_json::json!({"layer": 2}),
@@ -138,7 +144,7 @@ mod unix {
             (
                 "eez-dashboard",
                 "apps/dashboard",
-                serde_json::json!({"layer": 3}),
+                serde_json::json!({"layer": 4}),
             ),
             ("eez-cli", "apps/cli", serde_json::json!({"layer": 4})),
             ("xtask", "xtask", serde_json::json!({"role": "tool"})),

@@ -54,7 +54,7 @@ Install Rust 1.85.0 with rustfmt, clippy, and the wasm32-unknown-unknown target.
 ```bash
 source .project-tools/env.sh
 cargo xtask check
-cargo build -p eez-dashboard --target wasm32-unknown-unknown --locked
+cargo build -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --locked
 cargo run -p eez-cli --locked -- --help
 ```
 

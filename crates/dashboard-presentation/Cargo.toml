@@ -1,0 +1,23 @@
+[package]
+name = "eez-dashboard-presentation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[package.metadata.eez]
+layer = 1
+
+[dependencies]
+dioxus.workspace = true
+dioxus-fullstack-core = { workspace = true, optional = true }
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus-web = { workspace = true, features = ["hydrate", "document"], optional = true }
+web-sys = { version = "0.3", features = ["Window", "Location"], optional = true }
+
+[features]
+default = ["ssr"]
+ssr = ["dioxus/ssr", "dep:dioxus-fullstack-core"]
+browser = ["dioxus/web", "dep:dioxus-web", "dep:web-sys"]

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_web::launch::launch_cfg;
 
-use crate::app::WebApp;
+use eez_dashboard_presentation::WebApp;
 
 fn browser_root() -> Element {
     rsx! {

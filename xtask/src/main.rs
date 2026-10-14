@@ -227,7 +227,7 @@ fn run_dashboard_assets(root: &Path, cargo: &OsStr) -> Result<(), String> {
 
     for name in ["bootstrap.js", "dashboard.css"] {
         fs::copy(
-            root.join("apps/dashboard/assets").join(name),
+            root.join("crates/dashboard-presentation/assets").join(name),
             output_directory.join(name),
         )
         .map_err(|error| format!("cannot copy dashboard asset {name}: {error}"))?;
