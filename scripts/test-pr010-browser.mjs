@@ -488,6 +488,85 @@ try {
     assert.equal(await historyTitle.inputValue(), savedTitle);
   }
 
+  {
+    const boundaryTitle = page.locator('[id="setting-section.hero.title"]');
+    const savedTitle = await boundaryTitle.inputValue();
+    const finalHistoryValue = "PR-012 boundary edit 100";
+    await page.evaluate((id) => {
+      window.__historyBoundaryKeys = [];
+      window.__historyBoundaryInputEvents = 0;
+      document.addEventListener("keydown", (event) => {
+        if (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "z" || event.key === "y")) {
+          window.__historyBoundaryKeys.push({ key: event.key, defaultPrevented: event.defaultPrevented });
+        }
+      });
+      document.addEventListener("input", (event) => {
+        if (event.target?.id === id) window.__historyBoundaryInputEvents += 1;
+      }, true);
+    }, "setting-section.hero.title");
+
+    for (let index = 1; index <= 100; index += 1) {
+      const preview = editorPreviewResponse(page, primaryId);
+      await boundaryTitle.fill(`PR-012 boundary edit ${index}`);
+      assert.equal((await preview).status(), 200);
+    }
+    assert.equal(await boundaryTitle.inputValue(), finalHistoryValue);
+    assert.equal(await page.getByRole("button", { name: "Redo" }).isDisabled(), true);
+
+    const assertBlockedAtBoundary = async (shortcut, expectedValue) => {
+      const inputEventsBefore = await page.evaluate(() => window.__historyBoundaryInputEvents);
+      await page.keyboard.press(shortcut);
+      assert.equal(await boundaryTitle.inputValue(), expectedValue, `${shortcut} changed the editor input at an empty history direction`);
+      assert.equal(await page.evaluate(() => window.__historyBoundaryKeys.at(-1)?.defaultPrevented), true);
+      assert.equal(await page.evaluate(() => window.__historyBoundaryInputEvents), inputEventsBefore);
+    };
+
+    await assertBlockedAtBoundary("Control+y", finalHistoryValue);
+    let historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+z");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: "PR-012 boundary edit 99" },
+    );
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+y");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: finalHistoryValue },
+    );
+
+    for (let index = 100; index >= 1; index -= 1) {
+      const preview = editorPreviewResponse(page, primaryId);
+      await page.keyboard.press("Control+z");
+      assert.equal((await preview).status(), 200);
+      const expectedValue = index === 1 ? savedTitle : `PR-012 boundary edit ${index - 1}`;
+      await page.waitForFunction(
+        ({ id, value }) => document.getElementById(id)?.value === value,
+        { id: "setting-section.hero.title", value: expectedValue },
+      );
+    }
+    assert.equal(await page.getByRole("button", { name: "Undo" }).isDisabled(), true);
+    await assertBlockedAtBoundary("Control+z", savedTitle);
+
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+y");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: "PR-012 boundary edit 1" },
+    );
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await page.keyboard.press("Control+z");
+    assert.equal((await historyPreview).status(), 200);
+    await page.waitForFunction(
+      ({ id, value }) => document.getElementById(id)?.value === value,
+      { id: "setting-section.hero.title", value: savedTitle },
+    );
+    assert.equal(await boundaryTitle.inputValue(), savedTitle);
+  }
+
   const editorSaveButton = page.getByRole("button", { name: "Save revision" });
   await page.locator('[data-editor-section="hero"]').focus();
   await page.keyboard.press("Space");
