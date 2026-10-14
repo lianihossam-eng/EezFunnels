@@ -22,6 +22,10 @@ repository publication invariant.
 The receipt claim and pointer change are one D1 batch. The receipt is inserted only when
 the funnel exists, the target is owned and supported, and the expected pointer still
 matches; the pointer update is gated by the exact receipt payload and repeats the CAS.
+The pointer update also requires that this batch newly claimed one receipt row. A matching
+active receipt already stored by an earlier batch can replay its result but cannot authorize
+another pointer mutation, including after the pointer changes away and later returns to the
+request's expected baseline.
 Unpublish uses the same receipt-first replay behavior and CAS, setting the pointer to
 NULL. A loser creates no receipt and no partial mutation. An active same-key/same-payload
 receipt replays the stored response before current state is checked; key or payload reuse
@@ -31,6 +35,10 @@ preventing a stale request from recording success.
 The HTTP adapter rejects duplicate JSON object keys before normalizing the body. For an
 ambiguous body it classifies the key without a payload: an active receipt returns the
 existing idempotency mismatch, and a fresh key returns `validation/invalid_json`.
+The adapter injects the route ID into the command before typed parsing, so command execution
+can classify an active key before returning a route error. An invalid route ID cannot mutate
+state: an active key mismatches against the different injected route ID, while a fresh request
+returns `not_found/funnel`.
 
 Public lookup performs one joined read from slug to its currently published immutable
 revision. Missing and unpublished slugs both return `not_found/slug`. The command decoder
@@ -41,6 +49,8 @@ request. The response uses the revision ID as a strong quoted ETag and
 only after confirming the slug still has a published revision, so unpublishing cannot
 turn a stale ETag into a 304. A newly published revision naturally receives a different
 ETag. This does not promise CDN purge or immediate edge eviction.
+If a persisted published revision has an unsupported schema version, the public route
+returns `validation/schema_version_unsupported` with HTTP 400.
 
 Verification covers receipt replay and mismatch, successful and stale CAS, owned-revision
 isolation, atomic publish/unpublish state, rendering from the stored manifest, ETag and

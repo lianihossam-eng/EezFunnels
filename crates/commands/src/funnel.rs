@@ -155,7 +155,6 @@ impl FunnelPublishCommand {
     const ID: &'static str = "funnel.publish";
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
-        let command: Self = serde_json::from_str(parameters)?;
         let value: Value = serde_json::from_str(parameters)?;
         let object = value
             .as_object()
@@ -166,6 +165,7 @@ impl FunnelPublishCommand {
         {
             return Err(FunnelCommandError::MissingField);
         }
+        let command: Self = serde_json::from_str(parameters)?;
         validate_route_id(&command.funnel_id)?;
         validate_route_id(&command.revision_id)?;
         if let Some(expected) = &command.expected_published_revision_id {
@@ -186,7 +186,6 @@ impl FunnelUnpublishCommand {
     const ID: &'static str = "funnel.unpublish";
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
-        let command: Self = serde_json::from_str(parameters)?;
         let value: Value = serde_json::from_str(parameters)?;
         let object = value
             .as_object()
@@ -197,6 +196,7 @@ impl FunnelUnpublishCommand {
         {
             return Err(FunnelCommandError::MissingField);
         }
+        let command: Self = serde_json::from_str(parameters)?;
         validate_route_id(&command.funnel_id)?;
         validate_route_id(&command.expected_published_revision_id)?;
         Ok(command)
@@ -1242,6 +1242,9 @@ impl FunnelCommandError {
             Self::Storage(RepositoryError::RevisionNotFound) => "not_found/revision",
             Self::Storage(RepositoryError::InvalidJson | RepositoryError::InvalidField(_)) => {
                 "validation/invalid_json"
+            }
+            Self::Storage(RepositoryError::UnsupportedSchemaVersion(_)) => {
+                "validation/schema_version_unsupported"
             }
             Self::Storage(_) => "external/unavailable",
             Self::Internal => "internal/unexpected",

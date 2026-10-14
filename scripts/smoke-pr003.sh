@@ -214,6 +214,9 @@ observed = {
     "current_revision_noop_accepted": response["current_revision_noop_accepted"],
     "publication_baseline_cas_successes": response["publication_baseline_cas_successes"],
     "distinct_candidate_cas_successes": response["distinct_candidate_cas_successes"],
+    "publication_replay_interleavings_safe": response[
+        "publication_replay_interleavings_safe"
+    ],
 }
 print(f"publication_regression_observations={json.dumps(observed, sort_keys=True)}")
 failures = []
@@ -231,6 +234,8 @@ if observed["publication_baseline_cas_successes"] != 1:
     failures.append("a published baseline produced more than one successful CAS")
 if observed["distinct_candidate_cas_successes"] != 1:
     failures.append("distinct candidates did not produce exactly one winner")
+if not observed["publication_replay_interleavings_safe"]:
+    failures.append("late publication/unpublication replay reapplied a pointer mutation")
 assert not failures, failures
 assert response["correlation_id"] == "pr003-smoke-products"
 assert response["publication_race_funnel_id"] == "pr003-race-funnel"

@@ -613,6 +613,26 @@ assert "<h1>First offer</h1>" in html, html
 assert "etag: \"" in headers, headers
 assert "cache-control: public" in headers, headers
 PY
+invalid_publish_route_replay_status="$(request POST "/api/funnels/invalid!/publish" "$state_dir/invalid-publish-route-replay.json" "$state_dir/invalid-publish-route-replay.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-1' --data "$publish_payload")"
+assert_error_response "$state_dir/invalid-publish-route-replay.json" "$invalid_publish_route_replay_status" 409 conflict/idempotency_payload_mismatch
+invalid_publish_route_fresh_status="$(request POST "/api/funnels/invalid!/publish" "$state_dir/invalid-publish-route-fresh.json" "$state_dir/invalid-publish-route-fresh.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-invalid-route-fresh' --data "$publish_payload")"
+assert_error_response "$state_dir/invalid-publish-route-fresh.json" "$invalid_publish_route_fresh_status" 404 not_found/funnel
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES ('pr014-unsupported-public-revision', '$funnel_id', 2, '{}', '{}');" \
+  > "$state_dir/insert-unsupported-public-revision.json"
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "UPDATE funnels SET published_revision_id = 'pr014-unsupported-public-revision' WHERE id = '$funnel_id';" \
+  > "$state_dir/publish-unsupported-public-revision.json"
+unsupported_public_status="$(request GET "/f/$funnel_slug" "$state_dir/unsupported-public.json" "$state_dir/unsupported-public.headers")"
+assert_error_response "$state_dir/unsupported-public.json" "$unsupported_public_status" 400 validation/schema_version_unsupported
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "UPDATE funnels SET published_revision_id = '$revision_id' WHERE id = '$funnel_id';" \
+  > "$state_dir/restore-published-revision.json"
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "DELETE FROM revisions WHERE id = 'pr014-unsupported-public-revision';" \
+  > "$state_dir/delete-unsupported-public-revision.json"
 publish_etag="$(awk 'BEGIN{IGNORECASE=1} /^ETag:/ {gsub("\r", ""); sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' "$state_dir/published.headers")"
 conditional_status="$(request GET "/f/$funnel_slug" "$state_dir/not-modified.body" "$state_dir/not-modified.headers" \
   -H "If-None-Match: W/$publish_etag")"
@@ -633,6 +653,18 @@ used_key_mismatch_status="$(request POST "/api/funnels/$funnel_id/publish" "$sta
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-1' \
   --data "{\"revision_id\":\"$revision_2\",\"expected_published_revision_id\":\"$revision_id\"}")"
 assert_error_response "$state_dir/used-key-mismatch.json" "$used_key_mismatch_status" 409 conflict/idempotency_payload_mismatch
+missing_publish_revision_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/missing-publish-revision.json" "$state_dir/missing-publish-revision.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-missing-revision' \
+  --data '{"expected_published_revision_id":null}')"
+assert_error_response "$state_dir/missing-publish-revision.json" "$missing_publish_revision_status" 400 validation/missing_field
+missing_publish_revision_used_key_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/missing-publish-revision-used-key.json" "$state_dir/missing-publish-revision-used-key.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-1' \
+  --data '{"expected_published_revision_id":null}')"
+assert_error_response "$state_dir/missing-publish-revision-used-key.json" "$missing_publish_revision_used_key_status" 409 conflict/idempotency_payload_mismatch
+missing_unpublish_baseline_status="$(request POST "/api/funnels/$funnel_id/unpublish" "$state_dir/missing-unpublish-baseline.json" "$state_dir/missing-unpublish-baseline.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-unpublish-missing-baseline' \
+  --data '{}')"
+assert_error_response "$state_dir/missing-unpublish-baseline.json" "$missing_unpublish_baseline_status" 400 validation/missing_field
 stale_publish_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/stale-publish.json" "$state_dir/stale-publish.headers" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-stale' \
   --data "{\"revision_id\":\"$revision_2\",\"expected_published_revision_id\":null}")"
@@ -691,7 +723,7 @@ else
   publish_winner_id="$revision_4"
 fi
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
-  --command "SELECT (SELECT published_revision_id FROM funnels WHERE id = '$funnel_id') AS published_revision_id, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-cross-funnel-publish','pr014-publish-stale','pr014-publish-duplicate-fresh')) AS rejected_receipts, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-publish-race-a','pr014-publish-race-b')) AS race_receipts, (SELECT published_revision_id FROM funnels WHERE id = '$foreign_funnel_id') AS foreign_published_revision_id;" \
+  --command "SELECT (SELECT published_revision_id FROM funnels WHERE id = '$funnel_id') AS published_revision_id, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-cross-funnel-publish','pr014-publish-stale','pr014-publish-duplicate-fresh','pr014-publish-invalid-route-fresh')) AS rejected_receipts, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-publish-race-a','pr014-publish-race-b')) AS race_receipts, (SELECT published_revision_id FROM funnels WHERE id = '$foreign_funnel_id') AS foreign_published_revision_id;" \
   > "$state_dir/publication-state-after-race.json"
 python3 - "$state_dir/publication-state-after-race.json" "$publish_winner_id" <<'PY'
 import json
@@ -734,10 +766,35 @@ assert_error_response "$state_dir/unpublished.json" "$unpublished_status" 404 no
 unpublish_replay_status="$(request POST "/api/funnels/$funnel_id/unpublish" "$state_dir/unpublish-replay.json" "$state_dir/unpublish-replay.headers" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-unpublish-1' --data "$unpublish_payload")"
 test "$unpublish_replay_status" = 200
+missing_unpublish_baseline_used_key_status="$(request POST "/api/funnels/$funnel_id/unpublish" "$state_dir/missing-unpublish-baseline-used-key.json" "$state_dir/missing-unpublish-baseline-used-key.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-unpublish-1' --data '{}')"
+assert_error_response "$state_dir/missing-unpublish-baseline-used-key.json" "$missing_unpublish_baseline_used_key_status" 409 conflict/idempotency_payload_mismatch
+late_publish_replay_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/late-publish-replay.json" "$state_dir/late-publish-replay.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-1' --data "$publish_payload")"
+test "$late_publish_replay_status" = 200
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
-  --command "SELECT (SELECT published_revision_id FROM funnels WHERE id = '$funnel_id') AS published_revision_id, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-cross-funnel-publish','pr014-publish-stale','pr014-publish-duplicate-fresh','pr014-unpublish-stale')) AS rejected_receipts, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-publish-1','pr014-publish-2','pr014-unpublish-1')) AS successful_receipts;" \
+  --command "SELECT published_revision_id FROM funnels WHERE id = '$funnel_id';" \
+  > "$state_dir/publication-state-after-late-publish-replay.json"
+python3 - "$state_dir/publication-state-after-late-publish-replay.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as file:
+    result = json.load(file)
+state = result[-1]["results"][0]
+assert state == {"published_revision_id": None}, state
+PY
+publish_after_unpublish_payload="{\"revision_id\":\"$publish_winner_id\",\"expected_published_revision_id\":null}"
+publish_after_unpublish_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/publish-after-unpublish.json" "$state_dir/publish-after-unpublish.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-after-unpublish' --data "$publish_after_unpublish_payload")"
+test "$publish_after_unpublish_status" = 200
+late_unpublish_replay_status="$(request POST "/api/funnels/$funnel_id/unpublish" "$state_dir/late-unpublish-replay.json" "$state_dir/late-unpublish-replay.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-unpublish-1' --data "$unpublish_payload")"
+test "$late_unpublish_replay_status" = 200
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "SELECT (SELECT published_revision_id FROM funnels WHERE id = '$funnel_id') AS published_revision_id, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-cross-funnel-publish','pr014-publish-stale','pr014-publish-duplicate-fresh','pr014-unpublish-stale','pr014-publish-missing-revision','pr014-unpublish-missing-baseline')) AS rejected_receipts, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key IN ('pr014-publish-1','pr014-publish-2','pr014-unpublish-1','pr014-publish-after-unpublish')) AS successful_receipts;" \
   > "$state_dir/publication-state-after-unpublish.json"
-python3 - "$state_dir/publication-state-after-unpublish.json" <<'PY'
+python3 - "$state_dir/publication-state-after-unpublish.json" "$publish_winner_id" <<'PY'
 import json
 import sys
 
@@ -745,9 +802,9 @@ with open(sys.argv[1], encoding="utf-8") as file:
     result = json.load(file)
 state = result[-1]["results"][0]
 assert state == {
-    "published_revision_id": None,
+    "published_revision_id": sys.argv[2],
     "rejected_receipts": 0,
-    "successful_receipts": 3,
+    "successful_receipts": 4,
 }, state
 PY
 
@@ -1194,5 +1251,5 @@ assert sys.argv[2] == "403", (sys.argv[2], response)
 assert response["code"] == "authorization/host_not_allowed", response
 PY
 
-printf 'PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404\n'
+printf 'PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400\n'
 printf 'list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403\n'
