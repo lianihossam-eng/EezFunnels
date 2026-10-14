@@ -88,6 +88,10 @@ fn preview_blocks_navigation_and_remote_images_with_restrictive_policy() {
     assert!(!preview.contains("href="));
     assert!(!preview.contains("<img "));
     assert!(!preview.contains("src="));
+    assert!(preview.contains("img-src 'none'"));
+    assert!(preview.contains("class=\"hero-image-placeholder\""));
+    assert!(preview.contains("Image preview: Offer"));
+    assert!(preview.contains("https://example.com/image.png"));
 }
 
 #[test]

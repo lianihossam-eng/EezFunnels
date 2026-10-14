@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-010 Visual editor (`feat/010_editor`; local gates pass, accessibility and RustSec fixes await Sol re-review and hosted CI on the updated head)
+Current phase: PR-011 Inspector (`feat/011_inspector`; local gates and five-control browser suite pass; hosted CI and Sol review pending)
 Last updated: 2026-10-14
 
 ## Phases
@@ -15,7 +15,7 @@ Last updated: 2026-10-14
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
 - [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
-- [ ] PR-010 Visual editor
+- [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
 - [ ] PR-013 Responsive preview
@@ -29,13 +29,16 @@ Last updated: 2026-10-14
 
 ## Verified locally
 
-PR-010's reviewed head `44a62f1a4089b9ea289c225cb696d68e7d102a1a` had a live-region gap during
-keyboard reorder; the current working-tree fix announces the moved section and its 1-based position.
-The locked Rustls dependency was updated from 0.23.45 to 0.23.46, resolving four RustSec advisories
-without adding a manifest dependency or changing contracts. Fresh `cargo xtask check`, `cargo xtask
-ci`, migration, focused state, and browser checks pass. The updated source fingerprint and logs are
-recorded in `plan/verification/PR-010`. PR-010 remains open pending Sol re-review and hosted CI on
-the pushed head. No remote migration, deployment, or merge occurred.
+PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
+`883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
+inspector for text, color, select, toggle, and image controls, including preview and V2 persistence
+for validated theme overrides. It preserves V1 decoding and order-only requests, strict duplicate
+key rejection, C-01/C-04 idempotency/CAS behavior, and the existing 16 KiB API request cap; no
+frozen contract, manifest dependency, or migration changed. Fresh `cargo xtask ci`, aggregate-budget
+and request-contract regressions, migration preflight, and five-control browser coverage pass.
+Fingerprinted evidence is recorded in `plan/verification/PR-011`. PR-011 is awaiting PR creation,
+Sol review, and hosted CI on its pushed head. No remote migration, Cloudflare deployment, or merge
+was run for PR-011.
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
 implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository

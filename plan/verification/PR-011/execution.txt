@@ -1,0 +1,28 @@
+PR-011 settings inspector verification
+Evidence refreshed: 2026-10-14T15:24:28Z
+Branch: feat/011_inspector
+Base commit: 883ee7b98f0203d38654f15d2633010da9e420ee (exact merged origin/main SHA)
+Verified source commit: pending implementation commit; source fingerprint below identifies the tested working tree.
+Source fingerprint: 43876cd1437143fbae23d901a776a7895dd1cec4afa4286b4156bbec0627d6de (120 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
+
+Implementation and compatibility:
+- D16 adds a closed server-owned settings schema for text, color, select, toggle, and image controls. The inspector only maps existing typed section content and theme tokens; no arbitrary content, CSS, HTML, or client-owned schema is accepted.
+- Validated edits preview live and save as immutable V2 settings snapshots when theme overrides require them. V1 remains strict and decodes unchanged; V1 order-only saves remain V1. Duplicate keys, unknown fields, malformed values, and unknown controls fail closed.
+- The API request cap remains 16 KiB and the command cap remains 17 KiB. Settings changes have a 12 KiB aggregate serialized budget alongside existing per-field and count bounds. No frozen contract, manifest dependency, or SQL migration changed. D16 supersedes only D15's order-only settings restriction; idempotency/CAS and preview sandbox invariants remain intact.
+- The inspector DTOs, state helpers, and controls now live in `crates/dashboard-presentation/src/routes/editor/inspector.rs`. The editor route is 1,616 lines versus 1,059 at the exact base; inspector UI and setting behavior are isolated in the new child module.
+
+Validation:
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Log: `/tmp/pr011-cargo-xtask-check-final.log`; SHA-256: `ef64a9341c8a1418e19fe81667f3dbdead8fb61ace7bb62dbecd6952c983d5ff`.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask ci`: exit 0. Workspace check/tests, WASM build, dashboard asset generation, local D1 smoke, and cargo audit passed. Audit loaded 1,314 advisories, scanned 346 locked dependencies, and reported zero findings. Log: `/tmp/pr011-cargo-xtask-ci-contract-fix.log`; SHA-256: `971d2aaf66f05d4a9d2a4bcfa619b6c5f2ff2780a39b1819c5a7686b94212e8e`.
+- `npm run test:pr011:browser`: exit 0. Navigation, keyboard and pointer reorder, all five inspector controls, live preview, V2 save/reload, sandbox/network isolation, save replay, stale CAS, and route-race checks passed. Axe critical findings: 0. Log: `/tmp/pr011-browser-final.log`; SHA-256: `b223ed0cdafee395f1cfba1ce7b296983c18bf82fffd844c491118af96a41621`.
+- Aggregate budget boundary regression: exact 12 KiB accepted, one byte over rejected, and constructed API request remains within 16 KiB. Exit 0. Log: `/tmp/pr011-parser-budget.log`; SHA-256: `eedc8905a0829b92dcfbdec5c48a4de8d282daaa91b3d2a113013a177978cabc`.
+- Request contract regression: body contains `base_revision_id`, excludes `expected_revision_id`, and settings payload carries schema version 1. Exit 0. Log: `/tmp/pr011-request-contract.log`; SHA-256: `09419de75b5bb6b00d21ba134f57e4a474f2f160214f778b1c5a1a52b3104540`.
+- `npm run test:pr010:migration`: exit 0. Zero/multiple revision preflight and valid backfill fixtures pass; PR-011 adds no migration. Log: `/tmp/pr011-migration-check.log`; SHA-256: `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `node --check scripts/test-pr010-browser.mjs` and `git diff --check origin/main`: passed.
+
+Review and delivery:
+- Final local interrogate reviewers found no open findings after fixing the request key to `base_revision_id` and splitting the inspector module.
+- Final project no-comments/Comment Sicko audits found zero comment additions/deletions, TODO/FIXME markers, lint suppressions, or substantive workaround prose. Diff check passed.
+- Hosted CI is pending push and PR creation. PR review and merge are reserved for GPT-6.1-Sol.
+- No remote D1 operation, Cloudflare deployment, publication, or merge occurred.

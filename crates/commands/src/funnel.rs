@@ -15,8 +15,12 @@ use eez_storage::repository::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "funnel/editor_settings.rs"]
+pub(super) mod inspector;
+
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
+const MAX_EDITOR_COMMAND_BYTES: usize = 17 * 1_024;
 const EMPTY_ASSETS_HASH: &str =
     "assets-sha256-v1:8b3972abe1696375524a8237889ff77fa13664876dd51ede33db93795b8d5cca";
 
@@ -179,10 +183,15 @@ struct FunnelEditorOrderCommand {
     funnel_id: String,
     base_revision_id: String,
     section_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings: Option<inspector::SettingChanges>,
 }
 
 impl FunnelEditorOrderCommand {
     fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        if parameters.len() > MAX_EDITOR_COMMAND_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
         let value: Value = serde_json::from_str(parameters)?;
         let object = value
             .as_object()
@@ -192,6 +201,9 @@ impl FunnelEditorOrderCommand {
             .any(|field| object.get(*field).is_none())
         {
             return Err(FunnelCommandError::MissingField);
+        }
+        if object.get("settings").is_some_and(Value::is_null) {
+            return Err(FunnelCommandError::InvalidParameters);
         }
         let command: Self = serde_json::from_str(parameters)?;
         validate_route_id(&command.funnel_id)?;
@@ -204,6 +216,13 @@ impl FunnelEditorOrderCommand {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         }) {
             return Err(FunnelCommandError::InvalidParameters);
+        }
+        let mut command = command;
+        if let Some(settings) = &command.settings {
+            settings.validate_envelope()?;
+            if settings.changes.is_empty() {
+                command.settings = None;
+            }
         }
         Ok(command)
     }
@@ -305,6 +324,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 })
             })
             .collect::<Vec<_>>();
+        let (settings_schema, settings_values) = inspector::inspector_projection(&validated)?;
         Ok(serde_json::json!({
             "command_id": FunnelEditorReadCommand::ID,
             "funnel": {
@@ -315,6 +335,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
             },
             "base_revision_id": record.head_revision_id,
             "sections": sections,
+            "settings_schema": settings_schema,
+            "settings_values": settings_values,
             "preview_html": preview_html,
         }))
     }
@@ -328,12 +350,22 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .ok_or(FunnelCommandError::FunnelNotFound)?;
         let validated = decode_snapshot(&record, &command.funnel_id)?;
         let ordered = reorder_snapshot(&validated, &command.section_ids)?;
-        let html =
-            Renderer::new().render_preview(&ordered.revision, &ordered.theme, &ordered.contents)?;
+        let edited = apply_command_settings(&ordered, command.settings.as_ref())?;
+        let html = Renderer::new()
+            .render_preview(&edited.revision, &edited.theme, &edited.contents)
+            .map_err(|_| {
+                if command.settings.is_some() {
+                    FunnelCommandError::InvalidParameters
+                } else {
+                    FunnelCommandError::Internal
+                }
+            })?;
+        let settings_values = inspector::inspector_projection(&edited)?.1;
         Ok(serde_json::json!({
             "command_id": "funnel.editor.preview",
             "base_revision_id": command.base_revision_id,
             "section_ids": command.section_ids,
+            "settings_values": settings_values,
             "preview_html": html,
         }))
     }
@@ -376,7 +408,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .await?
             .ok_or(FunnelCommandError::FunnelNotFound)?;
         let validated = decode_snapshot(&record, &command.funnel_id)?;
-        let mut ordered = reorder_snapshot(&validated, &command.section_ids)?;
+        let ordered = reorder_snapshot(&validated, &command.section_ids)?;
+        let mut ordered = apply_command_settings(&ordered, command.settings.as_ref())?;
         let new_revision_id = uuid::Uuid::new_v4().to_string();
         let revision_id = RevisionId::new(new_revision_id.clone())?;
         let manifest = RenderManifest::new(
@@ -411,14 +444,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .iter()
             .map(SectionSnapshotV1::from)
             .collect();
-        let data_json =
-            serde_json::to_string(&ordered.snapshot).map_err(|_| FunnelCommandError::Internal)?;
+        let schema_version = i64::from(revision.schema_version().value());
+        ordered.revision = revision;
+        let data_json = inspector::encode_snapshot(&ordered.snapshot)?;
         let render_manifest_json = serde_json::to_string(&RenderManifestV1::from(&manifest))
             .map_err(|_| FunnelCommandError::Internal)?;
         let new_revision = NewRevision {
             id: new_revision_id.clone(),
             funnel_id: command.funnel_id.clone(),
-            schema_version: i64::from(revision.schema_version().value()),
+            schema_version,
             data_json,
             render_manifest_json,
         };
@@ -427,6 +461,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             "funnel_id": command.funnel_id,
             "revision_id": new_revision_id,
             "section_ids": command.section_ids,
+            "settings_values": inspector::inspector_projection(&ordered)?.1,
         }))
         .map_err(|_| FunnelCommandError::Internal)?;
         let result = self
@@ -657,7 +692,76 @@ impl FunnelSnapshotV1 {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SectionSnapshotV1 {
+pub(super) struct FunnelSnapshotV2 {
+    format_version: u16,
+    schema_version: u32,
+    blueprint: FunnelBlueprint,
+    theme_id: ThemePreset,
+    sections: Vec<SectionSnapshotV1>,
+    contents: BTreeMap<String, SectionContent>,
+    theme_overrides: ThemeOverrides,
+}
+
+#[derive(Deserialize)]
+struct SnapshotFormatProbe {
+    format_version: u16,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ThemeOverrides {
+    pub(super) primary_color: Option<String>,
+    pub(super) square_buttons: bool,
+}
+
+impl ThemeOverrides {
+    fn is_default(&self) -> bool {
+        self.primary_color.is_none() && !self.square_buttons
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct SnapshotData {
+    pub(super) format_version: u16,
+    pub(super) schema_version: u32,
+    pub(super) blueprint: FunnelBlueprint,
+    pub(super) theme_id: ThemePreset,
+    pub(super) sections: Vec<SectionSnapshotV1>,
+    pub(super) contents: BTreeMap<String, SectionContent>,
+    pub(super) theme_overrides: ThemeOverrides,
+}
+
+impl From<FunnelSnapshotV1> for SnapshotData {
+    fn from(snapshot: FunnelSnapshotV1) -> Self {
+        Self {
+            format_version: 1,
+            schema_version: snapshot.schema_version,
+            blueprint: snapshot.blueprint,
+            theme_id: snapshot.theme_id,
+            sections: snapshot.sections,
+            contents: snapshot.contents,
+            theme_overrides: ThemeOverrides::default(),
+        }
+    }
+}
+
+impl From<FunnelSnapshotV2> for SnapshotData {
+    fn from(snapshot: FunnelSnapshotV2) -> Self {
+        Self {
+            format_version: snapshot.format_version,
+            schema_version: snapshot.schema_version,
+            blueprint: snapshot.blueprint,
+            theme_id: snapshot.theme_id,
+            sections: snapshot.sections,
+            contents: snapshot.contents,
+            theme_overrides: snapshot.theme_overrides,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SectionSnapshotV1 {
     id: String,
     #[serde(rename = "type")]
     section_type: String,
@@ -676,7 +780,7 @@ impl From<&Section> for SectionSnapshotV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RenderManifestV1 {
+pub(super) struct RenderManifestV1 {
     revision_id: String,
     theme_version: String,
     renderer_version: String,
@@ -698,7 +802,7 @@ impl From<&RenderManifest> for RenderManifestV1 {
 
 #[derive(Clone)]
 pub(super) struct ValidatedSnapshot {
-    pub(super) snapshot: FunnelSnapshotV1,
+    pub(super) snapshot: SnapshotData,
     pub(super) revision: Revision,
     pub(super) theme: ThemeTokens,
     pub(super) contents: BTreeMap<String, SectionContent>,
@@ -711,9 +815,23 @@ pub(super) fn decode_snapshot(
     if record.data_json.len() > MAX_SNAPSHOT_BYTES || record.funnel_id != expected_funnel_id {
         return Err(FunnelCommandError::Internal);
     }
-    let snapshot: FunnelSnapshotV1 =
-        serde_json::from_str(&record.data_json).map_err(|_| FunnelCommandError::Internal)?;
-    if snapshot.format_version != 1
+    let format_version = serde_json::from_str::<SnapshotFormatProbe>(&record.data_json)
+        .map_err(|_| FunnelCommandError::Internal)?
+        .format_version;
+    let snapshot = match format_version {
+        1 => {
+            let snapshot: FunnelSnapshotV1 = serde_json::from_str(&record.data_json)
+                .map_err(|_| FunnelCommandError::Internal)?;
+            SnapshotData::from(snapshot)
+        }
+        2 => {
+            let snapshot: FunnelSnapshotV2 = serde_json::from_str(&record.data_json)
+                .map_err(|_| FunnelCommandError::Internal)?;
+            SnapshotData::from(snapshot)
+        }
+        _ => return Err(FunnelCommandError::Internal),
+    };
+    if snapshot.format_version != format_version as u16
         || snapshot.schema_version != 1
         || i64::from(snapshot.schema_version) != record.schema_version
     {
@@ -728,8 +846,8 @@ pub(super) fn decode_snapshot(
         RevisionId::new(record.id.clone()).map_err(|_| FunnelCommandError::Internal)?;
     let funnel_id =
         FunnelId::new(expected_funnel_id.to_owned()).map_err(|_| FunnelCommandError::Internal)?;
-    let theme =
-        ThemeTokens::from_preset(snapshot.theme_id).map_err(|_| FunnelCommandError::Internal)?;
+    let theme = inspector::effective_theme(snapshot.theme_id, &snapshot.theme_overrides)
+        .map_err(|_| FunnelCommandError::Internal)?;
     if manifest.theme_version != theme.version() {
         return Err(FunnelCommandError::Internal);
     }
@@ -741,6 +859,11 @@ pub(super) fn decode_snapshot(
         manifest.config_hash,
     )
     .map_err(|_| FunnelCommandError::Internal)?;
+    if let Some(color) = &snapshot.theme_overrides.primary_color {
+        if !inspector::is_canonical_hex_color(color) {
+            return Err(FunnelCommandError::Internal);
+        }
+    }
     let sections = snapshot
         .sections
         .iter()
@@ -815,6 +938,16 @@ pub(super) fn reorder_snapshot(
         .collect();
     reordered.revision = revision;
     Ok(reordered)
+}
+
+fn apply_command_settings(
+    source: &ValidatedSnapshot,
+    settings: Option<&inspector::SettingChanges>,
+) -> Result<ValidatedSnapshot, FunnelCommandError> {
+    match settings {
+        Some(settings) => inspector::apply_editor_changes(source, &settings.changes),
+        None => Ok(source.clone()),
+    }
 }
 
 #[derive(Debug)]
