@@ -16,8 +16,8 @@
 | F-012 | Undo/redo                  | PR-012 | COVERAGE_DEFINED   |
 | F-013 | Responsive preview         | PR-013 | COVERAGE_DEFINED   |
 | F-014 | Publication /f/:slug       | PR-014 | COVERAGE_DEFINED   |
-| F-015 | Command registry           | PR-015 | COVERAGE_DEFINED   |
-| F-016 | CLI                        | PR-016 | COVERAGE_DEFINED   |
+| F-015 | Command registry           | PR-015 | IMPLEMENTATION_VERIFIED |
+| F-016 | CLI                        | PR-016 | IMPLEMENTATION_VERIFIED |
 | F-017 | MCP server                 | PR-017 | COVERAGE_DEFINED   |
 | F-018 | Documentation              | PR-018 | COVERAGE_DEFINED   |
 | F-019 | Tests E2E + quality        | PR-019 | COVERAGE_DEFINED   |

@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-015 Command registry (`feat/015_commands`; based on merged main `89fc2397233f67f5797bd8736cfd50b41a6b8eab`)
+Current phase: PR-016 CLI (`feat/016_cli`; based on merged main `af25dec5e0469e796016906e9210e85f86ca2fd9`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -20,7 +20,7 @@ Last updated: 2026-10-14
 - [x] PR-012 Undo/redo (PR #13 merged at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`; hosted CI run `38611264446` passed on reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27`)
 - [x] PR-013 Responsive preview (merged into `main` at `41f0df225650c32878dfb14000f7116784aad765`)
 - [x] PR-014 Publication /f/:slug (PR #15 merged at `89fc2397233f67f5797bd8736cfd50b41a6b8eab`; hosted CI `38630162138` and exact-head Sol/@codex reviews passed; four review threads resolved)
-- [ ] PR-015 Command registry
+- [x] PR-015 Command registry (PR #16 merged at `af25dec5e0469e796016906e9210e85f86ca2fd9`)
 - [ ] PR-016 CLI
 - [ ] PR-017 MCP server
 - [ ] PR-018 Documentation
@@ -34,6 +34,8 @@ PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` re
 PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. Its late-replay, required-field, public-schema, and route-receipt review fixes are in source commit `07a02418eed6e111d1aa221bb07739b4da4df697`; no frozen contract, migration, dependency, lockfile, or renderer changed. Focused publication tests pass 7/7. Both local Worker/D1 replay interleavings and the publication smoke pass; RustSec found zero advisories across 346 locked dependencies. Hosted CI `38630162138` passed on exact head `b8db79f5e929e2fd0f1bc47a7f02901e53fc804d`; Sol and @codex reviews were clean and all four review threads were resolved. PR #15 merged at `89fc2397233f67f5797bd8736cfd50b41a6b8eab`. No remote D1 operation or deployment ran.
 
 PR-015 adds a closed registry for the nine existing executable command IDs. Each entry defines its actor, short description, handler, and idempotency-key policy; the Worker dispatches through that table, and public command IDs are shared constants. Four focused tests cover inventory/handler parity, actors, C-04 rejection, and required/malformed idempotency keys. `cargo xtask check`, `cargo xtask ci`, and the PR-010–013 browser suite pass on the current source; local Worker/D1 smokes cover command create/list/delete and publication flows. No frozen contract, migration, dependency, lockfile, or renderer changed. The original plan's count of 15 has no definitions for six extra commands; D19 records why this PR registers only executable behavior and keeps section edits in `funnel.revision.save`.
+
+PR-016 implements the native `eez` CLI: endpoint configuration, funnel list/create/publish through the Worker API, durable immutable retry tickets for ambiguous mutations, and `wrangler deploy` argument/exit forwarding. `cargo xtask check`, full `cargo xtask ci`, standalone `cargo +1.88.0 audit`, and the isolated local Worker/D1 smoke passed; the CLI has 6 unit and 11 process tests. RustSec scanned 355 locked dependencies against 1,329 advisories with no findings. The release matrix builds and tests natively on Linux, Apple Silicon macOS, and Windows, with artifact upload remaining tag-only. PR #17 checks passed on exact head `32dd5bd7240e37d865a0b7c6b9ee78a690c741ac` (CI run `38641945016`, release matrix run `38641945005`), and `@codex` reviewed that exact head with no major issues. No remote migration, deployment, or cloud environment publication ran. Fingerprinted evidence is in `plan/verification/PR-016/`.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -296,4 +298,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Open PR-015 against `main`, tag @codex with a clear exact-head review request, then merge only after hosted CI and the exact-head @codex review pass. Continue with PR-016 once PR-015 is merged. Keep all database, browser, and deployment checks local; do not publish the cloud environment as part of these PRs.
+Open PR-016 against `main` and tag @codex with a clear exact-head review request. Merge only after hosted CI and the exact-head @codex review pass. Keep database and deployment checks local; do not publish the cloud environment as part of this PR.

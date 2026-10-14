@@ -11,3 +11,13 @@ layer = 4
 [[bin]]
 name = "eez"
 path = "src/main.rs"
+
+[dependencies]
+eez-domain = { path = "../../crates/domain" }
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+uuid.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+directories = "6"
+tempfile = "3.23"
