@@ -41,24 +41,37 @@ worker_tree_pids() {
   printf '%s\n' "${seen[@]}"
 }
 
+process_group_has_live_members() {
+  local group_id="$1"
+  [ -n "$group_id" ] || return 1
+  ps -eo pgid=,stat= | awk -v group_id="$group_id" \
+    '$1 == group_id && $2 !~ /^Z/ { found = 1 } END { exit !found }'
+}
+
 stop_worker() {
   if [ -z "$worker_launcher_pid" ] && [ -z "$worker_pid" ]; then
     return
   fi
 
-  if [ -n "$worker_pid" ] && [ "$worker_pgid" = "$worker_pid" ] && [ "$worker_pgid" != "$$" ]; then
+  if [ -n "$worker_pid" ] && [ "$worker_pgid" = "$worker_pid" ] && \
+    [ "$worker_sid" = "$worker_pid" ] && [ "$worker_pgid" != "$$" ]; then
     kill -INT -- "-$worker_pgid" 2>/dev/null || true
     for attempt in $(seq 1 20); do
-      launcher_state="$(ps -o stat= -p "$worker_launcher_pid" 2>/dev/null | tr -d '[:space:]' || true)"
-      if [ -z "$launcher_state" ] || [[ "$launcher_state" == Z* ]]; then
+      if ! process_group_has_live_members "$worker_pgid"; then
         break
       fi
       sleep 0.1
     done
-    launcher_state="$(ps -o stat= -p "$worker_launcher_pid" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [ -n "$launcher_state" ] && [[ "$launcher_state" != Z* ]]; then
+    if process_group_has_live_members "$worker_pgid"; then
       kill -TERM -- "-$worker_pgid" 2>/dev/null || true
-      sleep 1
+      for attempt in $(seq 1 10); do
+        if ! process_group_has_live_members "$worker_pgid"; then
+          break
+        fi
+        sleep 0.1
+      done
+    fi
+    if process_group_has_live_members "$worker_pgid"; then
       kill -KILL -- "-$worker_pgid" 2>/dev/null || true
     fi
   else
@@ -97,6 +110,7 @@ stop_worker() {
   fi
   worker_pid=""
   worker_pgid=""
+  worker_sid=""
   worker_launcher_pid=""
 }
 
@@ -119,7 +133,100 @@ cleanup() {
   rm -rf "$state_dir"
   return "$cleanup_status"
 }
+
+test_worker_group_cleanup_regression() {
+  local fixture_file="$state_dir/worker-group-fixture.sh"
+  local ready_file="$state_dir/worker-group-ready"
+  local group_leader_file="$state_dir/worker-group-leader"
+  local test_group test_launcher
+
+  cat > "$fixture_file" <<'FIXTURE'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+ready_file, group_leader_file = sys.argv[1:]
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+child_code = "import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN); exec('while True: time.sleep(1)')"
+child = subprocess.Popen([sys.executable, "-c", child_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+with open(group_leader_file, "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+with open(ready_file, "w", encoding="utf-8") as handle:
+    handle.write(str(child.pid))
+while True:
+    time.sleep(1)
+FIXTURE
+
+  setsid --fork --wait python3 "$fixture_file" "$ready_file" "$group_leader_file" > "$state_dir/worker-group-fixture.log" 2>&1 &
+  worker_launcher_pid=$!
+  for attempt in $(seq 1 100); do
+    if [ -s "$group_leader_file" ] && [ -s "$ready_file" ]; then
+      worker_pid="$(cat "$group_leader_file")"
+      worker_pgid="$(ps -o pgid= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      worker_sid="$(ps -o sid= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [ "$worker_pgid" = "$worker_pid" ] && [ "$worker_sid" = "$worker_pid" ]; then
+        break
+      fi
+      worker_pid=""
+      worker_pgid=""
+      worker_sid=""
+    fi
+    if ! kill -0 "$worker_launcher_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.02
+  done
+
+  if [ -z "$worker_pid" ] || [ ! -s "$ready_file" ]; then
+    printf 'Could not start the isolated process-group cleanup fixture\n' >&2
+    stop_worker
+    return 1
+  fi
+
+  test_group="$worker_pgid"
+  test_launcher="$worker_launcher_pid"
+  kill -INT -- "-$test_group" 2>/dev/null || true
+  for attempt in $(seq 1 100); do
+    launcher_state="$(ps -o stat= -p "$test_launcher" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -z "$launcher_state" ] || [[ "$launcher_state" == Z* ]]; then
+      break
+    fi
+    sleep 0.02
+  done
+
+  launcher_state="$(ps -o stat= -p "$test_launcher" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -n "$launcher_state" ] && [[ "$launcher_state" != Z* ]]; then
+    printf 'The cleanup fixture launcher did not exit after SIGINT\n' >&2
+    stop_worker
+    return 1
+  fi
+  if ! process_group_has_live_members "$test_group"; then
+    printf 'The cleanup fixture did not leave a live group member after its launcher exited\n' >&2
+    stop_worker
+    return 1
+  fi
+  printf 'worker-group-state=launcher-exited pid=%s group=%s member-remains\n' "$test_launcher" "$test_group"
+  ps -eo pid=,pgid=,sid=,stat= | awk -v group_id="$test_group" '$2 == group_id && $4 !~ /^Z/'
+
+  stop_worker
+  if process_group_has_live_members "$test_group"; then
+    kill -TERM -- "-$test_group" 2>/dev/null || true
+    sleep 0.1
+    kill -KILL -- "-$test_group" 2>/dev/null || true
+    printf 'Worker group %s still had live members after cleanup\n' "$test_group" >&2
+    return 1
+  fi
+  printf 'worker-group-cleanup=verified-launcher-exits-before-member\n'
+}
+
 trap cleanup EXIT
+
+test_worker_group_cleanup_regression
+if [ "${1:-}" = "--test-worker-group-cleanup" ]; then
+  exit 0
+fi
 
 if curl --silent --output /dev/null --connect-timeout 1 "http://127.0.0.1:$port/health"; then
   printf 'Port %s is already occupied\n' "$port" >&2
