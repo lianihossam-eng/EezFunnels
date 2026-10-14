@@ -29,6 +29,10 @@ const THEME_STYLESHEET: &str = concat!(
     ".section-footer{border-top:1px solid var(--color-border);color:var(--color-muted)}",
     ".section-footer nav ul{display:flex;flex-wrap:wrap;gap:1rem;padding-left:0;list-style:none}.section-footer nav a{color:var(--color-primary)}"
 );
+const PREVIEW_STYLESHEET: &str = concat!(
+    ".hero-image-placeholder{display:grid;gap:.35rem;max-width:48rem;margin:2rem auto 0;padding:1rem;border:1px dashed var(--color-border);border-radius:var(--radius-card);color:var(--color-muted);overflow-wrap:anywhere}",
+    ".hero-image-placeholder code{font-size:.8em}"
+);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenderError {
@@ -410,6 +414,9 @@ impl Renderer {
         if manifest.renderer_version() == RENDERER_VERSION {
             html.push_str("<style>");
             html.push_str(THEME_STYLESHEET);
+            if policy == RenderPolicy::Preview {
+                html.push_str(PREVIEW_STYLESHEET);
+            }
             html.push_str("</style>");
         }
         html.push_str("</head><body><main id=\"funnel\"");
@@ -723,12 +730,22 @@ fn render_section_content(content: &SectionContent, policy: RenderPolicy) -> Str
             html.push_str(&escape_html_text(cta_label));
             push_link_closing(&mut html, policy);
             html.push_str("</div>");
-            if let Some(image) = image.as_ref().filter(|_| policy == RenderPolicy::Published) {
-                html.push_str("<img class=\"hero-image\" src=\"");
-                html.push_str(&escape_html_attribute(&image.url));
-                html.push_str("\" alt=\"");
-                html.push_str(&escape_html_attribute(&image.alt));
-                html.push_str("\" loading=\"lazy\">");
+            if let Some(image) = image {
+                if policy == RenderPolicy::Published {
+                    html.push_str("<img class=\"hero-image\" src=\"");
+                    html.push_str(&escape_html_attribute(&image.url));
+                    html.push_str("\" alt=\"");
+                    html.push_str(&escape_html_attribute(&image.alt));
+                    html.push_str("\" loading=\"lazy\">");
+                } else {
+                    html.push_str("<div class=\"hero-image-placeholder\" role=\"img\" aria-label=\"Image preview: ");
+                    html.push_str(&escape_html_attribute(&image.alt));
+                    html.push_str("\"><span>");
+                    html.push_str(&escape_html_text(&image.alt));
+                    html.push_str("</span><code>");
+                    html.push_str(&escape_html_text(&image.url));
+                    html.push_str("</code></div>");
+                }
             }
         }
         SectionContent::Features { items } => {

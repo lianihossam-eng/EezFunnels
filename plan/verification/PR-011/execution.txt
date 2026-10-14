@@ -1,0 +1,26 @@
+PR-011 settings inspector verification
+Evidence refreshed: 2026-10-14T15:47:32Z
+Branch: feat/011_inspector
+Base commit: 883ee7b98f0203d38654f15d2633010da9e420ee (exact merged origin/main SHA)
+Verified source commit: 4d51591228627e6ddef86bf12b5ca5989b41c14b
+Source fingerprint: 3444119e7ce31c2854425f195da93cd129cd747089a5eac505199e43b5d8f28f (120 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.
+
+Implementation and compatibility:
+- D16 provides the closed server-owned settings schema for text, color, select, toggle, and image. It accepts only typed existing section fields and closed theme values; it does not accept arbitrary content, CSS, HTML, or client-owned schemas.
+- The HTTP adapter recursively checks JSON object keys before Value normalization. Duplicate decoded keys at any depth return 400 as validation/invalid_json before receipt lookup. Browser regressions prove rejection for duplicate schema_version and nested text value keys on preview, for an already-used save key, and for a fresh key without consuming its receipt. A valid save with the same fresh key succeeds afterward.
+- Preview placeholder styles are appended only for RenderPolicy::Preview. Published renderer-v2 bytes match the exact baseline CSS/output, verified by `hero_image_placeholder_styles_do_not_change_published_renderer_v2_bytes`.
+- D16 records duplicate object keys as a narrow syntax exception to D15 receipt precedence; requests without duplicate object keys retain D15's classification/replay ordering. V1 decoding and order-only writes, V2 theme override persistence, C-01/C-04 idempotency/CAS rules, and the 16 KiB API request cap remain intact. No frozen contract, dependency declaration/lockfile, or SQL migration changed.
+
+Validation:
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: PASS; formatting, Clippy with warnings denied, tests, and layer validation. API 12, commands 18, dashboard presentation 27, domain 13, render 35, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/pr011-review2-xtask-check.log`; SHA-256 `d41bbed578ba95287ed8c18318efef908723ec8777290d4ddf4ae279e92a556d`.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask ci`: PASS; workspace checks/tests, WASM build, asset generation, local D1 smoke, and audit. RustSec loaded 1,314 advisories and scanned 346 locked dependencies; cargo audit exited 0 with no reported vulnerability findings. Log `/tmp/pr011-review2-xtask-ci.log`; SHA-256 `7347168eead59e929cd7dcd9a2bef26919d1f5d65e075414d895516c22956d8f`.
+- Focused `eez-api`, `eez-commands`, and `eez-render` suites: PASS (12, 18, 35). Log `/tmp/pr011-review2-focused.log`; SHA-256 `e46195483898003f4707642932e5958fa26eb6309b0aa2746353be6dfbabde9b`.
+- `npm run test:pr011:browser`: PASS, including all five controls and duplicate-key preview/save/receipt cases; axe critical findings: 0. Log `/tmp/pr011-review2-browser.log`; SHA-256 `6ff5765d7269ec75a6e0c268ed735ecd0d1270d9eb31e0d02e7aa4f995226b4c`.
+- `npm run test:pr010:migration`: PASS; no new migration. Log `/tmp/pr011-review2-migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `node --check scripts/test-pr010-browser.mjs`, `git diff --check origin/main`, and `git diff --exit-code origin/main -- plan/contracts Cargo.toml Cargo.lock migrations`: PASS. Frozen-surface log `/tmp/pr011-review2-frozen-surface.log`; SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+Review and delivery:
+- Fresh interrogate reviewers A/B found no code findings. Both confirmed D16's duplicate-key exception to receipt precedence.
+- Fresh project no-comments/Comment Sicko audit found zero comment changes, actionable TODO/FIXME markers, lint suppressions, or substantive workaround prose.
+- Code fixes are committed in 5256443e33487a4b128157b905aa579bb15703f5; D16 wording is committed in 4d51591228627e6ddef86bf12b5ca5989b41c14b. The evidence/status commit contains only excluded metadata. PR #12 is open for fresh hosted CI and GPT-6.1-Sol re-review. No PR review, merge, remote D1 operation, Cloudflare deployment, or publication was performed.
