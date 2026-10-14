@@ -1,4 +1,7 @@
 use dioxus::prelude::*;
+
+mod editor;
+use editor::FunnelDetail;
 use eez_domain::FunnelBlueprint;
 use serde::Deserialize;
 #[cfg(any(feature = "browser", test))]
@@ -267,7 +270,13 @@ fn Funnels() -> Element {
                     for item in items {
                         article { class: "funnel-card",
                             div { class: "funnel-card-main",
-                                h3 { "{item.name}" }
+                                h3 {
+                                    Link {
+                                        to: RouteView::FunnelDetail { id: item.id.clone() },
+                                        class: "funnel-card-link",
+                                        "{item.name}"
+                                    }
+                                }
                                 p { class: "funnel-slug", "/{item.slug}" }
                             }
                             div { class: "funnel-card-meta",
@@ -599,13 +608,20 @@ fn prepare_idempotency_key(
 
 #[cfg(feature = "browser")]
 fn clear_idempotency_storage(prepared_key: &PreparedIdempotencyKey) -> Result<(), ()> {
-    web_sys::window()
+    let storage = web_sys::window()
         .ok_or(())?
         .session_storage()
         .map_err(|_| ())?
-        .ok_or(())?
-        .remove_item(&prepared_key.slot)
-        .map_err(|_| ())
+        .ok_or(())?;
+    if storage
+        .get_item(&prepared_key.slot)
+        .map_err(|_| ())?
+        .as_deref()
+        == Some(prepared_key.key.as_str())
+    {
+        storage.remove_item(&prepared_key.slot).map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -628,7 +644,6 @@ fn created_summary(body: &str, name: &str) -> String {
     format!("Created {name} with {section_types}.")
 }
 
-#[cfg(any(feature = "browser", test))]
 fn section_label(section_type: &str) -> String {
     match section_type {
         "hero" => "Hero".to_owned(),
@@ -1087,21 +1102,5 @@ mod tests {
             original,
             idempotency_storage_slot("DELETE", "/api/funnels/funnel-1", None)
         );
-    }
-}
-
-#[component]
-fn FunnelDetail(id: String) -> Element {
-    rsx! {
-        section { class: "page-heading",
-            p { class: "eyebrow", "Funnels / Overview" }
-            h1 { "Funnel overview" }
-            p { class: "page-description", "This funnel is ready to open in the workspace." }
-        }
-        section { class: "detail-panel", "aria-label": "Funnel details",
-            h2 { "Funnel details" }
-            p { "This page provides the route-specific starting point for the dashboard." }
-            code { class: "detail-id", "ID: {id}" }
-        }
     }
 }

@@ -48,6 +48,49 @@ fn dispatches_each_supported_section_type_in_revision_order() {
 }
 
 #[test]
+fn preview_blocks_navigation_and_remote_images_with_restrictive_policy() {
+    let mut contents = content_map(&[
+        ("hero-id", "hero"),
+        ("cta-id", "cta"),
+        ("footer-id", "footer"),
+    ]);
+    contents.insert(
+        "hero-id".to_owned(),
+        super::SectionContent::Hero {
+            title: "Title".to_owned(),
+            subtitle: "Subtitle".to_owned(),
+            cta_label: "Continue".to_owned(),
+            cta_url: "https://example.com/offer".to_owned(),
+            image: Some(super::HeroImage {
+                url: "https://example.com/image.png".to_owned(),
+                alt: "Offer".to_owned(),
+            }),
+        },
+    );
+    let revision = revision_with_contents(
+        vec![
+            ("hero-id", "hero", 0),
+            ("cta-id", "cta", 1),
+            ("footer-id", "footer", 2),
+        ],
+        "renderer-v2",
+        &contents,
+    );
+    let preview = Renderer::new()
+        .render_preview(&revision, &safe_theme_tokens(), &contents)
+        .expect("preview renders");
+
+    assert!(preview.contains("default-src 'none'"));
+    assert!(preview.contains("style-src 'unsafe-inline'"));
+    assert!(preview.contains("<span class=\"button\""));
+    assert!(preview.contains("<span>Link</span>"));
+    assert!(!preview.contains("<a "));
+    assert!(!preview.contains("href="));
+    assert!(!preview.contains("<img "));
+    assert!(!preview.contains("src="));
+}
+
+#[test]
 fn injects_theme_tokens_as_sorted_css_custom_properties() {
     let revision = revision_with_sections(Vec::new(), "renderer-v1");
     let html = Renderer::new()
