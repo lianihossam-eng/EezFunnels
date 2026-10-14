@@ -1,0 +1,28 @@
+PR-015 command-registry verification
+Evidence refreshed: 2026-10-14T20:29:40Z
+Branch: feat/015_commands
+Base commit: 89fc2397233f67f5797bd8736cfd50b41a6b8eab
+Verified source commit: ab4b10731e0b622edfde150332ed143bade5aef3
+Source fingerprint: 005dc1e82a203012d82e5a1667a0a3b07876d768455ece5431e9f75627cae42b (7 files)
+Fingerprint inputs and log hashes are recorded in results.json.
+
+Implementation:
+- A static registry owns the nine executable command IDs, descriptions, actor metadata, handler selectors, and idempotency policies.
+- `Session::execute` resolves the command through that registry before parsing parameters or reaching storage. Unknown IDs and actor mismatches return C-04 `validation/operation_not_supported`.
+- The Worker passes the actor declared by the registry and uses the shared command ID constants. Mutation commands require a valid idempotency key before handler dispatch; reads and previews do not.
+- D19 and the PR-015 plan section record why the registry contains the nine real handlers. The original plan listed 15 commands but did not define six additional IDs or their semantics. Section edits remain in `funnel.revision.save`; `theme.set` remains a pure local revision transform.
+- No C-01 or C-04 contract, migration, dependency, lockfile, renderer, or UI changed.
+
+Validation (all commands exited 0):
+- `source .project-tools/env.sh && cargo +1.85.0 test -p eez-commands --locked`: 29 passed, including four registry-specific tests. Log: `logs/command-tests.log.gz`.
+- `source .project-tools/env.sh && cargo xtask check`: all workspace tests, formatting, Clippy, and layer checks passed. Suite counts: 15 API, 29 commands, 34 dashboard-presentation, 13 domain, 35 render, 5 storage, 26 xtask, 2 bootstrap CLI, and 6 PR-001 CLI tests. Log: `logs/cargo-check.log.gz`.
+- `source .project-tools/env.sh && cargo xtask ci`: check, WASM/assets, local Worker/D1 smokes, and audit passed. Smoke markers cover list/create/delete, publication, receipt replay, workspace capacity, and host denial. RustSec loaded 1,329 advisories and scanned 346 locked dependencies with zero findings. Log: `logs/cargo-ci.log.gz`.
+- `npm run test:pr010:browser`: navigation, editor, inspector, save, responsive preview, and accessibility checks passed; critical axe findings were zero. Log: `logs/browser.log.gz`.
+- `source .project-tools/env.sh && cargo +1.88.0 audit`: exit 0, 346 locked dependencies scanned, no findings. Log: `logs/audit.log.gz`.
+- `git diff --check` and the direct added-line audit passed with zero comments, TODO/FIXME markers, suppressions, or forbidden crash/unsafe primitives. Log: `logs/static-audit.log.gz`. No migration test was needed because no migration changed.
+
+Logs use `gzip -n`; results.json records compressed and raw SHA-256 values.
+
+Delivery:
+- Hosted CI and `@codex` review are pending the PR head. The PR request will name the exact SHA.
+- No remote D1 operation, deployment, or cloud environment publication ran.
