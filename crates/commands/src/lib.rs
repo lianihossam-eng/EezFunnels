@@ -7,11 +7,15 @@ use eez_render::{RenderError, ThemeTokens, RENDERER_VERSION};
 use serde::{Deserialize, Serialize};
 
 mod funnel;
+mod registry;
 
 pub use eez_domain::FunnelBlueprint;
 pub use funnel::{
     FunnelCommandError, FunnelCreateCommand, FunnelDeleteCommand, FunnelListCommand,
     InitialRevisionSummary, PreparedFunnel, Session,
+};
+pub use registry::{
+    command_ids, command_registry, CommandActor, CommandDefinition, IdempotencyPolicy,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -98,3 +102,6 @@ mod editor_tests;
 
 #[cfg(test)]
 mod publication_tests;
+
+#[cfg(test)]
+mod registry_tests;
