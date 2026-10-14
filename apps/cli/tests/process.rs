@@ -280,11 +280,12 @@ fn deploy_forwards_arguments_cwd_and_exit_without_cargo() {
         std::fs::read_to_string(dir.path().join("args")).unwrap(),
         "deploy\n--env\na b;$()\n"
     );
+    let expected_cwd = std::fs::canonicalize(dir.path()).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join("cwd"))
             .unwrap()
             .trim(),
-        dir.path().to_str().unwrap()
+        expected_cwd.to_str().unwrap()
     );
     std::fs::remove_file(wrangler).unwrap();
     let missing = Command::new(env!("CARGO_BIN_EXE_eez"))
