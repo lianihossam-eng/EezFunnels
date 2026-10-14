@@ -1,43 +1,50 @@
 PR-008 Dashboard shell verification
 
-Evidence refreshed: 2026-10-14T00:54:36Z
+Evidence refreshed: 2026-10-14T01:14:38Z
 Branch: feat/008_dashboard
 Base commit: 7ade40e9ed3cb917d380d762beeb5a01916f1e83
-Verified source commit: 1d0b741e48c0b637ab33b917d85dfb561b604b2f (PR-008 implementation, D12, STATUS, and CI/tooling changes)
-Source fingerprint: e235303c073aa6931d5fbdb1eef45adde401222483c75580841933c1fcef3d29
+Verified source commit: 9e0086371c0b8b15963b47784fb28a6f71b445f7 (hydration mount correction, dashboard regression, D12 update)
+Source fingerprint: 94e7b56ee30bcf0a3c3677ddf533d0298b8516dc59c5acae37e7fb4066d66462
 Fingerprint algorithm: SHA-256 of sorted path and file-hash lines; see results.json for the source file map.
 
-Implementation and first-red evidence:
+Implementation and original first-red evidence:
 - Added one Dioxus 0.7.10 component/router tree for Worker-time SSR and browser hydration on exactly `/`, `/funnels`, and `/funnels/:id`. Funnel IDs are nonempty, at most 64 bytes, and ASCII alphanumeric/underscore/hyphen only.
 - The Worker returns the shell only for those paths; ASSETS serves generated browser JS, wasm, CSS, bootstrap, and Dioxus snippets after the existing host allowlist. API, health, probe, MCP, unmatched funnel paths, and existing fallback handling remain with the Worker router.
 - The root uses a semantic main landmark and an honest empty state without fabricated funnel counts. No CRUD, API, or editor behavior was added.
-- The added route/hydration tests first ran red with `source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked` (exit 101): `error[E0432]: unresolved import super::render_document`; no `render_document` existed at crate root. The new module therefore failed compilation before its route assertions. After implementation, the command passed all five dashboard tests.
-- Hydration tests require a nonempty valid base64 value in the serialized payload, verify the Dioxus browser bootstrap assignment, and check the debug hydration arrays in debug builds. Script JSON serialization escapes `<` as `\u003c`.
+- The initial route/hydration tests ran red because `render_document` was missing at crate root (`error[E0432]`); after the original implementation, all dashboard tests passed.
+- Hydration tests require nonempty valid base64 data, verify browser bootstrap globals and debug hydration arrays. Script JSON serialization escapes `<` as `\u003c`.
+
+Codex P1 fix and TDD evidence:
+- Codex review #5511881502 on prior pushed head `c5d440c670b3e85793d2208f6985b24515f7ebc8` left P1 comment #4265712467: the configured `rootname("main")` selected the same `#main` element emitted as the VDOM root, so the browser expected the app tree beneath its own root.
+- Before the fix, `source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked hydration_mount_wraps_the_server_rendered_app_root` exited 101 because the SSR output had no outer mount container.
+- The fix wraps `{rendered_app}` in a separate `<div id="main">` in the SSR document and removes that ID from the Dioxus `.app-shell` root. `D12_dashboard_rendering.md` records the mount relationship. The regression asserts one `#main` container directly wraps `.app-shell`; it passes.
 
 Resolved browser compile failure:
-- The first fresh wasm build at `/tmp/eezfunnel-pr008-ci` failed with exit 101 because `dioxus_web::launch_cfg` is not crate-root exported; rustc suggested `dioxus_web::launch::launch_cfg`. It also warned that `MemoryHistory` was unused on wasm.
-- Fixed the import path and cfg-scoped the non-wasm history import. Final fresh-target CI at `/tmp/eezfunnel-pr008-ci-final3` compiled browser wasm and generated the asset bundle successfully.
+- The first fresh wasm build failed because `dioxus_web::launch_cfg` is not crate-root exported; rustc suggested `dioxus_web::launch::launch_cfg`. It also warned that `MemoryHistory` was unused on wasm.
+- Fixed the import path and cfg-scoped the non-wasm history import. The final fresh-target CI compiles browser wasm and generates the asset bundle.
 
 CLI/toolchain:
-- `bash scripts/install-wasm-bindgen.sh` passed and was rerun idempotently; it installed `.project-tools/cargo/bin/wasm-bindgen 0.2.129` using the auxiliary Rust/Cargo 1.88.0 toolchain.
+- `bash scripts/install-wasm-bindgen.sh` passed and was rerun idempotently; it installed `.project-tools/cargo/bin/wasm-bindgen 0.2.129` using auxiliary Rust/Cargo 1.88.0.
 - The app and Worker used Rust/Cargo 1.85.0. Worker build is 0.8.3; Wrangler is 4.149.0; Node 24.19.0; npm 11.9.0.
 
 Checks:
-- `source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked`: exit 0; 5 tests passed.
-- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0 (`CHECK_EXIT=0`); fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, dashboard 5, domain 13, render 33, storage 5, xtask 25, bootstrap CLI 2, PR-001 CLI 5.
-- `source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-ci-final3 cargo +1.85.0 xtask ci`: exit 0 (`CI_EXIT=0`) on an empty isolated target. The final3 log SHA-256 is `993455ff41e8557f39c56339d683d03a762ce1e68cf1a253c8eed63e97b51442`. This included the API wasm build, browser wasm asset bundle, and audit.
+- `source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked`: exit 0 (`DASHBOARD_TEST_EXIT=0`); 6 tests passed. Log SHA-256: 05bff659c4797d4a5e6d52acbe547b23e2604e63e1bb680129e8695f2f5f9d4e.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0 (`CHECK_EXIT=0`); fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, dashboard 6, domain 13, render 33, storage 5, xtask 25, bootstrap CLI 2, PR-001 CLI 5. Log SHA-256: e9c7cb1deeef32caa868a055ac71211737e5860b59755b254971f048807e209d.
+- Fresh-target `source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-reviewfix-ci2 cargo +1.85.0 xtask ci`: exit 0 (`CI_EXIT=0`) on an empty target. Log SHA-256: d4ec1ad4ee7025c85c4173d32c49dc905c9ff468fdce100ba5eb58fc7ee19a01. It included workspace checks/tests, API wasm, dashboard browser wasm/wasm-bindgen bundle, and cargo audit.
+- The first fresh-target retry failed at the linker with `No space left on device` when `/tmp` had only 1.4 GB free; writing its exit marker also failed. Only its temporary target and two earlier PR-008 temporary build targets were removed; prior successful CI logs and the `final3` target were preserved. A second empty target completed successfully.
 - RustSec audit 0.22.2 loaded 1,310 advisories, scanned 344 locked dependencies, and exited 0 with zero findings.
-- `git diff --check`, shell syntax checks, and final source comment/TODO/FIXME/lint-suppression scan passed.
+- `git diff --check`, formatting, Clippy, and final no-comments/TODO/FIXME/lint-suppression review passed. The review found no comments deleted; `#![forbid(unsafe_code)]` remains, and new `expect` calls are test-only.
 
-Local-only Wrangler smoke (`bash scripts/smoke-pr008.sh`, exit 0):
-- SSR routes `/`, `/funnels`, and `/funnels/demo-1`: all 200. The smoke parsed the JSON hydration payload and required valid, nonempty base64 data.
-- Core assets and all six JS module imports: all 200; `HEAD /assets/dashboard.css`: 200. The smoke did not execute browser JavaScript or verify hydration completion; no headless browser was used, so end-to-end browser hydration remains unverified.
-- Unknown `/api/funnels`, `/mcp`, `/__local/probe`, `/funnels/demo-1/extra`, and `POST /__local/probe`: all 404. A disallowed host returned 403.
-- Port 8787 was closed after cleanup. The final smoke left no live Wrangler, worker-build, or workerd process. The only later source edit changed the xtask test fixture JavaScript placeholder to `export {};`; final fresh CI and standalone check passed afterward. This executor's PID 1 does not reap adopted child processes; the final smoke added defunct workerd PIDs 133523 and 133528, with no live Worker remaining.
+Local-only Wrangler smoke (`bash scripts/smoke-pr008.sh`, exit 0, `SMOKE_EXIT=0`):
+- SSR routes `/`, `/funnels`, and `/funnels/demo-1`: all 200; the smoke parsed the JSON hydration payload and required valid, nonempty base64 data.
+- Core assets and six generated JS module imports: all 200. Unknown `/api/funnels`, `/mcp`, `/__local/probe`, `/funnels/demo-1/extra`, and `POST /__local/probe`: all 404. A disallowed host returned 403.
+- Port 8787 was closed after cleanup. There are no live Wrangler/Worker processes; this executor PID 1 does not reap adopted zombie `workerd` children (new PIDs 165645 and 165650), as described in D7.
+- The smoke verifies SSR payload and asset delivery, not browser execution. No headless browser ran; end-to-end browser hydration remains unverified.
 - Wrangler used local-only bindings. No remote deployment was run.
 
-Generated bundle hashes, wasm hashes, and full source hashes are in `results.json`. Generated `apps/dashboard/dist/` files are ignored and are evidence artifacts only.
+Generated browser bundle hashes, wasm hashes, and source hashes are in `results.json`. Generated `apps/dashboard/dist/` files are ignored and serve as verification artifacts only.
 
 Review/deployment state:
-- Source commit `1d0b741e48c0b637ab33b917d85dfb561b604b2f` contains the implementation, D12, STATUS, and CI/tooling changes. The evidence is finalized in a follow-up documentation commit. Push, hosted CI, and fresh @codex/Sol reviews remain pending on the final pushed PR head.
+- Correction commit `9e0086371c0b8b15963b47784fb28a6f71b445f7` contains the mount fix, dashboard regression, and D12 update. STATUS and evidence are finalized in a follow-up documentation commit.
+- The P1 finding on the previous head is resolved locally; push, hosted CI, and a new Codex review are pending on the correction head. Sol review/merge follows only after a clean Codex review and green hosted CI on the same final SHA.
 - No remote binding or deployment command was run.

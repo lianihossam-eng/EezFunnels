@@ -88,26 +88,28 @@ addresses Sol's review finding that `.footer-links` matched no emitted footer el
 the existing `.section-footer nav ul` and anchor markup without changing renderer-v1 bytes.
 
 PR-008 adds a Dioxus 0.7.10 shell with Worker-time SSR and same-tree browser hydration for exactly
-`/`, `/funnels`, and validated `/funnels/:id` paths. D12 records the presentation-layer boundary,
-hydration payload format, pinned CLI, and Rust 1.85/1.88 build split. Unknown API, health, MCP,
-probe, and unmatched funnel paths remain with the existing Worker router. `ASSETS` serves the
+`/`, `/funnels`, and validated `/funnels/:id` paths. SSR emits an outer `#main` hydration container
+with the Dioxus app tree as its child, matching `dioxus-web`'s `rootname("main")`; page content
+keeps its semantic `main` landmark. D12 records the presentation-layer boundary, hydration payload
+format, pinned CLI, Rust 1.85/1.88 build split, and the mount-root relationship. Unknown API, health,
+MCP, probe, and unmatched funnel paths remain with the existing Worker router. `ASSETS` serves the
 generated browser bundle through Worker-first routing after the host allowlist; the shell contains
-honest empty states until funnel APIs arrive. Five dashboard regressions cover the rendered routes,
-invalid and unowned paths, and the nonempty base64 hydration data plus browser bootstrap globals.
-`cargo +1.85.0 test -p eez-dashboard --locked` passes 5 tests, `cargo xtask check` passes, and a
-fresh-target `cargo xtask ci` passes workspace checks/tests, the API wasm build, the browser wasm
-and asset bundle, and audit (344 locked dependencies, 1,310 advisories, zero findings). The local
-Wrangler smoke verifies SSR routes, parses the hydration payload, serves all bundle and generated
-module assets, checks existing 404 fallback behavior and host denial, and confirms port cleanup.
-The browser wasm builds and hydration payload is present, but no headless browser has verified
-hydration end to end. Fingerprinted evidence is in
-`plan/verification/PR-008/execution.txt` and `results.json`. The first test-first run failed because
-`render_document` was not yet implemented; that exact failure is recorded in the execution log.
-The final local smoke left no live Wrangler or Worker process; this executor may retain adopted
-defunct `workerd` entries because PID 1 does not reap children, as documented in D7. The implementation
-is committed at `1d0b741e48c0b637ab33b917d85dfb561b604b2f`; fingerprinted verification evidence is
-finalized in a follow-up documentation commit. The branch is ready to push. Hosted CI and @codex/Sol
-reviews remain required on the exact pushed PR head; no remote deployment was run.
+honest empty states until funnel APIs arrive. Six dashboard regressions cover routes, invalid and
+unowned paths, hydration payload/bootstrap globals, and the mount-container parent relation.
+`cargo +1.85.0 test -p eez-dashboard --locked` passes 6 tests, `cargo xtask check` passes, and a
+fresh-target `cargo xtask ci` passes workspace checks/tests, API/browser wasm builds, asset bundle
+generation, and audit (344 locked dependencies, 1,310 advisories, zero findings). The local Wrangler
+smoke verifies SSR routes, hydration payload, assets, fallback behavior, and host denial. No
+headless browser verified hydration completion, so browser hydration E2E remains unverified.
+
+Codex's first review on pushed head `c5d440c` identified that the app root and hydration mount
+container shared `id="main"`. The regression failed before the fix and passes with the outer wrapper
+in implementation commit `9e0086371c0b8b15963b47784fb28a6f71b445f7`. Fingerprinted evidence is in
+`plan/verification/PR-008/execution.txt` and `results.json`. This executor's PID 1 may retain adopted
+defunct `workerd` entries after local smoke; no live Worker process remains, as documented in D7.
+The correction is committed locally; refreshed evidence is being finalized before push. Hosted CI
+and fresh Codex/Sol reviews remain required on the exact pushed PR head; no remote deployment was
+run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
