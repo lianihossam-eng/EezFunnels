@@ -2,11 +2,21 @@ use super::section_label;
 #[cfg(feature = "browser")]
 use super::{
     api_request, clear_idempotency_storage, error_message, prepare_idempotency_key,
-    BrowserResponse, PreparedIdempotencyKey,
+    PreparedIdempotencyKey,
 };
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::{SortEvent, SortableList};
 use serde::Deserialize;
+use std::collections::BTreeMap;
+
+mod inspector;
+#[cfg(feature = "browser")]
+use inspector::EditorPreviewResponse;
+#[cfg(test)]
+use inspector::{color_control_value, text_setting_value, EditorSettingField, EditorSettingOption};
+use inspector::{
+    setting_changes, EditorInspector, EditorSettingChange, EditorSettingValue, EditorSettingsSchema,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct EditorSection {
@@ -28,6 +38,8 @@ struct EditorReadResponse {
     funnel: EditorFunnel,
     base_revision_id: String,
     sections: Vec<EditorSection>,
+    settings_schema: EditorSettingsSchema,
+    settings_values: BTreeMap<String, EditorSettingValue>,
     preview_html: String,
 }
 
@@ -38,6 +50,11 @@ struct EditorDocument {
     sections: Vec<EditorSection>,
     saved_order: Vec<String>,
     order: Vec<String>,
+    settings_schema: EditorSettingsSchema,
+    saved_settings_values: BTreeMap<String, EditorSettingValue>,
+    settings_values: BTreeMap<String, EditorSettingValue>,
+    settings_changes: BTreeMap<String, EditorSettingValue>,
+    selected_section: Option<String>,
     preview_html: String,
 }
 
@@ -47,6 +64,7 @@ struct EditorPreviewCapture {
     funnel_id: String,
     base_revision_id: String,
     section_ids: Vec<String>,
+    settings_changes: Vec<EditorSettingChange>,
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -57,6 +75,7 @@ struct EditorSaveCapture {
     funnel_id: String,
     base_revision_id: String,
     section_ids: Vec<String>,
+    settings_changes: Vec<EditorSettingChange>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -115,12 +134,18 @@ impl EditorState {
                     .iter()
                     .map(|section| section.id.clone())
                     .collect::<Vec<_>>();
+                let selected_section = order.first().cloned();
                 self.document = Some(EditorDocument {
                     funnel: response.funnel,
                     base_revision_id: response.base_revision_id,
                     sections: response.sections,
                     saved_order: order.clone(),
                     order,
+                    settings_schema: response.settings_schema,
+                    saved_settings_values: response.settings_values.clone(),
+                    settings_values: response.settings_values,
+                    settings_changes: BTreeMap::new(),
+                    selected_section,
                     preview_html: response.preview_html,
                 });
                 self.load_error = false;
@@ -176,11 +201,24 @@ impl EditorState {
             section_ids: document
                 .map(|document| document.order.clone())
                 .unwrap_or_default(),
+            settings_changes: document
+                .map(|document| setting_changes(&document.settings_changes))
+                .unwrap_or_default(),
         }
     }
 
     #[cfg(any(feature = "browser", test))]
     fn finish_preview(&mut self, capture: &EditorPreviewCapture, response: Result<String, ()>) {
+        self.finish_preview_with_settings(capture, response, None);
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_preview_with_settings(
+        &mut self,
+        capture: &EditorPreviewCapture,
+        response: Result<String, ()>,
+        settings_values: Option<BTreeMap<String, EditorSettingValue>>,
+    ) {
         if self.funnel_id != capture.funnel_id || self.generation != capture.generation {
             return;
         }
@@ -189,12 +227,21 @@ impl EditorState {
         };
         if document.base_revision_id != capture.base_revision_id
             || document.order != capture.section_ids
+            || setting_changes(&document.settings_changes) != capture.settings_changes
         {
             return;
         }
         match response {
             Ok(html) => {
                 document.preview_html = html;
+                if let Some(preview_color) = settings_values
+                    .as_ref()
+                    .and_then(|values| values.get("theme.primary_color"))
+                {
+                    if let Some(color) = document.settings_values.get_mut("theme.primary_color") {
+                        color.effective_value = preview_color.effective_value.clone();
+                    }
+                }
                 self.preview_error = false;
             }
             Err(()) => self.preview_error = true,
@@ -267,10 +314,9 @@ impl EditorState {
             && self.keyboard_section.is_none()
             && self.keyboard_original_order.is_none()
             && (self.retryable
-                || self
-                    .document
-                    .as_ref()
-                    .is_some_and(|document| document.order != document.saved_order))
+                || self.document.as_ref().is_some_and(|document| {
+                    document.order != document.saved_order || !document.settings_changes.is_empty()
+                }))
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -285,6 +331,7 @@ impl EditorState {
             funnel_id: self.funnel_id.clone(),
             base_revision_id: document.base_revision_id.clone(),
             section_ids: document.order.clone(),
+            settings_changes: setting_changes(&document.settings_changes),
         };
         self.saving = true;
         self.save_error = None;
@@ -300,6 +347,7 @@ impl EditorState {
             && self.document.as_ref().is_some_and(|document| {
                 document.base_revision_id == capture.base_revision_id
                     && document.order == capture.section_ids
+                    && setting_changes(&document.settings_changes) == capture.settings_changes
             })
     }
 
@@ -308,6 +356,7 @@ impl EditorState {
         &mut self,
         capture: &EditorSaveCapture,
         revision_id: String,
+        settings_values: BTreeMap<String, EditorSettingValue>,
     ) -> Option<EditorPreviewCapture> {
         if !self.is_current_save(capture) {
             return None;
@@ -315,6 +364,9 @@ impl EditorState {
         let document = self.document.as_mut()?;
         document.base_revision_id = revision_id;
         document.saved_order = document.order.clone();
+        document.saved_settings_values = settings_values.clone();
+        document.settings_values = settings_values;
+        document.settings_changes.clear();
         self.saving = false;
         self.retryable = false;
         self.stale = false;
@@ -323,13 +375,19 @@ impl EditorState {
     }
 
     #[cfg(any(feature = "browser", test))]
-    fn fail_save(&mut self, capture: &EditorSaveCapture, stale: bool, message: String) -> bool {
+    fn fail_save(
+        &mut self,
+        capture: &EditorSaveCapture,
+        stale: bool,
+        retryable: bool,
+        message: String,
+    ) -> bool {
         if !self.is_current_save(capture) {
             return false;
         }
         self.saving = false;
         self.stale = stale;
-        self.retryable = !stale;
+        self.retryable = retryable && !stale;
         self.save_error = Some(message);
         true
     }
@@ -346,18 +404,26 @@ impl EditorState {
             .map(|section| section_label(&section.section_type))
             .unwrap_or_else(|| "Section".to_owned())
     }
-}
 
-#[cfg(feature = "browser")]
-#[derive(Deserialize)]
-struct EditorPreviewResponse {
-    preview_html: String,
+    fn select_section(&mut self, section_id: &str) {
+        let Some(document) = self.document.as_mut() else {
+            return;
+        };
+        if document
+            .sections
+            .iter()
+            .any(|section| section.id == section_id)
+        {
+            document.selected_section = Some(section_id.to_owned());
+        }
+    }
 }
 
 #[cfg(feature = "browser")]
 #[derive(Deserialize)]
 struct EditorSaveResponse {
     revision_id: String,
+    settings_values: BTreeMap<String, EditorSettingValue>,
 }
 
 #[cfg(feature = "browser")]
@@ -377,27 +443,51 @@ async fn load_editor(funnel_id: &str) -> Result<EditorReadResponse, ()> {
 }
 
 #[cfg(feature = "browser")]
-async fn fetch_editor_preview(capture: &EditorPreviewCapture) -> Result<String, ()> {
+async fn fetch_editor_preview(capture: &EditorPreviewCapture) -> Result<EditorPreviewResponse, ()> {
     let path = format!("/api/funnels/{}/preview", capture.funnel_id);
-    let body = serde_json::json!({
-        "base_revision_id": capture.base_revision_id,
-        "section_ids": capture.section_ids,
-    })
-    .to_string();
+    let body = editor_request_body(
+        &capture.base_revision_id,
+        &capture.section_ids,
+        &capture.settings_changes,
+    );
     let response = api_request("POST", &path, Some(body), None).await?;
     if response.status != 200 {
         return Err(());
     }
-    serde_json::from_str::<EditorPreviewResponse>(&response.body)
-        .map(|response| response.preview_html)
-        .map_err(|_| ())
+    serde_json::from_str::<EditorPreviewResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(any(feature = "browser", test))]
+fn editor_request_body(
+    base_revision_id: &str,
+    section_ids: &[String],
+    settings_changes: &[EditorSettingChange],
+) -> String {
+    let mut body = serde_json::json!({
+        "base_revision_id": base_revision_id,
+        "section_ids": section_ids,
+    });
+    if !settings_changes.is_empty() {
+        body["settings"] = serde_json::json!({
+            "schema_version": 1,
+            "changes": settings_changes,
+        });
+    }
+    body.to_string()
 }
 
 #[cfg(feature = "browser")]
 async fn update_editor_preview(mut state: Signal<EditorState>, capture: EditorPreviewCapture) {
     let response = fetch_editor_preview(&capture).await;
     if state.try_peek().is_ok() {
-        state.with_mut(|state| state.finish_preview(&capture, response));
+        state.with_mut(|state| match response {
+            Ok(response) => state.finish_preview_with_settings(
+                &capture,
+                Ok(response.preview_html),
+                Some(response.settings_values),
+            ),
+            Err(()) => state.finish_preview(&capture, Err(())),
+        });
     }
 }
 
@@ -408,21 +498,18 @@ fn schedule_editor_preview(state: Signal<EditorState>, capture: Option<EditorPre
     }
 }
 
+#[cfg(not(feature = "browser"))]
+fn schedule_editor_preview(_state: Signal<EditorState>, _capture: Option<EditorPreviewCapture>) {}
+
 #[cfg(feature = "browser")]
 async fn focus_editor_section(section_id: String) {
-    let mut request = document::eval(
-        r#"
+    const FOCUS_EDITOR_SECTION: &str = r#"
 const sectionId = await dioxus.recv();
-requestAnimationFrame(() => {
-    const row = document.querySelector(`[data-editor-section="${CSS.escape(sectionId)}"]`);
-    if (row instanceof HTMLElement) row.focus();
-});
-dioxus.send(true);
-"#,
-    );
-    if request.send(section_id).is_ok() {
-        let _ = request.recv::<bool>().await;
-    }
+const row = document.querySelector(`[data-editor-section="${CSS.escape(sectionId)}"]`);
+row?.focus();
+"#;
+    let request = document::eval(FOCUS_EDITOR_SECTION);
+    let _ = request.send(section_id);
 }
 
 #[component]
@@ -494,7 +581,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                 div {
                     p { class: "eyebrow", "Draft revision" }
                     code { "{document.base_revision_id}" }
-                    if document.order != document.saved_order {
+                    if document.order != document.saved_order || !document.settings_changes.is_empty() {
                         span { class: "editor-unsaved-badge", "Unsaved changes" }
                     } else {
                         span { class: "editor-saved-badge", "All changes saved" }
@@ -555,6 +642,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                         "{view.announcement}"
                     }
                 }
+                EditorInspector { state }
                 div { class: "editor-preview-panel",
                     div { class: "section-heading",
                         h2 { "Preview" }
@@ -656,13 +744,25 @@ fn EditorSectionRow(
     let up_section_id = section_id.clone();
     let down_section_id = section_id.clone();
     let title = section_label(&section.section_type);
+    let selected = state.with(|state| {
+        state
+            .document
+            .as_ref()
+            .and_then(|document| document.selected_section.as_deref())
+            == Some(section_id.as_str())
+    });
+    let focus_section_id = section_id.clone();
+    let click_section_id = section_id.clone();
     rsx! {
         div {
             class: "editor-section-row",
             role: "listitem",
             tabindex: "0",
             "data-editor-section": "{section_id}",
+            "aria-current": if selected { "true" } else { "false" },
             "aria-label": "Section: {title}, position {index + 1} of {count}. Press Space to pick up and reorder.",
+            onfocus: move |_| state.with_mut(|state| state.select_section(&focus_section_id)),
+            onclick: move |_| state.with_mut(|state| state.select_section(&click_section_id)),
             onkeydown: move |event: KeyboardEvent| {
                 if disabled { return; }
                 let key = event.key();
@@ -779,11 +879,11 @@ async fn save_editor_revision(
     let Some(capture) = capture else {
         return;
     };
-    let expected_body = serde_json::json!({
-        "base_revision_id": capture.base_revision_id,
-        "section_ids": capture.section_ids,
-    })
-    .to_string();
+    let expected_body = editor_request_body(
+        &capture.base_revision_id,
+        &capture.section_ids,
+        &capture.settings_changes,
+    );
     let body = if save_body().as_deref() == Some(expected_body.as_str()) {
         expected_body
     } else {
@@ -802,6 +902,7 @@ async fn save_editor_revision(
                 state.fail_save(
                     &capture,
                     false,
+                    true,
                     "A retry-safe save could not be prepared.".to_owned(),
                 )
             });
@@ -822,14 +923,16 @@ async fn save_editor_revision(
                     &capture,
                     &prepared_key,
                 );
-                let preview =
-                    state.with_mut(|state| state.finish_save(&capture, saved.revision_id));
+                let preview = state.with_mut(|state| {
+                    state.finish_save(&capture, saved.revision_id, saved.settings_values)
+                });
                 schedule_editor_preview(state, preview);
             } else {
                 state.with_mut(|state| {
                     state.fail_save(
                         &capture,
                         false,
+                        true,
                         "The save result is uncertain. Retry this save to confirm it.".to_owned(),
                     )
                 });
@@ -860,13 +963,15 @@ async fn save_editor_revision(
             } else {
                 error_message(&response.body)
             };
-            state.with_mut(|state| state.fail_save(&capture, stale, message));
+            let retryable = response.status == 0 || response.status >= 500;
+            state.with_mut(|state| state.fail_save(&capture, stale, retryable, message));
         }
         Err(()) => {
             state.with_mut(|state| {
                 state.fail_save(
                     &capture,
                     false,
+                    true,
                     "The save result is uncertain. Retry the same save to confirm it.".to_owned(),
                 )
             });
@@ -878,8 +983,131 @@ async fn save_editor_revision(
 mod tests {
     use super::*;
 
+    fn fixture_settings() -> (EditorSettingsSchema, BTreeMap<String, EditorSettingValue>) {
+        let schema = EditorSettingsSchema {
+            version: 1,
+            fields: vec![
+                EditorSettingField {
+                    id: "theme.preset".to_owned(),
+                    label: "Theme preset".to_owned(),
+                    control: "select".to_owned(),
+                    section_id: None,
+                    options: vec![EditorSettingOption {
+                        value: "minimal".to_owned(),
+                        label: "Minimal".to_owned(),
+                    }],
+                    multiline: false,
+                    optional: false,
+                    nullable: false,
+                },
+                EditorSettingField {
+                    id: "theme.primary_color".to_owned(),
+                    label: "Primary color".to_owned(),
+                    control: "color".to_owned(),
+                    section_id: None,
+                    options: Vec::new(),
+                    multiline: false,
+                    optional: false,
+                    nullable: true,
+                },
+                EditorSettingField {
+                    id: "theme.square_buttons".to_owned(),
+                    label: "Square button corners".to_owned(),
+                    control: "toggle".to_owned(),
+                    section_id: None,
+                    options: Vec::new(),
+                    multiline: false,
+                    optional: false,
+                    nullable: false,
+                },
+                EditorSettingField {
+                    id: "section.hero.title".to_owned(),
+                    label: "Headline".to_owned(),
+                    control: "text".to_owned(),
+                    section_id: Some("hero".to_owned()),
+                    options: Vec::new(),
+                    multiline: false,
+                    optional: false,
+                    nullable: false,
+                },
+                EditorSettingField {
+                    id: "section.hero.image".to_owned(),
+                    label: "Hero image".to_owned(),
+                    control: "image".to_owned(),
+                    section_id: Some("hero".to_owned()),
+                    options: Vec::new(),
+                    multiline: false,
+                    optional: true,
+                    nullable: true,
+                },
+                EditorSettingField {
+                    id: "section.testimonials.items.0.attribution".to_owned(),
+                    label: "Attribution".to_owned(),
+                    control: "text".to_owned(),
+                    section_id: Some("testimonials".to_owned()),
+                    options: Vec::new(),
+                    multiline: false,
+                    optional: true,
+                    nullable: true,
+                },
+            ],
+        };
+        let values = BTreeMap::from([
+            (
+                "theme.preset".to_owned(),
+                EditorSettingValue {
+                    kind: "select".to_owned(),
+                    value: serde_json::json!("minimal"),
+                    effective_value: None,
+                },
+            ),
+            (
+                "theme.primary_color".to_owned(),
+                EditorSettingValue {
+                    kind: "color".to_owned(),
+                    value: serde_json::Value::Null,
+                    effective_value: Some("#334155".to_owned()),
+                },
+            ),
+            (
+                "theme.square_buttons".to_owned(),
+                EditorSettingValue {
+                    kind: "toggle".to_owned(),
+                    value: serde_json::json!(false),
+                    effective_value: None,
+                },
+            ),
+            (
+                "section.hero.title".to_owned(),
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Offer"),
+                    effective_value: None,
+                },
+            ),
+            (
+                "section.hero.image".to_owned(),
+                EditorSettingValue {
+                    kind: "image".to_owned(),
+                    value: serde_json::Value::Null,
+                    effective_value: None,
+                },
+            ),
+            (
+                "section.testimonials.items.0.attribution".to_owned(),
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Founder"),
+                    effective_value: None,
+                },
+            ),
+        ]);
+        (schema, values)
+    }
+
     fn loaded_editor_state() -> EditorState {
         let mut state = EditorState::for_route("funnel-1".to_owned());
+        let (settings_schema, settings_values) = fixture_settings();
         state.finish_load(
             state.route_epoch,
             "funnel-1",
@@ -905,6 +1133,8 @@ mod tests {
                         section_type: "cta".to_owned(),
                     },
                 ],
+                settings_schema,
+                settings_values,
                 preview_html: "preview-1".to_owned(),
             }),
         );
@@ -1010,11 +1240,335 @@ mod tests {
         state.move_section(0, 2);
         let capture = state.begin_save().expect("dirty editor can save");
         assert!(state.saving);
+        let settings_values = state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values
+            .clone();
         let preview = state
-            .finish_save(&capture, "revision-2".to_owned())
+            .finish_save(&capture, "revision-2".to_owned(), settings_values)
             .expect("preview refresh");
         assert_eq!(preview.base_revision_id, "revision-2");
         assert_eq!(preview.section_ids, ["features", "cta", "hero"]);
+        assert!(!state.can_save());
+    }
+
+    #[test]
+    fn schema_setting_edits_preview_and_save_without_changing_order_only_requests() {
+        let mut state = loaded_editor_state();
+        assert!(!state.can_save());
+        state.select_section("features");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.selected_section.as_deref()),
+            Some("features")
+        );
+
+        let first = state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("New headline"),
+                    effective_value: None,
+                },
+            )
+            .expect("text edit schedules preview");
+        assert!(state.can_save());
+        assert_eq!(first.settings_changes.len(), 1);
+        let changed_body = editor_request_body(
+            &first.base_revision_id,
+            &first.section_ids,
+            &first.settings_changes,
+        );
+        let changed_body: serde_json::Value =
+            serde_json::from_str(&changed_body).expect("settings request");
+        assert_eq!(changed_body["base_revision_id"], first.base_revision_id);
+        assert!(changed_body.get("expected_revision_id").is_none());
+        assert_eq!(changed_body["settings"]["schema_version"], 1);
+        assert_eq!(
+            changed_body["settings"]["changes"][0]["id"],
+            "section.hero.title"
+        );
+        assert_eq!(
+            changed_body["settings"]["changes"][0]["value"]["kind"],
+            "text"
+        );
+
+        let second = state
+            .set_setting(
+                "theme.square_buttons",
+                EditorSettingValue {
+                    kind: "toggle".to_owned(),
+                    value: serde_json::json!(true),
+                    effective_value: None,
+                },
+            )
+            .expect("toggle edit schedules preview");
+        state.finish_preview(&first, Ok("stale draft preview".to_owned()));
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .map(|document| document.preview_html.as_str()),
+            Some("preview-1")
+        );
+        state.finish_preview(&second, Ok("current draft preview".to_owned()));
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .map(|document| document.preview_html.as_str()),
+            Some("current draft preview")
+        );
+
+        let capture = state.begin_save().expect("settings-only draft can save");
+        assert_eq!(capture.settings_changes.len(), 2);
+        assert!(state.saving);
+        let saved_values = state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values
+            .clone();
+        state
+            .finish_save(&capture, "revision-2".to_owned(), saved_values)
+            .expect("successful settings save");
+        assert!(!state.can_save());
+        assert!(state
+            .document
+            .as_ref()
+            .expect("saved editor")
+            .settings_changes
+            .is_empty());
+
+        let legacy_body = editor_request_body("revision-1", &["hero".to_owned()], &[]);
+        let legacy_body: serde_json::Value =
+            serde_json::from_str(&legacy_body).expect("legacy request");
+        assert!(legacy_body.get("settings").is_none());
+    }
+
+    #[test]
+    fn preset_preview_updates_inherited_color_and_explicit_old_color_stays_dirty() {
+        let mut state = loaded_editor_state();
+        let preset = state
+            .set_setting(
+                "theme.preset",
+                EditorSettingValue {
+                    kind: "select".to_owned(),
+                    value: serde_json::json!("bold"),
+                    effective_value: None,
+                },
+            )
+            .expect("preset edit");
+        let mut preview_values = state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values
+            .clone();
+        preview_values
+            .get_mut("theme.primary_color")
+            .expect("color field")
+            .effective_value = Some("#f97316".to_owned());
+        state.finish_preview_with_settings(
+            &preset,
+            Ok("bold preview".to_owned()),
+            Some(preview_values),
+        );
+        let document = state.document.as_ref().expect("loaded editor");
+        assert_eq!(
+            document.settings_values["theme.primary_color"]
+                .effective_value
+                .as_deref(),
+            Some("#f97316")
+        );
+        assert_eq!(
+            document
+                .settings_changes
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["theme.preset"]
+        );
+
+        let explicit_old_preset_color = state
+            .set_setting(
+                "theme.primary_color",
+                EditorSettingValue {
+                    kind: "color".to_owned(),
+                    value: serde_json::json!("#334155"),
+                    effective_value: None,
+                },
+            )
+            .expect("explicit color equal to the old preset");
+        assert_eq!(
+            color_control_value(
+                &state
+                    .document
+                    .as_ref()
+                    .expect("loaded editor")
+                    .settings_values["theme.primary_color"]
+            ),
+            "#334155"
+        );
+        assert!(explicit_old_preset_color
+            .settings_changes
+            .iter()
+            .any(|change| {
+                change.id == "theme.primary_color" && change.value.value == "#334155"
+            }));
+        let request = editor_request_body(
+            &explicit_old_preset_color.base_revision_id,
+            &explicit_old_preset_color.section_ids,
+            &explicit_old_preset_color.settings_changes,
+        );
+        assert!(!request.contains("effective_value"));
+
+        let reset = state
+            .set_setting(
+                "theme.primary_color",
+                EditorSettingValue {
+                    kind: "color".to_owned(),
+                    value: serde_json::Value::Null,
+                    effective_value: None,
+                },
+            )
+            .expect("reset color to selected preset");
+        assert_eq!(
+            color_control_value(
+                &state
+                    .document
+                    .as_ref()
+                    .expect("loaded editor")
+                    .settings_values["theme.primary_color"]
+            ),
+            "#f97316"
+        );
+        assert!(!reset
+            .settings_changes
+            .iter()
+            .any(|change| change.id == "theme.primary_color"));
+        let mut reset_values = state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values
+            .clone();
+        reset_values
+            .get_mut("theme.primary_color")
+            .expect("color field")
+            .effective_value = Some("#f97316".to_owned());
+        state.finish_preview_with_settings(
+            &reset,
+            Ok("reset preview".to_owned()),
+            Some(reset_values),
+        );
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .expect("loaded editor")
+                .settings_values["theme.primary_color"]
+                .effective_value
+                .as_deref(),
+            Some("#f97316")
+        );
+    }
+
+    #[test]
+    fn definitive_client_save_error_unlocks_controls_without_retrying_same_request() {
+        let mut state = loaded_editor_state();
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Unsaved title"),
+                    effective_value: None,
+                },
+            )
+            .expect("draft title");
+        let capture = state.begin_save().expect("dirty draft can save");
+        assert!(state.fail_save(&capture, false, false, "Invalid destination".to_owned()));
+        assert!(!state.saving);
+        assert!(!state.retryable);
+        assert!(!state.stale);
+        assert!(state.can_save());
+        assert!(state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Corrected title"),
+                    effective_value: None,
+                },
+            )
+            .is_some());
+    }
+
+    #[test]
+    fn clearing_nullable_attribution_submits_null_but_required_text_stays_empty_string() {
+        let cleared = text_setting_value(String::new(), true);
+        assert!(cleared.value.is_null());
+        assert_eq!(text_setting_value(String::new(), false).value, "");
+
+        let mut state = loaded_editor_state();
+        let capture = state
+            .set_setting("section.testimonials.items.0.attribution", cleared)
+            .expect("clear nullable attribution");
+        assert_eq!(capture.settings_changes.len(), 1);
+        assert!(capture.settings_changes[0].value.value.is_null());
+        let request = editor_request_body(
+            &capture.base_revision_id,
+            &capture.section_ids,
+            &capture.settings_changes,
+        );
+        assert!(request.contains("\"value\":null"));
+    }
+
+    #[test]
+    fn image_control_clears_or_updates_one_typed_value_and_preserves_other_properties() {
+        let mut state = loaded_editor_state();
+        let url_edit = state
+            .set_image_property(
+                "section.hero.image",
+                "url",
+                "https://example.test/image.png".to_owned(),
+            )
+            .expect("image URL edit");
+        assert_eq!(
+            url_edit.settings_changes[0].value.value["url"],
+            "https://example.test/image.png"
+        );
+        let alt_edit = state
+            .set_image_property("section.hero.image", "alt", "An offer image".to_owned())
+            .expect("image alt edit");
+        assert_eq!(
+            alt_edit.settings_changes[0].value.value["alt"],
+            "An offer image"
+        );
+        let cleared = state
+            .set_setting(
+                "section.hero.image",
+                EditorSettingValue {
+                    kind: "image".to_owned(),
+                    value: serde_json::Value::Null,
+                    effective_value: None,
+                },
+            )
+            .expect("remove image");
+        assert!(cleared.settings_changes.is_empty());
+        assert!(state
+            .document
+            .as_ref()
+            .expect("loaded editor")
+            .settings_values["section.hero.image"]
+            .value
+            .is_null());
         assert!(!state.can_save());
     }
 
@@ -1024,6 +1578,7 @@ mod tests {
         state.move_section(0, 2);
         let capture = state.begin_save().expect("dirty editor can save");
         state.begin_route("funnel-2".to_owned());
+        let (settings_schema, settings_values) = fixture_settings();
         state.finish_load(
             state.route_epoch,
             "funnel-2",
@@ -1039,13 +1594,15 @@ mod tests {
                     id: "hero-2".to_owned(),
                     section_type: "hero".to_owned(),
                 }],
+                settings_schema,
+                settings_values,
                 preview_html: "second preview".to_owned(),
             }),
         );
         assert!(state
-            .finish_save(&capture, "revision-2".to_owned())
+            .finish_save(&capture, "revision-2".to_owned(), BTreeMap::new())
             .is_none());
-        assert!(!state.fail_save(&capture, false, "old response".to_owned()));
+        assert!(!state.fail_save(&capture, false, false, "old response".to_owned()));
         assert_eq!(state.funnel_id, "funnel-2");
         assert_eq!(
             state
