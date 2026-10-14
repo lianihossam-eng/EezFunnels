@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-014 Publication `/f/:slug` (`feat/014_publish`; based on merged main `41f0df225650c32878dfb14000f7116784aad765`)
+Current phase: PR-015 Command registry (`feat/015_commands`; based on merged main `89fc2397233f67f5797bd8736cfd50b41a6b8eab`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -19,7 +19,7 @@ Last updated: 2026-10-14
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
 - [x] PR-012 Undo/redo (PR #13 merged at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`; hosted CI run `38611264446` passed on reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27`)
 - [x] PR-013 Responsive preview (merged into `main` at `41f0df225650c32878dfb14000f7116784aad765`)
-- [ ] PR-014 Publication /f/:slug (`feat/014_publish`; implementation in progress)
+- [x] PR-014 Publication /f/:slug (PR #15 merged at `89fc2397233f67f5797bd8736cfd50b41a6b8eab`; hosted CI `38630162138` and exact-head Sol/@codex reviews passed; four review threads resolved)
 - [ ] PR-015 Command registry
 - [ ] PR-016 CLI
 - [ ] PR-017 MCP server
@@ -31,7 +31,9 @@ Last updated: 2026-10-14
 
 PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. The local publication fixes require a newly claimed receipt in the exact D1 batch before pointer mutation, classify missing publish/unpublish fields and public-read slug before typed decode, map unsupported stored schema to HTTP 400, and classify an invalid route against active receipts before returning its route error. D18 records these boundaries; the 16 KiB request cap and C-01/C-04 receipt/CAS behavior remain unchanged. No frozen contract, migration, dependency, lockfile, or renderer changed.
 
-The focused publication command suite passes 7/7, including the new empty-public-read-input regression. `cargo xtask check` and `cargo xtask ci` pass on source commit `07a02418eed6e111d1aa221bb07739b4da4df697`; CI's local Worker/D1 smoke covers the publication findings, and RustSec found zero advisories across 346 locked dependencies. Both repository-level ABA replay scenarios pass in `scripts/smoke-pr003.sh`. Migration and browser suites pass; browser critical axe findings are zero. Fingerprint is `7b85f4311c5e28118eda715ab65483d3b81d73653d72260127cb3722d3bb3840` across 123 files. Direct comment/TODO/FIXME/suppression scans and manual boundary audit are clean; full independent-agent no-comments/interrogate workflows were not run because PR-014 prohibited delegation. Fresh hosted CI and GPT-6.1-Sol re-review are pending push. No remote D1 or deployment ran.
+PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. Its late-replay, required-field, public-schema, and route-receipt review fixes are in source commit `07a02418eed6e111d1aa221bb07739b4da4df697`; no frozen contract, migration, dependency, lockfile, or renderer changed. Focused publication tests pass 7/7. Both local Worker/D1 replay interleavings and the publication smoke pass; RustSec found zero advisories across 346 locked dependencies. Hosted CI `38630162138` passed on exact head `b8db79f5e929e2fd0f1bc47a7f02901e53fc804d`; Sol and @codex reviews were clean and all four review threads were resolved. PR #15 merged at `89fc2397233f67f5797bd8736cfd50b41a6b8eab`. No remote D1 operation or deployment ran.
+
+PR-015 adds a closed registry for the nine existing executable command IDs. Each entry defines its actor, short description, handler, and idempotency-key policy; the Worker dispatches through that table, and public command IDs are shared constants. Four focused tests cover inventory/handler parity, actors, C-04 rejection, and required/malformed idempotency keys. `cargo xtask check`, `cargo xtask ci`, and the PR-010–013 browser suite pass on the current source; local Worker/D1 smokes cover command create/list/delete and publication flows. No frozen contract, migration, dependency, lockfile, or renderer changed. The original plan's count of 15 has no definitions for six extra commands; D19 records why this PR registers only executable behavior and keeps section edits in `funnel.revision.save`.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -294,4 +296,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Wait for fresh hosted CI and Sol re-review on PR #12. Merge only after those gates pass. Do not apply remote migrations or deploy as part of PR-011. Tag @codex on PRs when requesting reviews, edits, or questions.
+Open PR-015 against `main`, tag @codex with a clear exact-head review request, then merge only after hosted CI and the exact-head @codex review pass. Continue with PR-016 once PR-015 is merged. Keep all database, browser, and deployment checks local; do not publish the cloud environment as part of these PRs.

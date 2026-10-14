@@ -398,11 +398,17 @@ L4: api, dashboard, cli
 
 | Commit | Contenu |
 |:---|:---|
-| `feat(commands): dispatcher (actor=local_user)` | — |
-| `feat(commands): 15 commandes` | funnel.*, section.*, theme.*, publish.* |
-| `feat(commands): idempotency keys` | — |
+| `feat(commands): registry-backed dispatcher` | `local_user` commands and public read |
+| `feat(commands): registry of executable command IDs` | Nine current `funnel.*` operations |
+| `feat(commands): registry idempotency policies` | Required keys for mutations |
 | `feat(commands): error taxonomy` | C-04 |
-| `test(commands): dispatch tests` | — |
+| `test(commands): registry and dispatch tests` | — |
+
+The original count of 15 did not define the additional command IDs or their request/result
+semantics. PR-015 registers the nine commands that already have executable handlers. Section edits
+remain part of `funnel.revision.save`, and the pure `theme.set` revision transform is not advertised
+as a persisted command. New section-level operations need explicit semantics before they enter the
+registry.
 
 ---
 

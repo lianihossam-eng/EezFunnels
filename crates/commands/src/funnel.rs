@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 
+use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     DomainError, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section,
     ThemePreset,
@@ -33,7 +34,7 @@ pub struct FunnelCreateCommand {
 }
 
 impl FunnelCreateCommand {
-    pub const ID: &'static str = "funnel.create";
+    pub const ID: &'static str = command_ids::FUNNEL_CREATE;
 
     pub fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -123,7 +124,7 @@ pub struct FunnelDeleteCommand {
 }
 
 impl FunnelDeleteCommand {
-    pub const ID: &'static str = "funnel.delete";
+    pub const ID: &'static str = command_ids::FUNNEL_DELETE;
 
     pub fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -152,7 +153,7 @@ pub(super) struct FunnelPublishCommand {
 }
 
 impl FunnelPublishCommand {
-    const ID: &'static str = "funnel.publish";
+    const ID: &'static str = command_ids::FUNNEL_PUBLISH;
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -183,7 +184,7 @@ pub(super) struct FunnelUnpublishCommand {
 }
 
 impl FunnelUnpublishCommand {
-    const ID: &'static str = "funnel.unpublish";
+    const ID: &'static str = command_ids::FUNNEL_UNPUBLISH;
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -210,7 +211,7 @@ pub(super) struct FunnelPublicReadCommand {
 }
 
 impl FunnelPublicReadCommand {
-    const ID: &'static str = "funnel.public.read";
+    const ID: &'static str = command_ids::FUNNEL_PUBLIC_READ;
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -233,7 +234,7 @@ impl FunnelPublicReadCommand {
 pub struct FunnelListCommand {}
 
 impl FunnelListCommand {
-    pub const ID: &'static str = "funnel.list";
+    pub const ID: &'static str = command_ids::FUNNEL_LIST;
 
     pub fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         serde_json::from_str(parameters).map_err(Into::into)
@@ -247,7 +248,7 @@ struct FunnelEditorReadCommand {
 }
 
 impl FunnelEditorReadCommand {
-    const ID: &'static str = "funnel.editor.read";
+    const ID: &'static str = command_ids::FUNNEL_EDITOR_READ;
 
     fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let value: Value = serde_json::from_str(parameters)?;
@@ -353,36 +354,62 @@ impl<'repo, 'database> Session<'repo, 'database> {
 
     pub async fn execute(
         &self,
+        actor: CommandActor,
         command_id: &str,
         parameters: &str,
         idempotency_key: Option<&str>,
     ) -> Result<Value, FunnelCommandError> {
-        match command_id {
-            FunnelListCommand::ID => self.execute_list(parameters).await,
-            FunnelPublicReadCommand::ID => self.execute_public_read(parameters).await,
-            FunnelPublishCommand::ID => {
-                self.execute_publish(parameters, required_idempotency_key(idempotency_key)?)
-                    .await
+        let command = resolve_command(actor, command_id, idempotency_key)?;
+        match command.handler() {
+            CommandHandler::List => self.execute_list(parameters).await,
+            CommandHandler::PublicRead => self.execute_public_read(parameters).await,
+            CommandHandler::Publish => {
+                self.execute_publish(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
             }
-            FunnelUnpublishCommand::ID => {
-                self.execute_unpublish(parameters, required_idempotency_key(idempotency_key)?)
-                    .await
+            CommandHandler::Unpublish => {
+                self.execute_unpublish(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
             }
-            FunnelEditorReadCommand::ID => self.execute_editor_read(parameters).await,
-            "funnel.editor.preview" => self.execute_editor_preview(parameters).await,
-            "funnel.revision.save" => {
-                self.execute_editor_save(parameters, required_idempotency_key(idempotency_key)?)
-                    .await
+            CommandHandler::EditorRead => self.execute_editor_read(parameters).await,
+            CommandHandler::EditorPreview => self.execute_editor_preview(parameters).await,
+            CommandHandler::RevisionSave => {
+                self.execute_editor_save(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
             }
-            FunnelCreateCommand::ID => {
-                self.execute_create(parameters, required_idempotency_key(idempotency_key)?)
-                    .await
+            CommandHandler::Create => {
+                self.execute_create(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
             }
-            FunnelDeleteCommand::ID => {
-                self.execute_delete(parameters, required_idempotency_key(idempotency_key)?)
-                    .await
+            CommandHandler::Delete => {
+                self.execute_delete(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
             }
-            _ => Err(FunnelCommandError::UnknownCommand),
         }
     }
 
@@ -606,7 +633,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             })?;
         let settings_values = inspector::inspector_projection(&edited)?.1;
         Ok(serde_json::json!({
-            "command_id": "funnel.editor.preview",
+            "command_id": command_ids::FUNNEL_EDITOR_PREVIEW,
             "base_revision_id": command.base_revision_id,
             "section_ids": command.section_ids,
             "settings_values": settings_values,
@@ -624,7 +651,11 @@ impl<'repo, 'database> Session<'repo, 'database> {
             Err(error) => {
                 if self
                     .repository
-                    .classify_active_receipt(idempotency_key, "funnel.revision.save", None)
+                    .classify_active_receipt(
+                        idempotency_key,
+                        command_ids::FUNNEL_REVISION_SAVE,
+                        None,
+                    )
                     .await?
                     .is_some()
                 {
@@ -639,7 +670,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .repository
             .classify_active_receipt(
                 idempotency_key,
-                "funnel.revision.save",
+                command_ids::FUNNEL_REVISION_SAVE,
                 Some(&canonical_parameters),
             )
             .await?
@@ -701,7 +732,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             render_manifest_json,
         };
         let result_json = serde_json::to_string(&serde_json::json!({
-            "command_id": "funnel.revision.save",
+            "command_id": command_ids::FUNNEL_REVISION_SAVE,
             "funnel_id": command.funnel_id,
             "revision_id": new_revision_id,
             "section_ids": command.section_ids,
@@ -1295,7 +1326,7 @@ pub fn validate_idempotency_key(key: &str) -> Result<(), FunnelCommandError> {
     Ok(())
 }
 
-fn required_idempotency_key(key: Option<&str>) -> Result<&str, FunnelCommandError> {
+pub(super) fn required_idempotency_key(key: Option<&str>) -> Result<&str, FunnelCommandError> {
     let key = key.ok_or(FunnelCommandError::MissingIdempotencyKey)?;
     validate_idempotency_key(key)?;
     Ok(key)

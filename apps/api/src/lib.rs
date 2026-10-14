@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use eez_commands::Session;
+use eez_commands::{command_ids, command_registry, Session};
 use std::cell::Cell;
 use std::collections::HashSet;
 
@@ -102,7 +102,7 @@ pub async fn fetch(
             &env,
             request,
             funnel_id,
-            "funnel.publish",
+            command_ids::FUNNEL_PUBLISH,
             correlation_id.clone(),
         )
         .await
@@ -111,7 +111,7 @@ pub async fn fetch(
             &env,
             request,
             funnel_id,
-            "funnel.unpublish",
+            command_ids::FUNNEL_UNPUBLISH,
             correlation_id.clone(),
         )
         .await
@@ -351,8 +351,8 @@ fn publication_command_parameters(
         .as_object_mut()
         .ok_or(EditorCommandParametersError::InvalidJson)?;
     let allowed_fields: &[&str] = match command_id {
-        "funnel.publish" => &["revision_id", "expected_published_revision_id"],
-        "funnel.unpublish" => &["expected_published_revision_id"],
+        command_ids::FUNNEL_PUBLISH => &["revision_id", "expected_published_revision_id"],
+        command_ids::FUNNEL_UNPUBLISH => &["expected_published_revision_id"],
         _ => return Err(EditorCommandParametersError::InvalidJson),
     };
     if object
@@ -378,10 +378,12 @@ async fn public_funnel_response(
         return funnel_slug_not_found_response(&correlation_id);
     }
     let parameters = serde_json::json!({ "slug": slug }).to_string();
-    let result = match execute_funnel_command(env, "funnel.public.read", &parameters, None).await {
-        Ok(result) => result,
-        Err(error) => return funnel_command_error_response(error, &correlation_id),
-    };
+    let result =
+        match execute_funnel_command(env, command_ids::FUNNEL_PUBLIC_READ, &parameters, None).await
+        {
+            Ok(result) => result,
+            Err(error) => return funnel_command_error_response(error, &correlation_id),
+        };
     let (Some(revision_id), Some(html)) = (
         result.get("revision_id").and_then(Value::as_str),
         result.get("html").and_then(Value::as_str),
@@ -445,10 +447,12 @@ async fn funnel_collection_response(
     correlation_id: String,
 ) -> Response<axum::body::Body> {
     match *request.method() {
-        Method::GET => match execute_funnel_command(env, "funnel.list", "{}", None).await {
-            Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
-            Err(error) => funnel_command_error_response(error, &correlation_id),
-        },
+        Method::GET => {
+            match execute_funnel_command(env, command_ids::FUNNEL_LIST, "{}", None).await {
+                Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+                Err(error) => funnel_command_error_response(error, &correlation_id),
+            }
+        }
         Method::POST => {
             let idempotency_key = match request_idempotency_key(request.headers()) {
                 Ok(key) => key,
@@ -485,8 +489,13 @@ async fn funnel_collection_response(
                     .await;
                 }
             };
-            match execute_funnel_command(env, "funnel.create", parameters, Some(&idempotency_key))
-                .await
+            match execute_funnel_command(
+                env,
+                command_ids::FUNNEL_CREATE,
+                parameters,
+                Some(&idempotency_key),
+            )
+            .await
             {
                 Ok(result) => {
                     let location = result
@@ -508,7 +517,14 @@ async fn unreadable_create_payload_response(
     idempotency_key: &str,
     correlation_id: &str,
 ) -> Response<axum::body::Body> {
-    match execute_funnel_command(env, "funnel.create", "null", Some(idempotency_key)).await {
+    match execute_funnel_command(
+        env,
+        command_ids::FUNNEL_CREATE,
+        "null",
+        Some(idempotency_key),
+    )
+    .await
+    {
         Err(error) => funnel_command_error_response(error, correlation_id),
         Ok(_) => funnel_command_error_response(
             ApiError::from_code("validation/invalid_json"),
@@ -546,7 +562,7 @@ async fn funnel_editor_preview_response(
         Ok(parameters) => parameters,
         Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
     };
-    match execute_funnel_command(env, "funnel.editor.preview", &parameters, None).await {
+    match execute_funnel_command(env, command_ids::FUNNEL_EDITOR_PREVIEW, &parameters, None).await {
         Ok(result) => {
             let mut response = json_success_response(result, StatusCode::OK, &correlation_id, None);
             response
@@ -612,7 +628,7 @@ async fn funnel_editor_save_response(
     };
     match execute_funnel_command(
         env,
-        "funnel.revision.save",
+        command_ids::FUNNEL_REVISION_SAVE,
         &parameters,
         Some(&idempotency_key),
     )
@@ -643,7 +659,14 @@ async fn execute_unreadable_editor_payload(
     fresh_error_code: &'static str,
     correlation_id: &str,
 ) -> Response<axum::body::Body> {
-    match execute_funnel_command(env, "funnel.revision.save", "null", Some(idempotency_key)).await {
+    match execute_funnel_command(
+        env,
+        command_ids::FUNNEL_REVISION_SAVE,
+        "null",
+        Some(idempotency_key),
+    )
+    .await
+    {
         Err(error) => funnel_command_error_response(error, correlation_id),
         Ok(_) => editor_payload_error_response(correlation_id, fresh_error_code),
     }
@@ -787,7 +810,9 @@ async fn funnel_item_response(
             return funnel_route_not_found_response(&correlation_id);
         }
         let parameters = serde_json::json!({ "funnel_id": funnel_id }).to_string();
-        return match execute_funnel_command(env, "funnel.editor.read", &parameters, None).await {
+        return match execute_funnel_command(env, command_ids::FUNNEL_EDITOR_READ, &parameters, None)
+            .await
+        {
             Ok(result) => {
                 let mut response =
                     json_success_response(result, StatusCode::OK, &correlation_id, None);
@@ -822,7 +847,14 @@ async fn funnel_item_response(
             return error_response(&error, correlation_id);
         }
     };
-    match execute_funnel_command(env, "funnel.delete", &parameters, Some(&idempotency_key)).await {
+    match execute_funnel_command(
+        env,
+        command_ids::FUNNEL_DELETE,
+        &parameters,
+        Some(&idempotency_key),
+    )
+    .await
+    {
         Ok(result) if valid_route_id => {
             json_success_response(result, StatusCode::OK, &correlation_id, None)
         }
@@ -846,11 +878,16 @@ async fn execute_funnel_command(
     parameters: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
+    let actor = command_registry()
+        .iter()
+        .find(|command| command.id() == command_id)
+        .map(|command| command.actor())
+        .ok_or_else(|| ApiError::from_code("validation/operation_not_supported"))?;
     let bindings = eez_storage::Bindings::from_env(env)
         .map_err(|_| ApiError::from_code("external/unavailable"))?;
     let repository = bindings.repository();
     Session::new(&repository)
-        .execute(command_id, parameters, idempotency_key)
+        .execute(actor, command_id, parameters, idempotency_key)
         .await
         .map_err(|error| ApiError::from_code(error.code()))
 }

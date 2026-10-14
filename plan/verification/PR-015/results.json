@@ -1,0 +1,122 @@
+{
+  "task": "PR-015",
+  "evidence_refreshed_at_utc": "2026-10-14T20:29:40Z",
+  "branch": "feat/015_commands",
+  "base_commit": "89fc2397233f67f5797bd8736cfd50b41a6b8eab",
+  "verified_source_commit": "ab4b10731e0b622edfde150332ed143bade5aef3",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for the seven source and plan files listed in source_sha256. Status and verification artifacts are excluded.",
+  "source_fingerprint_sha256": "005dc1e82a203012d82e5a1667a0a3b07876d768455ece5431e9f75627cae42b",
+  "source_file_count": 7,
+  "source_sha256": {
+    "apps/api/src/lib.rs": "c4df6e78a44d804c536bc4e02ef74b077af2028a3e0ec47448211e339deee7d7",
+    "crates/commands/src/funnel.rs": "bb0955018efe8e33346eaef27f87565386a772c5fc2d4e48f97b5f157a128da8",
+    "crates/commands/src/lib.rs": "b41185aff5025f052db76f22dfe9efd775b5e6a2f684be34a9eff34d95d91069",
+    "crates/commands/src/registry.rs": "d385b09ab8f30282a87034c98bedef621527f3c41d633d07e21f1463aaa8d1d2",
+    "crates/commands/src/registry_tests.rs": "ea5da71f23fb8831f4f4678de1fa56b00e4cd561f213d7ac6230936b9da5e00c",
+    "plan/decisions/D19_command_registry.md": "447d19f1edd55de1a6e74a801dd15b599cab9610995979425a1bd587e02afcdd",
+    "plan/production.md": "96a236a29b2d8fecbadd3bf66e65de05b644235de5ae02678b1da1be58abf15f"
+  },
+  "implementation": {
+    "registered_command_count": 9,
+    "registered_command_ids": [
+      "funnel.create",
+      "funnel.delete",
+      "funnel.editor.preview",
+      "funnel.editor.read",
+      "funnel.list",
+      "funnel.public.read",
+      "funnel.publish",
+      "funnel.revision.save",
+      "funnel.unpublish"
+    ],
+    "actor_policy": "Owner operations require LocalUser. funnel.public.read requires Public.",
+    "idempotency_required": [
+      "funnel.create",
+      "funnel.delete",
+      "funnel.publish",
+      "funnel.revision.save",
+      "funnel.unpublish"
+    ],
+    "error_mapping": "Unknown IDs and actor mismatches use C-04 validation/operation_not_supported; malformed mutation keys use validation/invalid_json; missing mutation keys use validation/missing_field.",
+    "scope_note": "The initial plan's count of 15 has no definitions for six additional command IDs. D19 registers only executable handlers and keeps section edits on the existing revision-save path."
+  },
+  "validation": {
+    "focused_command_tests": {
+      "command": "source .project-tools/env.sh && cargo +1.85.0 test -p eez-commands --locked",
+      "exit_code": 0,
+      "passed": 29,
+      "failed": 0,
+      "registry_specific_tests": 4,
+      "log": "plan/verification/PR-015/logs/command-tests.log.gz",
+      "sha256": "6ffaa43db0f59db3086d212a0d03481c015c079c551dba830639d99e66df1317",
+      "raw_log_sha256": "a1db3e15dfade827b3fa0ad620bd5f3cfb7ca669d10b261804c766c0cb44e453",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "suite_counts": [15, 29, 34, 13, 35, 5, 26, 2, 6],
+      "log": "plan/verification/PR-015/logs/cargo-check.log.gz",
+      "sha256": "27183a57ef6385332113b35058a270d977fe7de1b1261710f52a10b5c0a0a486",
+      "raw_log_sha256": "fe28869f63e54eb856f92432b7ec27fd8d7e29da84f5d814354aad48a4315bee",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "log": "plan/verification/PR-015/logs/cargo-ci.log.gz",
+      "sha256": "1065a0092bdb3dd9aaeac94dd28cfaa47ede30091639833d712272f8eddf7426",
+      "raw_log_sha256": "6c7884bcf1ab9f11f0a6d27fa1b77694836fa351af533a8e0dfa3c80e8da496a",
+      "compression": "gzip -n; gzip -cd restores the captured output",
+      "worker_smoke_markers": [
+        "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400",
+        "list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403"
+      ],
+      "audit": {
+        "exit_code": 0,
+        "advisories_loaded": 1329,
+        "locked_dependencies_scanned": 346,
+        "findings": 0
+      }
+    },
+    "browser_suite": {
+      "command": "npm run test:pr010:browser",
+      "exit_code": 0,
+      "critical_axe_findings": 0,
+      "log": "plan/verification/PR-015/logs/browser.log.gz",
+      "sha256": "46ec3d2f39c5f8e62ce435d922e5966f487d91e559edcf9853eaa8ff60c9d0ae",
+      "raw_log_sha256": "2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "standalone_audit": {
+      "command": "source .project-tools/env.sh && cargo +1.88.0 audit",
+      "exit_code": 0,
+      "locked_dependencies_scanned": 346,
+      "findings": 0,
+      "log": "plan/verification/PR-015/logs/audit.log.gz",
+      "sha256": "12d0749141a9fc399b13ba34e844badb5672e40e3f21a8f10a8c6c849d661082",
+      "raw_log_sha256": "fc50e80e2c10753969d4005e8e78db97cdaafefdf07a24c27ad3999807f1039d",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "frozen_contracts_migrations_dependencies_renderer_changed": false
+    },
+    "static_diff_audit": {
+      "scope": "Added lines across seven changed paths",
+      "exit_code": 0,
+      "findings": 0,
+      "log": "plan/verification/PR-015/logs/static-audit.log.gz",
+      "sha256": "28a30dfdefd6cce090c613656d32b3d84301898d48e854c9971fed123eae4ec5",
+      "raw_log_sha256": "cc44218edf1f9dea278e18f4c03b67854748795a436adb255827a80f31deeb77",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    }
+  },
+  "delivery": {
+    "hosted_ci": "Use the linked PR checks for the current exact-head result.",
+    "codex_review": "Use the linked PR review comments for the exact-head result.",
+    "remote_database_or_deployment": false,
+    "cloud_environment_published": false
+  }
+}
