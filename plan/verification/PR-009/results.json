@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T06:29:18Z",
+  "evidence_refreshed_at_utc": "2026-10-14T06:35:29Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "cef86473cb2b4a12da3bb7cbaa0f301a799eceaa",
-  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, D14 bounded workspace funnel list, CRUD smoke, review fixes, sessionStorage retry-key persistence, UTF-8 name limit, process-group-based Wrangler shutdown escalation, expired receipt reclamation, and stale funnel-list response protection.",
+  "verified_source_commit": "dbca0f012e2d2305c4d4219124e6901c3a567773",
+  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, D14 bounded workspace funnel list, CRUD smoke, review fixes, sessionStorage retry-key persistence, UTF-8 name limit, process-group-based Wrangler shutdown escalation, expired receipt reclamation, stale funnel-list response protection, and portable grep in the smoke runner.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "43397ba9f40157bf2e8eb39df044c4c5df74a81e5dfbf5e54c2c4f5518380b35",
+  "source_fingerprint_sha256": "bc1e145d84c8157b6c71ad951438ea4b265d08e8dc26687e1073f8505289ad20",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -110,7 +110,7 @@
     "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
-    "scripts/smoke-pr009.sh": "8dfc94bb7681c4797b2a1139a9e009251eff4d6e7484de5c9b06db5d73779ed5",
+    "scripts/smoke-pr009.sh": "fbc1d2d2fc67a64d8e1682b98c195e8f2b72e9b483f3847629b4f624ee3d2c90",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
     "xtask/src/layers.rs": "04027ed0e20dbd047c555710b849b48e21d2d19c88f6d86494308f08b4c6bf30",
@@ -196,7 +196,7 @@
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773.",
       "workspace_test_counts": {
         "api": 11,
         "commands": 7,
@@ -208,8 +208,8 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-funnel-cap-check.log",
-      "log_sha256": "c7148c86a186d2de71de83540d8753ff237b39c2c2fcc8c129ad27da605254f6",
+      "log": "/tmp/eezfunnel-pr009-runner-portability-check.log",
+      "log_sha256": "05e0023a4d98331bcf2ed37c6abf42b32121b6ca8980cd9abdd5c4fbfaf9bd17",
       "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
@@ -218,9 +218,9 @@
       "fresh_isolated_target": true,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Fresh full cargo xtask ci invocation passed on exact source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa using the existing isolated target (target was not empty). Workspace checks/tests, API and dashboard browser WASM, generated assets, the process-group regression, the 100-funnel cap/list-bound CRUD smoke, and cargo audit passed.",
-      "log": "/tmp/eezfunnel-pr009-funnel-cap-ci.log",
-      "log_sha256": "cc7654d0cdf55250da835f41ed9779739d4b005eb5521bccce45890d1ae56649",
+      "outcome": "Fresh full cargo xtask ci invocation passed on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773 using the existing isolated target (target was not empty). Workspace checks/tests, API and dashboard browser WASM, generated assets, the process-group regression, the 100-funnel cap/list-bound CRUD smoke, and cargo audit passed. The smoke runner uses standard grep available on the hosted Ubuntu runner.",
+      "log": "/tmp/eezfunnel-pr009-runner-portability-ci.log",
+      "log_sha256": "83d54dc42356cbebf60b2c8c89024c8e51c558bc5b1089e4b0d79a499934ef94",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -312,10 +312,10 @@
     "local_wrangler_smoke": {
       "command": "source .project-tools/env.sh && bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-funnel-cap-smoke-final.log",
-      "smoke_stdout_sha256": "105a45f2221acd04fc7dc7a4bb7de2bfd9b9da251ffad3726994e6d7bdddb634",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-runner-portability-smoke.log",
+      "smoke_stdout_sha256": "331aaf6766a50b15eb51be598599b78434be55f08ffa01d673224a7886fadc3a",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "20dd3aff710bdf619479374b95169e706b6ef8288c5cfcd9eae8d919cc3bfda2",
+      "wrangler_log_sha256": "00c8bd64ffa8a6497534af27e4b0d3262d0320063902b1d14aef61a36ccfbb6d",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -335,7 +335,7 @@
         "capacity_release": "Deleting a funnel released a slot; a subsequent API create succeeded and was deleted during cleanup."
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The same local CRUD smoke and process-group shutdown regression passed inside the full cargo xtask ci run on exact source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa, before audit.",
+      "ci_smoke_integration": "The same local CRUD smoke, 100-funnel capacity assertions, and process-group shutdown regression passed inside the full cargo xtask ci run on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773, before audit.",
       "process_group_race_regression": {
         "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
         "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
@@ -346,7 +346,7 @@
       "cleanup": {
         "port_8787_closed": true,
         "live_wrangler_or_workerd_processes": 0,
-        "observed_after": "Standalone smoke and full CI-integrated smoke on exact source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa; no live Wrangler/workerd processes remained and port 8787 was closed."
+        "observed_after": "Standalone smoke and full CI-integrated smoke on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773; no live Wrangler/workerd processes remained and port 8787 was closed."
       },
       "exit_marker": "SMOKE_EXIT=0",
       "wrangler_log_capture_scope": "The fixed Wrangler log path contains the standalone local CRUD smoke; the CI-integrated and standalone smoke stdout logs are recorded separately.",
@@ -362,12 +362,12 @@
       }
     },
     "source_format_and_comment_checks": {
-      "cargo_fmt_check": "passed as part of cargo xtask check on the exact source tree",
+      "cargo_fmt_check": "passed as part of cargo xtask check on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "Reviewed the exact source commit diff for comments, TODO/FIXME markers, and lint suppressions; none were added.",
-      "source_commit_check": "git show --check passed for source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa",
-      "bash_n_check": "passed for scripts/smoke-pr009.sh"
+      "no_comments_review": "Reviewed the exact source commit diff for comments, TODO/FIXME markers, and lint suppressions; none were added. The hosted-runner compatibility fix replaces rg with standard grep.",
+      "source_commit_check": "git show --check passed for source commit dbca0f012e2d2305c4d4219124e6901c3a567773",
+      "bash_n_check": "passed for scripts/smoke-pr009.sh on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773"
     }
   },
   "tool_versions": {
@@ -394,7 +394,7 @@
     "D14 caps the workspace at 100 funnels, bounds funnel.list to 100 rows, and returns conflict/funnel_limit_reached (HTTP 409) without persisting an idempotency receipt or funnel when full; deletion frees a slot."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Hosted CI run 38520311552 passed on prior head 28423231f44112df058b623b8a6713d7f5523ba0, which predates D14 and the funnel cap. Source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa and its refreshed evidence are not yet pushed; hosted CI on the exact final evidence head is pending.",
+    "status_at_evidence_capture": "Hosted run 38520311552 passed on prior head 28423231f44112df058b623b8a6713d7f5523ba0 before D14. Run 38522570022 failed on evidence head a14d60e4896b3bc29a4c28699695985ed5b2693f because the hosted Ubuntu runner does not provide rg; the smoke now uses standard grep. Source commit dbca0f012e2d2305c4d4219124e6901c3a567773 and refreshed evidence are not yet pushed; hosted CI on the exact final evidence head is pending.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
@@ -405,10 +405,15 @@
       "head": "28423231f44112df058b623b8a6713d7f5523ba0",
       "status": "success",
       "scope": "Prior head before the 100-funnel capacity review fix; does not verify source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa or its evidence commit."
+    },
+    "latest_failed_run": {
+      "run_id": "38522570022",
+      "head": "a14d60e4896b3bc29a4c28699695985ed5b2693f",
+      "failure": "CI reached the PR-009 CRUD/capacity smoke after migrations, then scripts/smoke-pr009.sh failed at line 584 with rg: command not found (exit 127). Replaced the rg dependency with standard grep in source commit dbca0f012e2d2305c4d4219124e6901c3a567773; exact-source local check, full CI, and standalone smoke pass."
     }
   },
   "reviews": {
-    "codex": "Pending; the previous exact-head review finding #5513781116 is addressed by the cap and bound-list changes. Request once after hosted CI is green on the exact final evidence head.",
+    "codex": "Pending fresh exact-head review; the prior capacity finding #5513781116 is addressed by the cap and bounded-list changes. The hosted-runner missing-rg failure was fixed in source commit dbca0f012e2d2305c4d4219124e6901c3a567773. Request once after hosted CI is green on the final evidence head.",
     "sol": "Pending; request only after a clean fresh Codex review and hosted CI green on the exact same final head."
   },
   "deployment": {

@@ -161,14 +161,17 @@ standalone runs leave no live Wrangler or workerd processes and close port 8787.
 regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
 `results.json`.
 
-The final cap source is `cef86473cb2b4a12da3bb7cbaa0f301a799eceaa`. Its fresh `cargo +1.85.0 xtask check`,
-full `cargo +1.85.0 xtask ci`, and separate Wrangler smoke pass on the same source tree. CI reuses
+The capacity implementation is in `cef86473cb2b4a12da3bb7cbaa0f301a799eceaa`; final validated source
+`dbca0f012e2d2305c4d4219124e6901c3a567773` adds the portable smoke check. Its fresh `cargo +1.85.0 xtask check`,
+full `cargo +1.85.0 xtask ci`, and separate Wrangler smoke all pass. Hosted run
+`38522570022` then exposed that the Ubuntu runner did not include `rg`; source commit
+`dbca0f012e2d2305c4d4219124e6901c3a567773` replaces this smoke-only dependency with standard `grep`.
+The check, a new full CI, and separate Wrangler smoke all pass on that exact source. CI reuses
 `/workspace/.eezfunnel-pr009-name-limit-ci`, which was not empty at invocation. The smoke fills the
 100th slot through the API, checks idempotent replay and a 409 capacity error with no receipt or row,
 rejects a direct insert, bounds an over-cap test fixture to 100 list items, and verifies delete frees a
-slot. Exact logs and the refreshed source fingerprint are recorded in PR-009 verification evidence.
-The hosted run `38520311552` passed on previous head `2842323`, before the cap fix; hosted CI on the
-new evidence head is pending push.
+slot. Evidence records the `bc1e145d84c8157b6c71ad951438ea4b265d08e8dc26687e1073f8505289ad20`
+fingerprint and exact-source log hashes. Hosted CI on the final pushed evidence head is pending.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding
