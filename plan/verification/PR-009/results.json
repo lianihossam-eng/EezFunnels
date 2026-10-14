@@ -1,0 +1,535 @@
+{
+  "task": "PR-009",
+  "evidence_refreshed_at_utc": "2026-10-14T08:28:31Z",
+  "branch": "feat/009_funnel_list",
+  "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
+  "verified_source_commit": "ca4ceada2dd090a423bb85ac12b4f13abfc0d118",
+  "source_commit_role": "PR-009 Codex follow-up: successful delete invalidates pre-delete list request generations, removes the funnel locally, and starts a newer authoritative list refresh so a stale GET cannot restore the deleted card.",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
+  "source_fingerprint_sha256": "876b3284afb31d47d0a9cac6333ff4b22ce5b82ca07dcd8ba347da29365dc337",
+  "source_sha256": {
+    ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
+    ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
+    ".github/ISSUE_TEMPLATE/bug_report.md": "98709342c059dcbfd1d96708258d8a8add53945e6c544353c598b86e9e7f714a",
+    ".github/ISSUE_TEMPLATE/feature_request.md": "2885aeb6339d4002e11129dd1f94cc753cbef0c0eb060dfa5ba0be4d1a7d76d2",
+    ".github/PULL_REQUEST_TEMPLATE.md": "aa01b03fe058b008154017856f2ae36a1bbc7a15f67c6db2a09f66bc7725b2d0",
+    ".github/workflows/ci.yml": "f79b287111f5b1b6f202caf0cbfb916d88f72a8b8c482d072fc9180eb7fdd5bf",
+    ".github/workflows/release.yml": "cff56c8e5bbe14a130bc558d6e05feb2b81fba371804e4512cd294858f6693f2",
+    ".gitignore": "50c255fa42cdae47d1a5fbdbdea283521b7fe4a084dbcd10ddf58fb024bdbf52",
+    ".rustfmt.toml": "7d747a8a7f30129529ab3748f9b0f37f0bd50783d0a862bd8a12676a9069ba88",
+    "AGENTS.md": "ff2c76055643dc1ee3650a395614634df625ef21db5a74e379808bd7e8a9d7d8",
+    "CHANGELOG.md": "14af49db6823e7a9fc936c062b69f6abb5baefc304f837ca18ec1123172643bd",
+    "CODE_OF_CONDUCT.md": "35837af79068e2ff370903f24f6244b991799e829d0a75dd97df7a42b331ea20",
+    "CONTRIBUTING.md": "59abb575b9a2f45ec9af29d4597322d30e8e717ce26d3bffde055bc2a8c75062",
+    "Cargo.lock": "c58ca81aafa09b75bf74ec9037a04bcc64be21fcdd4cfc24320ff95889c316b4",
+    "Cargo.toml": "ada0a82cb1b0fd7c604c465961b3b1cf05efc33c6ab0224d5f0f7357d9fafe80",
+    "GLOSSARY.md": "9c1756e9445854206eeb994ead4fa8ed0836890472a598a534a5a7017cff4819",
+    "LICENSE": "256c86ed34a35d3f4e923043b7322f3e54fa050d20875200e489fc5d640f6029",
+    "README.md": "a7e31f09ca40fdbb956c39d1e5c8bc57141e717efaa1cbc81b902bb7a494c2fb",
+    "SECURITY.md": "7cb62a5846089308bcaa128e33ddc9d056173be0c7bcd34a5d27fe0bfc7e5300",
+    "apps/api/Cargo.toml": "2cc930112db9a105b4e931f3326d3b04894445618997f2c47f1aa3808a293190",
+    "apps/api/src/errors.rs": "2075d38966c07453ddfd09c0645ed78c2b30892300cb531c51501fce5c69ed68",
+    "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
+    "apps/api/src/lib.rs": "e4ae2dc521413b7ed2114ed5b76b9700b6b4dc5c0ca2947dec2e3cf4ca8d67fd",
+    "apps/cli/Cargo.toml": "fdf35111e8406b0e3d9418a969eff6bebf510a922a7df519f2cfbfa8bf132a22",
+    "apps/cli/src/main.rs": "f90c845d65c6729db5fa87e83ed4d0766a99594b63aedc1b7a5a4f5b65ef9ae7",
+    "apps/dashboard/Cargo.toml": "c1f80286d887e68696442b263f0217c05d36b735906b3180bb6fa52fbf7153e4",
+    "apps/dashboard/src/browser.rs": "562ef1cb3a26d6df1ea33086ac82d6b6289586ba826bf1b07749e0855a6e39d0",
+    "apps/dashboard/src/lib.rs": "b4389dae2d8b4988ac0e32b59c5d717e48d73f4fb67e4141a82bb2df404cfe3d",
+    "crates/commands/Cargo.toml": "75af996100fc8a922948561a692ba9592ccc29496c421b995a2cbc524500f8f8",
+    "crates/commands/src/funnel.rs": "f4ffa0294ad5a306199b2940e914dffd5a2e14ca0c974d67e3ce3bcdea134de0",
+    "crates/commands/src/funnel_create_tests.rs": "aa46fec2e9fdeb183096989faee9f2dced7adbff4cf8e0eeac4e469baf3f8c60",
+    "crates/commands/src/lib.rs": "c135d794600ce30e8332f44b6af7085428b5e3d7ce0b3e300ee94752290f6d63",
+    "crates/commands/src/theme_set_tests.rs": "03bfdbe4566e595a27440c3cfea097dcd6354a2f0f214e1a74164b0ce3c740b7",
+    "crates/dashboard-presentation/Cargo.toml": "5c0c46162cc31a227428581f92eb094e0f8e9d10762ac6a5136c4045adbdb6a4",
+    "crates/dashboard-presentation/assets/bootstrap.js": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110",
+    "crates/dashboard-presentation/assets/dashboard.css": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b",
+    "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
+    "crates/dashboard-presentation/src/lib.rs": "bf13826b697575d8f57e6479187d10ca3bb843243cbf86c1f43e623bad5374d7",
+    "crates/dashboard-presentation/src/routes.rs": "b5bcafae2dd8c891fcd491b167aedacc8a24e3b8a94883b5f191a21ceb809fd1",
+    "crates/dashboard-presentation/src/ssr.rs": "adc4e1eb07f0aac7b6e3edffd79887945fc3ee54d19c17acac1152b7980b9495",
+    "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
+    "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
+    "crates/domain/src/theme_tests.rs": "11a1456868e1c0a85cb0b82dc34c60d0170020c65238fec2c6b43525fe0854e5",
+    "crates/render/Cargo.toml": "0e09a4572d8dfce07b703b9af36b297fe2b57cd61b144de5f146c5531318db69",
+    "crates/render/snapshots/theme-bold.properties": "651910870bdc8c51e9fbc641be97c8d76f39ec1e539f3b91c59c4dba4ce8988f",
+    "crates/render/snapshots/theme-corporate.properties": "74d6a02435851c780527dd9f362aba341ae946f4dfa015693dab44b108b74269",
+    "crates/render/snapshots/theme-elegant.properties": "e9879887b8a316cf3a38818b4121c0f5b0073d0f8958d9bdd228e703545d6194",
+    "crates/render/snapshots/theme-minimal.properties": "df87bc2f9d993e2c968c8aad857d9b763fb7442ddfca786f761e9328150320ac",
+    "crates/render/snapshots/theme-playful.properties": "e819c2de382322629618675e3ea6f7aff5605221b6da588a4ca90015376fc6fd",
+    "crates/render/snapshots/theme.css": "9b817c3207ff4adbc4c38d00adbbd26fbb8efb681dffc16b2a9b2b2e866c7954",
+    "crates/render/src/lib.rs": "622da743d248c4e9d9554fb1592b97fcb58785f5dffb709bb142724db8d7edc7",
+    "crates/render/src/renderer_tests.rs": "d081d8dc5b5ae5774f40490c432caa9b1c8dd7fc52a08cc6850049c794b528f2",
+    "crates/render/src/section_content_tests.rs": "e32cf26f27e99ba3d89a989687dce037a3a2baf950c9d5d14b26e172701752df",
+    "crates/render/src/test_support.rs": "d80307fa79eeeb13b89de24d04ac5f4956e0967e8103e88de9248579b1039ca5",
+    "crates/storage/Cargo.toml": "6d851d3347b1a4453c98f55fe131528e69e75f19d6cebd3803e97a33124b3e53",
+    "crates/storage/src/lib.rs": "69b4562314942ef501d395fc062b43cdad2c6b364ee3ec92e6517abf9fa36263",
+    "crates/storage/src/repository.rs": "d1d56541e1cd942931df26b9a11bfef849b23ee2d28ad706f00cffb8fbd41e9d",
+    "crates/storage/src/theme_seed_tests.rs": "042b9c6ba4eb9ca138f76b21f47b269f13a8b3b5ea4c625ce98d0ed59800e5ad",
+    "docs/commands.md": "6f8e29b90b3434ae432bf543680c14e3ec41f651c65f23d09d79bbd597e2eb65",
+    "docs/deploy.md": "53ad223447c1fe8d5b8881c00f1ef9f0621be33133dfac221519595919a83a77",
+    "docs/getting-started.md": "790be6654f321ef18dd2eaa974fe444a95c9c2d59b4d3c8252957390ceaec055",
+    "docs/mcp.md": "5fb30c6c4c86651ec0802243104c3bd28cf7da8beef0f9d9ce6700643557a777",
+    "docs/security.md": "c358ba5c5260f7efda88d345ca1ceef62f658227319cf5f56ff0f44279afb515",
+    "docs/themes.md": "3d0a1bc1bceff0f5030927dd276dfb8ddbfcab9054c7f4b8ea2a32646069999b",
+    "examples/tripwire.json": "dd06b8b08598866dea106fabeeb48e74be51b5c0e904af731db52e6cbcae0af1",
+    "examples/vsl.json": "edd7d31e1594ff3c092554d776966952a5086e936fb3c3c512ee53dce385abff",
+    "examples/webinar.json": "45b9d9ec00751280e22cdb87991217311217798725182ea4391a58dda1d2f5a9",
+    "migrations/0001_pr002_runtime_probe.sql": "c3732a3b0999fb1629079e65cd864b5ab28e88e09750d81048f200bba481eee1",
+    "migrations/0002_product_schema.sql": "b012362e36b7fffec9a08e2413683f6956c404e3f5c2ff4772cf1b7332a00a76",
+    "migrations/0003_theme_presets.sql": "9d1be7c5e9fe5e055f4a21248005ef47bb14d3cb60d43c8fc6def3656888e50a",
+    "migrations/0004_command_receipts.sql": "08315152a43c2648fad4e3beb05457add21b5279e4731022cad1aa144d4d6c3b",
+    "migrations/0005_workspace_funnel_limit.sql": "b051f6ea8e04c4f9c0861e3c44c77d7b4f898f1ff2541514ba9d1a6d59f89109",
+    "package-lock.json": "889bd8ebc89e4560c747b4eb9aaacb35cc2509fcd5a2340fd2d4250dca55cd87",
+    "package.json": "37e94b0c7bc7dc44e902397662ed802d8433e3bf2e53b802fbd36daa356a2e0d",
+    "plan/architecture.md": "b6f165a23b7691caa92e19c45dc1d58903eb3c3e09b81f148c2dc68d70bef099",
+    "plan/contracts/C-01_config.md": "192698dd1c94e287b70c87fabe9df56f8762132efcc61b5bad5a02d1316f8e98",
+    "plan/contracts/C-01_funnel.md": "92741a0777b92b28474e00e1dd7c67cb16a90bd63fd8a9f802e6b6865c7d330f",
+    "plan/contracts/C-03_security.md": "11a2dec6bb9b9e12527b32ede73b24fd8797da612c7193a6fc385a8a4f009f3f",
+    "plan/contracts/C-04_errors.md": "239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3",
+    "plan/coverage.md": "8b58dac8c47227d141c640ac59a7930f8fa0588a78baab9ef5c2426098920bbe",
+    "plan/decisions/D10_render_section_content.md": "c8c63e9b37d14c1b5bbd9e8851dcec736130c0dd6f17defb91090c1629492696",
+    "plan/decisions/D11_theme_presets.md": "181399d45c91b76265edb1789cce97f53c36a63bd8d271dd88c87e2ed0ba924a",
+    "plan/decisions/D12_dashboard_rendering.md": "e5c09492d9f932dbe94e74f87238312a8555bcbc340ca3595eca42a8f881204a",
+    "plan/decisions/D13_funnel_creation.md": "74f25ca884b6784eac59062dcb7e7b3c4f019f67c00b23f7dafbb5882674da0e",
+    "plan/decisions/D14_workspace_funnel_limit.md": "36e7cc5c2b6cc7aa1af3264d56c8d7aa2104a417669d01e49e0bb5cf63a92207",
+    "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
+    "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
+    "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
+    "plan/decisions/D4_parallelism.md": "8ebeaf48fda47b14d1a266f4c902f4ffc53b62d4cc54d6aae91b11656fb441a7",
+    "plan/decisions/D5_synchronous_publish.md": "e7986ed1c7bf97cb9700d20088739ddf4afd665ce165fbcf17f3ade58b29ef1a",
+    "plan/decisions/D6_bootstrap_checks.md": "d09907231b9b0481eb0ab38393637152a31d06583a97495d6fde435d21560ee5",
+    "plan/decisions/D7_worker_runtime.md": "d7a4982418c8f0cc7bd31ff954cb3d9a7cd318bf2371c2d8afc671e822f4b8cf",
+    "plan/decisions/D8_storage_row_types.md": "878a6abe0f94fe934266553b60e8f77cfa5386ade0adf5bb1b26585fbbd111b9",
+    "plan/decisions/D9_theme_token_integrity.md": "2d7c022fbf8301e51b7e43a323f55a4a6d3052314e64ef44fa7a855cec0a3f95",
+    "plan/naming.md": "f5da5a3991f4e096ec295941d3ad4d523b985212414bd91b105fcd8589d7e3fa",
+    "plan/production.md": "b5f9be6b94298f89b64416fabdb51168d5ae919454589ad333d4232384ee9e2c",
+    "scripts/install-cargo-audit.sh": "62c51b872d3f27ad6326ed152105279e66e7353eebec51386aea25762e599a9f",
+    "scripts/install-wasm-bindgen.sh": "a9a320f79fe0ba10d94e8779e095fdbd3fd69572d15eba4a08bee39aa5134e40",
+    "scripts/install-worker-build.sh": "0f11bc26f579eebec040ce42ab8f6645de2d071378635ceaa3f1885e98d3d98d",
+    "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
+    "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
+    "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
+    "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
+    "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
+    "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
+    "xtask/src/layers.rs": "04027ed0e20dbd047c555710b849b48e21d2d19c88f6d86494308f08b4c6bf30",
+    "xtask/src/layers/tests.rs": "4575658efa2ac141011454430086c59b5322ef08aa2102472601e27627f67fe7",
+    "xtask/src/main.rs": "7b07dc47454d4c6775869b76318548f6388abe002848bf7557546f4da27df6b2",
+    "xtask/tests/bootstrap_cli.rs": "8eba713206f3d721c804cc0b0f6f27076f803a2eba74674dac89a0883ad1a143",
+    "xtask/tests/pr001_cli.rs": "48c148adfc6e6eb1f72453ff92c5e61203e05e0b205a713de6dd4c1aa91c9e8b"
+  },
+  "first_red": {
+    "observed": true,
+    "capture_status": "Stale-delete red output is retained: a pre-delete list request completed after local delete filtering and restored the deleted card (exit 101). The identical reducer regression passes after delete completion invalidates the request generation.",
+    "modal_cancel_regression": {
+      "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-modal-cancel-red.log",
+      "pre_fix_log_sha256": "a39f9d21a8beddbe3c74acdeac9bf2c666507a58effed3b194c84dedf2f14ab3",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-modal-cancel-green.log",
+      "post_fix_log_sha256": "6cbe7bfd5b1fa2d6d2fb0cd247611975c13da7e36b6c0b2c2d212581e0c186ad",
+      "diagnostic": "Before the helper existed, Rust reported unresolved dialog_cancel_disposition and DialogCancelDisposition; the targeted test passed after implementation."
+    },
+    "idempotency_storage_slot": {
+      "test": "idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-key-slot-red.log",
+      "pre_fix_log_sha256": "b65e95de2d132d25359442978b5108b93fd263378c911a1426b827c96af765e5",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-sessionstorage-test.log",
+      "post_fix_log_sha256": "09bc72698ba830cb8453c2056eaed21fb09305d860a788748bb90e52e7894621",
+      "diagnostic": "Before the slot helper existed, the test failed to compile with unresolved idempotency_storage_slot. After implementation, it passed canonical-property-order, changed-payload, method/route-scope, and no-cleartext-field assertions."
+    },
+    "name_limit": {
+      "test": "create_name_limit_matches_the_command_utf8_byte_limit",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-name-limit-red.log",
+      "pre_fix_log_sha256": "4541c48ff8d5db1186bd28f0799a96569315d2e963167c265231459012746391",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-name-limit-green.log",
+      "post_fix_log_sha256": "7978c5b37481ef8c8dc6723b79c77baaf3e3a688c84b8c5c4262fc00c684db19",
+      "error_feedback_test": "create_fields_explain_when_multibyte_name_exceeds_command_byte_limit",
+      "error_feedback_log": "/tmp/eezfunnel-pr009-name-message-green.log",
+      "error_feedback_log_sha256": "7db19804fcaa2086413960eac602bff8a647d2e9a32919cc74a6143365d48aa0",
+      "diagnostic": "Before the shared predicate existed, the boundary regression failed to compile because can_create_funnel was unresolved. After implementation, 120 ASCII bytes and 30 four-byte emoji are accepted; 121 ASCII bytes and 31 four-byte emoji are rejected, and the rendered form announces the UTF-8 byte limit."
+    },
+    "expired_receipt_cleanup": {
+      "test": "smoke-pr009 expired receipt cleanup after fresh-key create and delete",
+      "pre_fix_observation": "expired_count=1 after a new-key mutation; log not retained",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-ci-final.log",
+      "post_fix_log_sha256": "acce6408917833c921f3adf5c9044aab3a06329ec0e5e7808b055dcf6e87902e",
+      "diagnostic": "Create and delete mutation batches now remove expired receipts before claiming the new key."
+    },
+    "stale_list_response_race": {
+      "test": "stale_funnel_responses_do_not_replace_the_newer_list_state",
+      "pre_fix_observation": "The test first failed to compile with unresolved FunnelListLoad; initial log not retained.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-ci-final.log",
+      "post_fix_log_sha256": "acce6408917833c921f3adf5c9044aab3a06329ec0e5e7808b055dcf6e87902e",
+      "diagnostic": "A generation-gated reducer rejects stale success and failure results after a newer refresh."
+    },
+    "process_group_cleanup": {
+      "test": "test_worker_group_cleanup_regression",
+      "pre_fix_exit_code": 1,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-red2.log",
+      "pre_fix_log_sha256": "4b12f8daf3401fa9045f49010d12001a8a1ae017425c82d02f4eff756299092f",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-green1.log",
+      "post_fix_log_sha256": "0cb26ebbb532271072a72f86819fe97dc216f1790fec8a406bff841c23cafdb2",
+      "diagnostic": "The fixture waits for the setsid --fork --wait launcher PID to become absent or zombie, then confirms a non-zombie process remains in its captured PGID before calling stop_worker. With the old launcher-only escalation, stop_worker returned while the member remained and the test failed. The final run prints launcher-exited pid=382389, group=382391, live member=382394; the group-aware cleanup then terminates that member and the test passes."
+    },
+    "funnel_capacity": {
+      "test": "local Wrangler smoke enforces max_funnels=100 and bounds funnel.list",
+      "pre_fix_exit_code": 1,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-cap-red.log",
+      "pre_fix_log_sha256": "c8144715e2f79e34795a90072f3bead4f796038e2f2f9a191952c2ea2c8e2b03",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-funnel-cap-smoke-final.log",
+      "post_fix_log_sha256": "105a45f2221acd04fc7dc7a4bb7de2bfd9b9da251ffad3726994e6d7bdddb634",
+      "diagnostic": "Before the cap, the smoke seeded 100 funnels and the API accepted the next create with HTTP 201. After the fix, 99 seeded rows plus API create/replay fill slot 100; a distinct create returns 409 without a funnel or receipt, a direct 101st D1 insert is rejected, an isolated overflow row still yields a 100-item list, and deleting a funnel releases a slot. The cap and error are D14 policy only; C-01 and C-04 remain unchanged."
+    },
+    "process_reparent_fallback_cleanup": {
+      "test": "test_worker_fallback_reparent_cleanup_regression",
+      "pre_fix_exit_code": 1,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-red-final.log",
+      "pre_fix_log_sha256": "f01ab630870895c57830b5e8a62d686a8073cf00c67ef0c85b64485652c40312",
+      "pre_fix_implementation": "Temporary smoke copy with the pre-fix launcher-tree-only fallback cleanup.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-green-final.log",
+      "post_fix_log_sha256": "bad497aec70e3d297218df62a9bca5b178720d5d1ee85590972f09d03a48a5da",
+      "diagnostic": "The red test left child PID 419226 live after launcher 419222 and leader 419224 exited; no TERM marker was written. The final fixture records child PID and PPID in its TERM handler, asserts that PPID no longer equals the exited leader, and keeps running after TERM. The fixed fallback sends TERM and then KILL using retained PID+start-time identities; the test verifies the child is no longer live."
+    },
+    "c03_validation_precedence": {
+      "create_pre_fix_observation": "Reusing an active successful create key with an unknown blueprint returned 400 validation/invalid_json instead of 409 conflict/idempotency_payload_mismatch; transient red output was not retained.",
+      "delete_pre_fix_observation": "Malformed DELETE route validation returned 404 before active receipt classification; transient red output was not retained.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
+      "post_fix_log_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
+      "diagnostic": "Smoke verifies active create and delete keys with different/invalid payloads return 409 mismatch; a new or expired key with invalid create data remains 400, while fresh or expired malformed DELETE routes preserve 404 not_found/funnel. Oversized bodies and invalid-UTF-8 bodies now also return 409 for an active create key and 400 for fresh or expired keys."
+    },
+    "successful_create_before_refresh": {
+      "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
+      "pre_fix_observation": "The parent-592d050 continuation, with its post-refresh pending clear retained inside the extracted production helper, cleared a second create after the first refresh completed.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-finalization-focused.log",
+      "post_fix_log_sha256": "86e2708e9afe534cd3e20ec610fa973f4c4f20eee3e4633e8f170a6a930bbb0d",
+      "diagnostic": "The regression passes an HTTP 201 BrowserResponse future to the same response-completion helper used by the route. It clears pending before an unresolved refresh, starts a second pending create, resolves the first refresh, and verifies the second create stays pending. The helper owns response classification, all pending writes, and refresh; the route has no pending-state mutation after its await. A second focused test checks non-201 and transport errors clear pending without polling refresh.",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-parent-full-path-stale-pending-red.log",
+      "pre_fix_log_sha256": "4be8142352f5b4720ec5ed3f885d6b4ac45bf71baeaade3ee8a5c45d25182331"
+    },
+    "unreadable_create_body_precedence": {
+      "pre_fix_observation": "The API adapter returned 400 validation/invalid_json for oversized and invalid-UTF-8 POST bodies before Session::execute could inspect an active receipt; transient red output was not retained.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
+      "post_fix_log_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
+      "diagnostic": "The smoke verifies both oversized and invalid-UTF-8 create bodies return 409 conflict/idempotency_payload_mismatch with the successful active key, and 400 validation/invalid_json with fresh or expired keys."
+    },
+    "create_pending_stale_refresh": {
+      "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
+      "pre_fix_exit_code": 101,
+      "pre_fix_observation": "The parent-592d050 continuation, with its post-refresh pending clear retained inside the extracted production helper, cleared a second create after the first refresh completed.",
+      "pre_fix_log": "/tmp/eezfunnel-pr009-parent-full-path-stale-pending-red.log",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-finalization-focused.log",
+      "post_fix_log_sha256": "86e2708e9afe534cd3e20ec610fa973f4c4f20eee3e4633e8f170a6a930bbb0d",
+      "diagnostic": "The regression passes an HTTP 201 BrowserResponse future to the same response-completion helper used by the route. It clears pending before an unresolved refresh, starts a second pending create, resolves the first refresh, and verifies the second create stays pending. The helper owns response classification, all pending writes, and refresh; the route has no pending-state mutation after its await. A second focused test checks non-201 and transport errors clear pending without polling refresh.",
+      "pre_fix_log_sha256": "4be8142352f5b4720ec5ed3f885d6b4ac45bf71baeaade3ee8a5c45d25182331"
+    },
+    "stale_delete_response_race": {
+      "test": "a_list_response_started_before_delete_cannot_restore_the_deleted_funnel",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-stale-delete-red.log",
+      "pre_fix_log_sha256": "437780278b6f21a38a0ee520f814ef47b4472d8ccb63b6b1151c67adbdea79eb",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-stale-delete-green.log",
+      "post_fix_log_sha256": "b03b838580b34dae31a950f835e63570230980ddf275a1966fbb64b853841578",
+      "diagnostic": "The red reducer test completed a pre-delete request after the successful-delete local retain; the still-current response restored the deleted card and the assertion failed. FunnelListLoad::delete_succeeded now advances the generation and removes the item, so that response is ignored. The route then starts a fresh authoritative list request after successful DELETE."
+    }
+  },
+  "checks": {
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo xtask check",
+      "exit_code": 0,
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118.",
+      "workspace_test_counts": {
+        "api": 12,
+        "commands": 7,
+        "dashboard_presentation": 16,
+        "domain": 13,
+        "render": 33,
+        "storage": 5,
+        "xtask": 26,
+        "bootstrap_cli": 2,
+        "pr001_cli": 6
+      },
+      "log": "/tmp/eezfunnel-pr009-delete-stale-check.log",
+      "log_sha256": "eae090e7e5cef54534c7f6d2671239574d0e69e7192ac582374f780ec418c6bf",
+      "exit_marker": "CHECK_EXIT=0"
+    },
+    "final_ci": {
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo xtask ci",
+      "exit_code": 0,
+      "fresh_isolated_target": false,
+      "target_was_empty_at_start": false,
+      "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
+      "outcome": "Full cargo xtask ci passed on source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118: workspace tests (including the pre-delete stale-list regression), API and dashboard browser WASM, generated assets, process-cleanup regressions, local CRUD/idempotency/capacity smoke, and cargo audit.",
+      "log": "/tmp/eezfunnel-pr009-delete-stale-ci.log",
+      "log_sha256": "7c9e77857ba17cbac4833b904be3586569970244aff507fc02e1631179c62bb6",
+      "audit": {
+        "cargo_audit_version": "0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 345,
+        "findings": 0,
+        "exit_code": 0
+      },
+      "wasm_outputs": {
+        "eez_api.wasm": {
+          "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
+          "bytes": 59516028,
+          "sha256": "1eb735fe08bd2e8b72dfe243b4705baf502b98a1e63a01e2417ceb2e52ddc911"
+        },
+        "eez_dashboard.wasm": {
+          "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
+          "bytes": 1698762,
+          "sha256": "bde150019b6c21cbdcbea64ee52f7126a756a2ecc8f9588761f57f1559d8e474"
+        },
+        "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
+          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/eezfunnel_bg.wasm",
+          "bytes": 787132,
+          "sha256": "19d2fbe3da8cd7e1c6112d767c58c03e23d33fa900b443673c825bd32f3c73a8"
+        }
+      },
+      "generated_bundle_sha256": {
+        "apps/dashboard/dist/assets/bootstrap.js": {
+          "path": "apps/dashboard/dist/assets/bootstrap.js",
+          "bytes": 883,
+          "sha256": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110"
+        },
+        "apps/dashboard/dist/assets/dashboard.css": {
+          "path": "apps/dashboard/dist/assets/dashboard.css",
+          "bytes": 11178,
+          "sha256": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b"
+        },
+        "apps/dashboard/dist/assets/eezfunnel.js": {
+          "path": "apps/dashboard/dist/assets/eezfunnel.js",
+          "bytes": 74916,
+          "sha256": "1430b7bae69c979eee437e61c3ae983d436055209e23600546cfd0b4bca9ffbb"
+        },
+        "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
+          "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
+          "bytes": 787132,
+          "sha256": "19d2fbe3da8cd7e1c6112d767c58c03e23d33fa900b443673c825bd32f3c73a8"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
+          "bytes": 259,
+          "sha256": "07027f8ccbb9ba3619deeb861233594ccab582d7eb3da34ca86559c932a09e6b"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js",
+          "bytes": 20855,
+          "sha256": "cd533b7b9f2192fa535f92f4f266d03d47c23105cf500498d0bc8d6cc90dc6cf"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js",
+          "bytes": 488,
+          "sha256": "0659b58e105fbc8e7e97feb8aa123f455520333ae10c326fa37ec0eb4b08e833"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js",
+          "bytes": 937,
+          "sha256": "9ef1d21e8c05e91f5dd9e46c8f47ae574185a64497527b687f8fdb9b98045f83"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js",
+          "bytes": 1887,
+          "sha256": "5b56995f71fe629934f4ab5eb292d5cfccd9d99037eb9a39ede5078c78db88df"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js",
+          "bytes": 267,
+          "sha256": "853d44dbc9d2696e80d66c056e21d69e77b2bf68f9636826becd029f67c884a5"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js",
+          "bytes": 578,
+          "sha256": "b70ad6fba9bf230286fad838d4620c302980502f5af12ea602005d7b8f6af9b0"
+        },
+        "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js": {
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js",
+          "bytes": 1278,
+          "sha256": "2cd20723c2c3cc52d648d1f5670df929733b359036044d3fd6c9507d929f28b6"
+        }
+      },
+      "exit_marker": "CI_EXIT=0",
+      "workspace_test_counts": {
+        "api": 12,
+        "commands": 7,
+        "dashboard_presentation": 16,
+        "domain": 13,
+        "render": 33,
+        "storage": 5,
+        "xtask": 26,
+        "bootstrap_cli": 2,
+        "pr001_cli": 6
+      }
+    },
+    "local_wrangler_smoke": {
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci bash scripts/smoke-pr009.sh",
+      "exit_code": 0,
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-delete-stale-smoke.log",
+      "smoke_stdout_sha256": "a8312a7032b27d1aa307432aaecb12e84f0063cdff849ca673e569743c7cea94",
+      "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
+      "wrangler_log_sha256": "d8cfcf07c23d024dde01c3945b5ce45d366f53490b345509430e171fb2d1158a",
+      "assertions": {
+        "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
+        "create": "All five blueprints produced ordered section types and unique initial section IDs.",
+        "create_replay": "HTTP 201 returned the same funnel and initial revision.",
+        "payload_mismatch": "HTTP 409 conflict/idempotency_payload_mismatch.",
+        "invalid_create_active_key": "Active successful create key reused with unknown blueprint returns HTTP 409 conflict/idempotency_payload_mismatch.",
+        "invalid_create_new_or_expired_key": "New and expired keys with unknown blueprint remain HTTP 400 validation/invalid_json.",
+        "delete_and_replay": "HTTP 200 returned the same deleted result.",
+        "invalid_delete_active_key": "Active successful delete key reused with malformed route returns HTTP 409 conflict/idempotency_payload_mismatch.",
+        "invalid_delete_new_or_expired_key": "Fresh and expired keys with malformed route preserve HTTP 404 not_found/funnel.",
+        "expired_receipt_cleanup": "Expired receipt count returned to zero after new-key create and delete.",
+        "missing_key": "HTTP 400 validation/missing_field with correlation header.",
+        "malformed_json": "HTTP 400 validation/invalid_json.",
+        "missing_funnel": "HTTP 404 not_found/funnel.",
+        "unsupported_method": "HTTP 405 and Allow: GET,POST.",
+        "host_denial": "HTTP 403 authorization/host_not_allowed.",
+        "workspace_capacity": "99 seeded rows plus API create/replay filled slot 100; distinct create returned HTTP 409 conflict/funnel_limit_reached.",
+        "capacity_rejection_is_atomic": "At capacity, funnel count stayed at 100 and no receipt was stored for rejected key.",
+        "database_limit_trigger": "Direct over-cap D1 insert was rejected by workspace limit trigger.",
+        "bounded_list": "List returned 100 items at capacity and remained at 100 with a test-only local overflow row.",
+        "capacity_release": "Deleting a funnel released a slot; a subsequent API create succeeded.",
+        "oversized_create_active_key": "HTTP 409 conflict/idempotency_payload_mismatch.",
+        "oversized_create_new_or_expired_key": "HTTP 400 validation/invalid_json.",
+        "invalid_utf8_create_active_key": "HTTP 409 conflict/idempotency_payload_mismatch.",
+        "invalid_utf8_create_new_or_expired_key": "HTTP 400 validation/invalid_json."
+      },
+      "remote_bindings_used": false,
+      "ci_smoke_integration": "The full cargo xtask ci smoke passed on source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118.",
+      "process_group_race_regression": {
+        "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
+        "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
+        "delay_wrapper_sha256": "f7c9daf0f0f16ca345ffd4fa9ceb41e54709bd65b0d1442e22300ec2f78d5efe",
+        "result": "Passed with a 150 ms delay before setsid; the harness waited for a live child whose PID, PGID, and SID match.",
+        "exit_code": 0
+      },
+      "cleanup": {
+        "port_8787_closed": true,
+        "live_wrangler_or_workerd_processes": 0,
+        "temporary_directory_removed": true,
+        "observed_after": "The standalone local CRUD smoke exited 0; port 8787 was closed, no live Wrangler/workerd process remained, and its temporary directory was removed."
+      },
+      "exit_marker": "SMOKE_EXIT=0",
+      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the direct standalone local CRUD smoke; captured stdout ends with SMOKE_EXIT=0.",
+      "process_group_shutdown_escalation_regression": {
+        "test": "test_worker_group_cleanup_regression",
+        "pre_fix_exit_code": 1,
+        "pre_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-red2.log",
+        "pre_fix_log_sha256": "4b12f8daf3401fa9045f49010d12001a8a1ae017425c82d02f4eff756299092f",
+        "post_fix_exit_code": 0,
+        "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-green1.log",
+        "post_fix_log_sha256": "0cb26ebbb532271072a72f86819fe97dc216f1790fec8a406bff841c23cafdb2",
+        "diagnostic": "The fixture waits for the setsid --fork --wait launcher PID to become absent or zombie, then confirms a non-zombie process remains in its captured PGID before calling stop_worker. With the old launcher-only escalation, stop_worker returned while the member remained and the test failed. The final run prints launcher-exited pid=382389, group=382391, live member=382394; the group-aware cleanup then terminates that member and the test passes."
+      },
+      "process_reparent_fallback_cleanup_regression": {
+        "test": "test_worker_fallback_reparent_cleanup_regression",
+        "pre_fix_exit_code": 1,
+        "pre_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-red-final.log",
+        "pre_fix_log_sha256": "f01ab630870895c57830b5e8a62d686a8073cf00c67ef0c85b64485652c40312",
+        "post_fix_exit_code": 0,
+        "post_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-green-final.log",
+        "post_fix_log_sha256": "bad497aec70e3d297218df62a9bca5b178720d5d1ee85590972f09d03a48a5da",
+        "assertions": "At TERM, child PID matches the fixture and its PPID differs from the exited leader; the fixture ignores TERM after recording the marker, so it remains live until KILL. stop_worker retains initial PID+start-time identities and cleanup confirms the child is no longer live."
+      },
+      "capture_note": "An earlier exec wrapper printed SMOKE_EXIT=0 while its returned session status was 1 and was excluded. The evidence here is the direct bash invocation with captured DIRECT_SMOKE_EXIT=0."
+    },
+    "source_format_and_comment_checks": {
+      "cargo_fmt_check": "passed as part of cargo xtask check on source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118",
+      "git_diff_check_exit_code": 0,
+      "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
+      "no_comments_review": "The source diff was checked for new comments, TODO/FIXME markers, and lint suppressions; none were added.",
+      "source_commit_check": "git show --check passed for source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118",
+      "bash_n_check": "passed for scripts/smoke-pr009.sh"
+    },
+    "stale_delete_response_regression": {
+      "test": "a_list_response_started_before_delete_cannot_restore_the_deleted_funnel",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-stale-delete-red.log",
+      "pre_fix_log_sha256": "437780278b6f21a38a0ee520f814ef47b4472d8ccb63b6b1151c67adbdea79eb",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-stale-delete-green.log",
+      "post_fix_log_sha256": "b03b838580b34dae31a950f835e63570230980ddf275a1966fbb64b853841578",
+      "diagnostic": "The red reducer test completed a pre-delete request after the successful-delete local retain; the still-current response restored the deleted card and the assertion failed. FunnelListLoad::delete_succeeded now advances the generation and removes the item, so that response is ignored. The route then starts a fresh authoritative list request after successful DELETE."
+    }
+  },
+  "tool_versions": {
+    "rustc_application": "1.85.0",
+    "cargo_application": "1.85.0",
+    "rustc_auxiliary": "1.88.0",
+    "cargo_auxiliary": "1.88.0",
+    "wasm_bindgen": "0.2.129",
+    "worker_build": "0.8.3",
+    "wrangler": "4.149.0",
+    "node": "24.19.0",
+    "npm": "11.9.0"
+  },
+  "scope_notes": [
+    "funnel.list, funnel.create, and funnel.delete are routed through Session::execute; HTTP handlers remain an adapter.",
+    "Five closed blueprints use stable IDs and each create atomically stores a funnel plus an immutable initial revision with a versioned snapshot and render manifest.",
+    "D13 records the snapshot format and C-03 24-hour create/delete idempotency behavior; matching replays return their stored result and a key reused with different command parameters conflicts.",
+    "Create and delete D1 batches reclaim expired receipts before claiming a fresh idempotency key; smoke verifies zero expired rows after each operation.",
+    "The dashboard list reducer applies only the newest request result, so a delayed initial response cannot replace a post-create refresh.",
+    "Before create/delete dispatch, sessionStorage receives only a UUID as the slot value. Slot names scope by method and route and include a SHA-256 digest of the canonical request tuple; payload fields are absent. Ambiguous failures retain the key, successful responses clear the slot, and D13 documents cleanup after success and session end.",
+    "The smoke harness uses verified process groups when available and retains owned PID+start-time identities for fallback escalation. A red/green fixture proves a child is reparented before TERM, records TERM while remaining alive, and is then removed by KILL.",
+    "No headless browser ran, so browser hydration completion and native Escape interaction remain unverified.",
+    "No remote bindings, production deployment, or remote migration were run.",
+    "D14 caps the workspace at 100 funnels, bounds funnel.list to 100 rows, and returns conflict/funnel_limit_reached (HTTP 409) without persisting an idempotency receipt or funnel when full; deletion frees a slot.",
+    "Frozen contracts C-01 and C-04 are byte-identical to base commit 13472d2; the 100-funnel cap and decision-scoped conflict/funnel_limit_reached (HTTP 409) exist only in D14 and implementation/evidence.",
+    "For create and delete, command handling classifies any active receipt before returning parse or semantic validation errors, so C-03 payload mismatch takes precedence for reused keys. New or expired keys preserve normal validation behavior.",
+    "A malformed DELETE route with an active receipt can return 409 mismatch; without an active receipt, the existing 404 not_found/funnel response is preserved.",
+    "After successful create releases pending state and closes the dialog, its independent list refresh cannot reset a newer create mutation; non-201 and transport-error branches clear pending explicitly.",
+    "After a successful create POST, finish_create_response awaits and classifies the HTTP result, closes and resets the dialog, and clears mutation-pending before awaiting the independent list refresh. It is the sole owner of response-completion pending writes; the route performs no pending-state reset after the helper returns, so an old refresh cannot affect a newer create.",
+    "Successful funnel deletion advances FunnelListLoad generation before locally removing the card and starts a newer authoritative list request; pre-delete GET responses cannot restore the deleted card."
+  ],
+  "hosted_ci": {
+    "status_at_evidence_capture": "Local validation is green on source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118. Hosted CI run 38534210556 passed on prior exact head 654cd3f1574da914b590ef4a954d25f89e9b723e; hosted CI for this source plus the evidence commit is pending after push.",
+    "previous_failed_run": {
+      "run_id": "38509655594",
+      "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
+      "failure": "The immediate PGID check read the setsid launch process before the dedicated Wrangler session/process group was established. The startup poll and scoped cleanup are corrected in source commit 5c0934443316ce4562d9f0dad1531dbc401769ac."
+    },
+    "previous_successful_run": {
+      "run_id": "38520311552",
+      "head": "28423231f44112df058b623b8a6713d7f5523ba0",
+      "status": "success",
+      "scope": "Prior head before the 100-funnel capacity review fix; does not verify source commit cef86473cb2b4a12da3bb7cbaa0f301a799eceaa or its evidence commit."
+    },
+    "latest_failed_run": {
+      "run_id": "38522570022",
+      "head": "a14d60e4896b3bc29a4c28699695985ed5b2693f",
+      "failure": "CI reached the PR-009 CRUD/capacity smoke after migrations, then scripts/smoke-pr009.sh failed at line 584 with rg: command not found (exit 127). Replaced the rg dependency with standard grep in source commit dbca0f012e2d2305c4d4219124e6901c3a567773; exact-source local check, full CI, and standalone smoke pass."
+    },
+    "latest_successful_run": {
+      "run_id": "38534210556",
+      "head": "654cd3f1574da914b590ef4a954d25f89e9b723e",
+      "status": "success",
+      "url": "https://github.com/lianihossam-eng/EezFunnels/actions/runs/38534210556",
+      "scope": "Previous exact PR head before the stale-delete P2 source fix; does not verify the current source commit."
+    }
+  },
+  "reviews": {
+    "codex": "A follow-up Codex P2 on prior head 654cd3f (review comment 4268403530) identified a stale pre-delete list response. The fix is in source commit ca4ceada2dd090a423bb85ac12b4f13abfc0d118; the focused regression is red/green and local check, full CI, and direct smoke pass. Reply and thread resolution will be recorded after pushing the validated fix.",
+    "sol": "Sol final-gate P2 is addressed in source. An independent read-only Luna review of the final source diff was clean. No Sol merge or new review request occurred."
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "remote_bindings_used": false
+  }
+}

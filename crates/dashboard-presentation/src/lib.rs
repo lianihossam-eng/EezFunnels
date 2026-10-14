@@ -89,6 +89,34 @@ mod tests {
         assert!(html.contains("id=\"main\""));
         assert!(html.contains("Your funnels"));
         assert!(html.contains("Dashboard"));
+        for blueprint in ["tripwire", "vsl", "webinar", "launch", "lead_gen"] {
+            assert!(
+                html.contains(&format!("data-blueprint=\"{blueprint}\"")),
+                "SSR funnel modal omits {blueprint} blueprint"
+            );
+        }
+    }
+
+    #[test]
+    fn create_dialog_has_a_native_backdrop_for_modal_interaction() {
+        let html = render_document("/funnels").expect("funnel list route");
+        let dialog_start = html.find("<dialog").expect("create dialog");
+        let dialog_end = html[dialog_start..]
+            .find('>')
+            .map(|offset| dialog_start + offset)
+            .expect("dialog opening tag");
+        let opening_tag = &html[dialog_start..=dialog_end];
+
+        assert!(
+            opening_tag.contains("id=\"create-funnel-dialog\""),
+            "{opening_tag}"
+        );
+        assert!(opening_tag.contains("aria-modal=\"true\""), "{opening_tag}");
+        assert!(
+            !opening_tag.contains("open"),
+            "dialog must open via showModal(): {opening_tag}"
+        );
+        assert!(include_str!("../assets/dashboard.css").contains(".funnel-dialog::backdrop"));
     }
 
     #[test]

@@ -21,6 +21,9 @@ jobs:
           toolchain: 1.85.0
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
       - uses: Swatinem/rust-cache@v2
       - run: bash scripts/install-cargo-audit.sh
       - run: bash scripts/install-wasm-bindgen.sh

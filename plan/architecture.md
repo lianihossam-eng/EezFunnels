@@ -18,7 +18,7 @@ Enforced by cargo xtask layers.
 
 Browser -> GET /, /funnels, /funnels/:id -> host allowlist -> dashboard SSR
 Browser -> GET /assets/* -> host allowlist -> Worker-first ASSETS binding
-Browser -> GET /api/funnels -> commands -> storage::D1 -> JSON
+Browser -> GET /api/funnels -> commands -> storage::D1 -> bounded JSON (100 funnels)
 Browser -> GET /f/:slug -> storage -> render -> HTML
 Claude  -> POST /mcp (Bearer) -> mcp::handle -> commands::execute -> JSON
 

@@ -9,13 +9,17 @@ rust-version.workspace = true
 layer = 1
 
 [dependencies]
+eez-domain = { path = "../domain" }
 dioxus.workspace = true
 dioxus-fullstack-core = { workspace = true, optional = true }
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus-web = { workspace = true, features = ["hydrate", "document"], optional = true }
-web-sys = { version = "0.3", features = ["Window", "Location"], optional = true }
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"], optional = true }
 
 [features]
 default = ["ssr"]

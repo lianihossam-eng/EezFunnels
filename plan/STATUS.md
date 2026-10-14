@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-008 Dashboard shell (`feat/008_dashboard`)
+Current phase: PR-009 Funnel list + creation (`feat/009_funnel_list`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -13,8 +13,8 @@ Last updated: 2026-10-14
 - [x] PR-005 Render engine (merged as PR #6; merge commit `2c67843b61c0eb266dee1219565d4e55d59738da`)
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
-- [ ] PR-008 Dashboard shell (implementation complete; local verification passed)
-- [ ] PR-009 Funnel list + creation
+- [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
+- [ ] PR-009 Funnel list + creation (source `ca4cead` invalidates pre-delete list loads and starts a fresh GET; check, full CI, and direct smoke pass; hosted CI pending exact source/evidence head)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -115,8 +115,73 @@ head `1755fd8` found that classifying the dashboard app in L3 conflicted with th
 boundary. A new layer test failed before correction by accepting an API-to-dashboard edge; commit
 `cf05024e0130185648cb83fadf9fdabd70754d63` moved the shared tree/SSR/assets into L1 and restored the
 browser app to L4. `AGENTS.md` and `plan/production.md` remain unchanged. Fingerprinted evidence is
-in `plan/verification/PR-008/execution.txt` and `results.json`. Final hosted CI and Codex/Sol review
-are required on the pushed evidence head before merge; no remote deployment was run.
+in `plan/verification/PR-008/execution.txt` and `results.json`. PR #9 merged the dashboard shell at
+`13472d2daa8047b166e1a9635434cc48e5b3b62e`; no remote deployment was run.
+
+PR-009 adds the funnel list, create flow for the five closed blueprints, and idempotent delete. The
+Worker exposes `GET/POST /api/funnels` and `DELETE /api/funnels/:id`; command handling stays in
+`Session::execute`. D13 records the versioned snapshot format and the initial immutable revision
+created atomically with each funnel. Create and delete receipts enforce C-03's 24-hour same-key,
+same-payload replay and reject key reuse with different command parameters. The dashboard locks
+create fields during pending requests and uses native modal dialogs that cannot be dismissed with
+Escape while a mutation is pending. Before create/delete dispatch, it stores only a UUID idempotency
+key in `sessionStorage`, in a method/route slot keyed by a SHA-256 digest of the canonical request
+tuple. The slot value is only the UUID; user-entered form fields are absent. Ambiguous failures
+retain the key for replay; successful responses clear the slot. D13 records this lifecycle. The create
+dialog uses the same 120-byte UTF-8 name limit as commands and blocks oversized multibyte names.
+Create and delete D1 batches remove expired receipts before claiming a fresh key, so expired records
+are reclaimed during ordinary writes. The list uses request generations so a delayed initial load
+cannot replace the result of a newer post-create refresh.
+
+D14 sets a 100-funnel workspace cap to bound the all-at-once list response and dashboard rendering.
+`funnel.list` applies `LIMIT 100`; create claims its idempotency receipt only below the cap within
+the same atomic batch as the funnel and initial revision. At capacity the API returns the decision-scoped
+`conflict/funnel_limit_reached` (HTTP 409) without storing a receipt or funnel. A D1 trigger rejects
+other over-cap insert paths. Local smoke verifies list truncation, idempotent replay for the 100th
+funnel, direct insert rejection, and that deleting a funnel frees a slot. C-01 and C-04 are restored
+byte-for-byte to their frozen base content; the cap and error semantics live only in D14 and implementation.
+
+Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
+read the background launch process before `setsid` established the server's own group. The startup
+poll now tracks the live child whose PID, PGID, and SID match. A second review found shutdown only
+watched the launcher after SIGINT; if that launcher exited while a group member remained, cleanup
+could miss it. Shutdown polls the verified PGID after SIGINT and SIGTERM. In fallback mode it snapshots owned
+PID+start-time identities and uses those retained identities during escalation, so a child reparented
+after launcher exit remains within cleanup scope. The red/green regression records a PPID change at
+TERM, keeps the child alive after TERM, and confirms KILL removes it. Cleanup fails if port 8787 stays open.
+
+Source commit `10b77f909dcc9074b49086eff7681cf1d181f419` adds the process-group shutdown fix and passes `cargo +1.85.0 xtask check`
+with API 11, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, and
+CLI tests 2 and 6. A fresh `cargo +1.85.0 xtask ci` invocation on the existing isolated target passes
+workspace checks/tests, API and dashboard browser WASM, asset generation, the process-group regression,
+local CRUD smoke, and audit of 345 locked dependencies against 1,310 advisories with zero findings;
+the target was not empty at invocation start. The separate local Wrangler smoke passes all five
+blueprints, create/replay, payload-mismatch conflict, expired-receipt cleanup after create and delete,
+delete/replay, validation, unsupported method, not-found, and host-denial checks. The integrated and
+standalone runs leave no live Wrangler or workerd processes and close port 8787. Fingerprinted
+regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
+`results.json`.
+
+The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
+Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel
+cap/error semantics in D14. Follow-up `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6` strengthens the
+fallback cleanup regression: it records the child PPID at TERM, rejects a marker written before
+reparenting, and proves KILL ends the child that remains alive after TERM.
+
+Codex's review on exact head `62ef95b90a29596a4eb2e120106d372b6e02e8da` found that the HTTP
+adapter still returned 400 for oversized and invalid-UTF-8 create bodies before receipt lookup.
+Source commit `7ba830a7abb52ceee4c4190da41551a3eba93101` sends both unreadable-body paths through
+active-receipt classification; smoke asserts 409 for active keys and 400 for fresh or expired keys.
+
+Sol's final-gate review found that an older successful create continuation could clear the pending state of a newer create after the first list refresh finished. Source commit `5c6c939ddf8f35b52e90087c8e5f6159bfe8780b` moves the full response continuation into `finish_create_response`: it awaits and classifies the API result, completes the UI state, clears pending before the independent refresh, and performs no pending-state writes after refresh. Non-201 and transport errors clear pending without refreshing. The regression supplies an HTTP 201 response future, starts a second create while the first refresh is unresolved, and verifies that completing the old refresh preserves the second pending state. Applied to a parent-`592d050` source archive with the old post-refresh reset retained inside the extracted helper, the same test failed at the final assertion (exit 101); it passes on the final source. A second focused test covers non-201 and transport errors.
+
+Exact-source `cargo xtask check`, full `cargo xtask ci`, and independent local Wrangler smoke all pass on `5c6c939ddf8f35b52e90087c8e5f6159bfe8780b` using `/workspace/.eezfunnel-pr009-name-limit-ci`. The API suite has 12 tests and dashboard presentation has 15. CI includes API/dashboard WASM, asset generation, both process-cleanup regressions, CRUD/idempotency/capacity smoke, and audit of 345 dependencies against 1,310 advisories with zero findings. The direct smoke passes five blueprints, active-receipt precedence, fresh/expired validation, delete replay, capacity 100, bounded list, and host denial. It leaves port 8787 closed with no live Wrangler/workerd process. The refreshed source fingerprint is `0d1910b11351978f5122399beb37eae56bef46f9c1419459000c124ca79e46b3` across 110 source files. Fingerprinted logs and WASM/bundle hashes are in `plan/verification/PR-009/execution.txt` and `results.json`. Browser hydration and native Escape behavior remain unverified in a headless browser; no remote migration or deployment ran. Hosted CI run `38534210556` passed on previous exact head `654cd3f1574da914b590ef4a954d25f89e9b723e`; CI for the new source/evidence head is pending. No merge occurred.
+
+Codex follow-up comment `4268403530` on head `654cd3f` found that a list GET begun before successful DELETE could restore the removed funnel. Source commit `ca4ceada2dd090a423bb85ac12b4f13abfc0d118` adds a delete reducer transition that advances the list generation and removes the card, then starts an authoritative GET. The regression `a_list_response_started_before_delete_cannot_restore_the_deleted_funnel` failed before the reducer fix when the stale response restored the item (exit 101) and passes afterward. On the exact source, `cargo xtask check`, full `cargo xtask ci`, and standalone local Wrangler smoke all pass; the dashboard-presentation suite has 16 tests, CI audits 345 dependencies against 1,310 advisories with zero findings, and smoke leaves port 8787 closed with no live Wrangler/workerd process. Fingerprint and logs are in `plan/verification/PR-009/execution.txt` and `results.json`. No merge or remote deployment occurred.
+
+The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
+completion and native Escape behavior remain unverified in a headless browser. No remote binding
+was used, and no remote migration or deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -168,6 +233,6 @@ are required on the pushed evidence head before merge; no remote deployment was 
 
 ## Next action
 
-Push the PR-008 source and refreshed evidence, verify hosted CI on the final PR #9 head, then request
-one @codex review and Sol review on that same head. Do not merge until both reviews and hosted CI
-are clean on the exact SHA. Do not deploy remotely.
+Push PR-009 and its refreshed evidence, verify hosted CI on the exact final head, then request one
+@codex review. Sol review and merge follow only after Codex is clean and hosted CI is green on that
+exact SHA. Do not deploy remotely.

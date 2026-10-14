@@ -6,6 +6,7 @@ use worker::{D1Database, Error};
 
 const SUPPORTED_SCHEMA_VERSION: i32 = 1;
 const MAX_FUNNEL_BYTES: usize = 1_048_576;
+const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
@@ -18,6 +19,7 @@ pub enum RepositoryError {
     PayloadTooLarge,
     InvalidField(&'static str),
     FunnelNotFound,
+    FunnelLimitReached,
     RevisionLimitReached,
 }
 
@@ -35,6 +37,7 @@ impl Display for RepositoryError {
             Self::PayloadTooLarge => formatter.write_str("validation/payload_too_large"),
             Self::InvalidField(field) => write!(formatter, "validation/field_invalid: {field}"),
             Self::FunnelNotFound => formatter.write_str("not_found/funnel"),
+            Self::FunnelLimitReached => formatter.write_str("conflict/funnel_limit_reached"),
             Self::RevisionLimitReached => formatter.write_str("validation/revision_limit_reached"),
         }
     }
@@ -106,6 +109,18 @@ pub struct NewTheme {
     pub is_default: bool,
 }
 
+pub enum MutationResult {
+    Stored(String),
+    PayloadMismatch,
+}
+
+#[derive(Deserialize)]
+struct CommandReceipt {
+    command_id: String,
+    payload_json: String,
+    result_json: String,
+}
+
 pub struct Repository<'a> {
     database: &'a D1Database,
 }
@@ -113,6 +128,24 @@ pub struct Repository<'a> {
 impl<'a> Repository<'a> {
     pub fn new(database: &'a D1Database) -> Self {
         Self { database }
+    }
+
+    pub async fn classify_active_receipt(
+        &self,
+        idempotency_key: &str,
+        command_id: &str,
+        payload_json: Option<&str>,
+    ) -> RepositoryResult<Option<MutationResult>> {
+        validate_required_field(command_id, "command_id")?;
+        validate_idempotency_key(idempotency_key)?;
+
+        Ok(self
+            .active_receipt(idempotency_key)
+            .await?
+            .map(|receipt| match payload_json {
+                Some(payload_json) => classify_receipt(receipt, command_id, payload_json),
+                None => MutationResult::PayloadMismatch,
+            }))
     }
 
     pub async fn create_funnel(&self, input: &NewFunnel) -> RepositoryResult<FunnelRecord> {
@@ -133,6 +166,191 @@ impl<'a> Repository<'a> {
             .ok_or_else(|| Error::RustError("created funnel could not be read".to_owned()).into())
     }
 
+    pub async fn create_funnel_with_revision(
+        &self,
+        funnel: &NewFunnel,
+        revision: &NewRevision,
+        command_id: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
+        validate_required_field(&funnel.id, "id")?;
+        validate_required_field(&funnel.name, "name")?;
+        validate_required_field(&funnel.slug, "slug")?;
+        validate_required_field(&revision.id, "revision_id")?;
+        validate_required_field(command_id, "command_id")?;
+        validate_idempotency_key(idempotency_key)?;
+        if revision.funnel_id != funnel.id {
+            return Err(RepositoryError::InvalidField("funnel_id"));
+        }
+        validate_schema_version(revision.schema_version)?;
+        validate_payload_size(&revision.data_json)?;
+        self.validate_json(&revision.data_json).await?;
+        self.validate_json(&revision.render_manifest_json).await?;
+        self.validate_json(payload_json).await?;
+        self.validate_json(result_json).await?;
+
+        if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+            return Ok(classify_receipt(receipt, command_id, payload_json));
+        }
+
+        let key = D1Type::Text(idempotency_key);
+        let command = D1Type::Text(command_id);
+        let payload = D1Type::Text(payload_json);
+        let result = D1Type::Text(result_json);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
+        let max_funnels = D1Type::Integer(MAX_FUNNELS);
+        let insert_receipt = self
+            .database
+            .prepare(
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE (SELECT COUNT(*) FROM funnels) < ? ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+            )
+            .bind_refs([&key, &command, &payload, &result, &max_funnels])?;
+
+        let funnel_id = D1Type::Text(&funnel.id);
+        let funnel_name = D1Type::Text(&funnel.name);
+        let funnel_slug = D1Type::Text(&funnel.slug);
+        let insert_funnel = self
+            .database
+            .prepare(
+                "INSERT INTO funnels (id, name, slug) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND (SELECT COUNT(*) FROM funnels) < ?",
+            )
+            .bind_refs([
+                &funnel_id,
+                &funnel_name,
+                &funnel_slug,
+                &key,
+                &command,
+                &payload,
+                &result,
+                &max_funnels,
+            ])?;
+
+        let revision_id = D1Type::Text(&revision.id);
+        let revision_funnel_id = D1Type::Text(&revision.funnel_id);
+        let schema_version = D1Type::Integer(1);
+        let data_json = D1Type::Text(&revision.data_json);
+        let manifest_json = D1Type::Text(&revision.render_manifest_json);
+        let insert_revision = self
+            .database
+            .prepare(
+                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnels WHERE id = ?) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))",
+            )
+            .bind_refs([
+                &revision_id,
+                &revision_funnel_id,
+                &schema_version,
+                &data_json,
+                &manifest_json,
+                &revision_funnel_id,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+
+        if let Err(error) = self
+            .database
+            .batch(vec![
+                delete_expired_receipts,
+                insert_receipt,
+                insert_funnel,
+                insert_revision,
+            ])
+            .await
+        {
+            if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+                return Ok(classify_receipt(receipt, command_id, payload_json));
+            }
+            if self.funnel_count().await? >= i64::from(MAX_FUNNELS) {
+                return Err(RepositoryError::FunnelLimitReached);
+            }
+            return Err(error.into());
+        }
+
+        match self.active_receipt(idempotency_key).await? {
+            Some(receipt) => Ok(classify_receipt(receipt, command_id, payload_json)),
+            None if self.funnel_count().await? >= i64::from(MAX_FUNNELS) => {
+                Err(RepositoryError::FunnelLimitReached)
+            }
+            None => Err(Error::RustError("command receipt was not committed".to_owned()).into()),
+        }
+    }
+
+    pub async fn delete_funnel_idempotently(
+        &self,
+        funnel_id: &str,
+        command_id: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        validate_required_field(command_id, "command_id")?;
+        validate_idempotency_key(idempotency_key)?;
+        self.validate_json(payload_json).await?;
+        self.validate_json(result_json).await?;
+
+        if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+            return Ok(classify_receipt(receipt, command_id, payload_json));
+        }
+
+        let key = D1Type::Text(idempotency_key);
+        let command = D1Type::Text(command_id);
+        let payload = D1Type::Text(payload_json);
+        let result = D1Type::Text(result_json);
+        let funnel_id_value = D1Type::Text(funnel_id);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
+        let insert_receipt = self
+            .database
+            .prepare(
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnels WHERE id = ?) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+            )
+            .bind_refs([&key, &command, &payload, &result, &funnel_id_value])?;
+        let delete_funnel = self
+            .database
+            .prepare(
+                "DELETE FROM funnels WHERE id = ? AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))",
+            )
+            .bind_refs([&funnel_id_value, &key, &command, &payload, &result])?;
+
+        if let Err(error) = self
+            .database
+            .batch(vec![delete_expired_receipts, insert_receipt, delete_funnel])
+            .await
+        {
+            if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+                return Ok(classify_receipt(receipt, command_id, payload_json));
+            }
+            return Err(error.into());
+        }
+
+        match self.active_receipt(idempotency_key).await? {
+            Some(receipt) => Ok(classify_receipt(receipt, command_id, payload_json)),
+            None => Err(RepositoryError::FunnelNotFound),
+        }
+    }
+
+    async fn active_receipt(
+        &self,
+        idempotency_key: &str,
+    ) -> RepositoryResult<Option<CommandReceipt>> {
+        let key = D1Type::Text(idempotency_key);
+        self.database
+            .prepare(
+                "SELECT command_id, payload_json, result_json FROM command_receipts WHERE idempotency_key = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)",
+            )
+            .bind_refs([&key])?
+            .first::<CommandReceipt>(None)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn get_funnel(&self, id: &str) -> RepositoryResult<Option<FunnelRecord>> {
         let id = D1Type::Text(id);
         self.database
@@ -146,14 +364,26 @@ impl<'a> Repository<'a> {
     }
 
     pub async fn list_funnels(&self) -> RepositoryResult<Vec<FunnelRecord>> {
+        let limit = D1Type::Integer(MAX_FUNNELS);
         let result = self
             .database
             .prepare(
-                "SELECT id, name, slug, published_revision_id, created_at, updated_at FROM funnels ORDER BY created_at, id",
+                "SELECT id, name, slug, published_revision_id, created_at, updated_at FROM funnels ORDER BY created_at, id LIMIT ?",
             )
+            .bind_refs([&limit])?
             .all()
             .await?;
         result.results::<FunnelRecord>().map_err(Into::into)
+    }
+
+    async fn funnel_count(&self) -> RepositoryResult<i64> {
+        self.database
+            .prepare("SELECT COUNT(*) AS funnel_count FROM funnels")
+            .first::<i64>(Some("funnel_count"))
+            .await?
+            .ok_or_else(|| {
+                Error::RustError("workspace funnel count could not be read".to_owned()).into()
+            })
     }
 
     pub async fn update_funnel(
@@ -403,6 +633,30 @@ pub fn validate_schema_version(version: i64) -> RepositoryResult<()> {
         Ok(())
     } else {
         Err(RepositoryError::UnsupportedSchemaVersion(version))
+    }
+}
+
+fn classify_receipt(
+    receipt: CommandReceipt,
+    command_id: &str,
+    payload_json: &str,
+) -> MutationResult {
+    if receipt.command_id == command_id && receipt.payload_json == payload_json {
+        MutationResult::Stored(receipt.result_json)
+    } else {
+        MutationResult::PayloadMismatch
+    }
+}
+
+fn validate_idempotency_key(value: &str) -> RepositoryResult<()> {
+    if !(1..=128).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        Err(RepositoryError::InvalidField("idempotency_key"))
+    } else {
+        Ok(())
     }
 }
 
