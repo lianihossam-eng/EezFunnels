@@ -1,0 +1,99 @@
+Error: locator.getAttribute: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('group', { name: 'Preview viewport' }).getByRole('button', { name: 'Desktop (1280 px)' })[22m
+
+    at /workspace/EezFunnels/scripts/test-pr010-browser.mjs:412:89
+
+Browser diagnostics:
+request GET: http://127.0.0.1:33409/funnels
+response 200: http://127.0.0.1:33409/funnels
+framenavigated: http://127.0.0.1:33409/funnels
+console error: Failed to load resource: the server responded with a status of 404 (Not Found)
+framenavigated: http://127.0.0.1:33409/funnels
+framenavigated: http://127.0.0.1:33409/funnels
+request GET: http://127.0.0.1:33409/api/funnels
+response 200: http://127.0.0.1:33409/api/funnels
+framenavigated: http://127.0.0.1:33409/funnels
+framenavigated: http://127.0.0.1:33409/funnels/0d9c02e6-ab0b-4bbb-a814-de4a42c887fb
+request GET: http://127.0.0.1:33409/api/funnels/0d9c02e6-ab0b-4bbb-a814-de4a42c887fb
+response 200: http://127.0.0.1:33409/api/funnels/0d9c02e6-ab0b-4bbb-a814-de4a42c887fb
+
+Wrangler log:
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProxy environment variables detected. We'll use your proxy for fetch requests.[0m
+
+
+
+ ⛅️ wrangler 4.149.0 (update available 4.151.0)
+───────────────────────────────────────────────
+Your Worker has access to the following bindings:
+Binding                                                       Resource                  Mode
+env.KV (00000000-0000-0000-0000-000000000002)                 KV Namespace              local
+env.DB (eezfunnel-dev)                                        D1 Database               local
+env.R2 (eezfunnel-assets-dev)                                 R2 Bucket                 local
+env.ASSETS                                                    Assets                    local
+env.ENVIRONMENT ("development")                               Environment Variable      local
+env.ALLOWED_HOSTS ("(hidden)")                                Environment Variable      local
+
+Attaching additional modules:
+┌──────────────────┬───────────────┬─────────────┐
+│ Name             │ Type          │ Size        │
+├──────────────────┼───────────────┼─────────────┤
+│ index_bg.wasm    │ compiled-wasm │ 1454.66 KiB │
+├──────────────────┼───────────────┼─────────────┤
+│ Total (1 module) │               │ 1454.66 KiB │
+└──────────────────┴───────────────┴─────────────┘
+⎔ Starting local server...
+Wrangler detected this dev session is running in an AI agent.
+The Local Explorer API is available at http://127.0.0.1:33409/cdn-cgi/local/explorer/api
+Useful routes:
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/local/workers - local Workers and bindings
+  POST http://127.0.0.1:33409/cdn-cgi/local/explorer/api/local/scheduled?worker=<name> - invoke a Worker's scheduled handler; cron is required (see the OpenAPI schema for the full request)
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/storage/kv/namespaces - KV namespaces
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/d1/database - D1 databases
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/r2/buckets - R2 buckets
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/workers/durable_objects/namespaces - Durable Object namespaces
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api/workflows - Workflows
+  POST http://127.0.0.1:33409/cdn-cgi/local/explorer/api/local/observability/query - run a read-only SQL query (SELECT/WITH only) over captured request traces and console logs. Tables: spans, logs (read attributes via json(attributes)). Example:
+    curl -X POST http://127.0.0.1:33409/cdn-cgi/local/explorer/api/local/observability/query -H 'Content-Type: application/json' -d '{"sql":"SELECT service, name, outcome, duration_ms FROM spans WHERE parent_id IS NULL LIMIT 20"}'
+  POST http://127.0.0.1:33409/cdn-cgi/local/explorer/api/local/observability/clear - clear all captured traces and logs
+If the routes above don't cover what you need, fetch the full OpenAPI schema (large - use only as a last resort):
+  GET http://127.0.0.1:33409/cdn-cgi/local/explorer/api - OpenAPI schema
+[wrangler:info] Ready on http://127.0.0.1:33409
+{"correlation_id":"284c0f49-fab9-4bf8-885a-9bfed88d73ef","event":"request","method":"GET","path":"/health","status":200}
+[wrangler:info] GET /health 200 OK (309ms)
+{"correlation_id":"3ef82133-a59a-4337-8399-0c4e29f501b0","event":"request","method":"POST","path":"/api/funnels","status":201}
+[wrangler:info] POST /api/funnels 201 Created (39ms)
+{"correlation_id":"7d6ca1e1-954d-468e-a5e9-63fce2a3056d","event":"request","method":"POST","path":"/api/funnels","status":201}
+[wrangler:info] POST /api/funnels 201 Created (15ms)
+{"correlation_id":"4441d5e6-15ba-4023-9d80-bf86d18a9d4e","event":"request","method":"GET","path":"/funnels","status":200}
+[wrangler:info] GET /funnels 200 OK (31ms)
+{"correlation_id":"e490d6a7-7d0f-4fd0-996f-eacf59511360","event":"request","method":"GET","path":"/assets/dashboard.css","status":200}
+[wrangler:info] GET /assets/dashboard.css 200 OK (15ms)
+{"correlation_id":"6a6449b5-4ced-4ab4-b455-a2d45fd817c2","event":"request","method":"GET","path":"/assets/bootstrap.js","status":200}
+[wrangler:info] GET /assets/bootstrap.js 200 OK (27ms)
+{"correlation_id":"044de1d4-295e-43a9-8b5e-2e88c645f3a4","event":"request","method":"GET","path":"/assets/eezfunnel.js","status":200}
+[wrangler:info] GET /assets/eezfunnel.js 200 OK (13ms)
+[31m✘ [41;31m[[41;97mERROR[41;31m][0m [1m{"alert":false,"code":"not_found/route","correlation_id":"0157f927-b8f2-4ed3-8e6d-f0a2153238e7","detail":"request route was not found","event":"api_error"}[0m
+
+
+{"correlation_id":"0157f927-b8f2-4ed3-8e6d-f0a2153238e7","event":"request","method":"GET","path":"/favicon.ico","status":404}
+[wrangler:info] GET /favicon.ico 404 Not Found (12ms)
+{"correlation_id":"ce9f9091-0860-41cc-a89f-6c334b34215b","event":"request","method":"GET","path":"/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js","status":200}
+[wrangler:info] GET /assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js 200 OK (12ms)
+{"correlation_id":"e62f6bbe-ad40-457a-8163-a9af7ff62be9","event":"request","method":"GET","path":"/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js","status":200}
+[wrangler:info] GET /assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js 200 OK (26ms)
+{"correlation_id":"dcb3e98f-27c4-47e1-b1b7-11efc15f45a0","event":"request","method":"GET","path":"/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js","status":200}
+{"correlation_id":"ba40491a-b1ab-40b9-bb1f-af4b06d58bba","event":"request","method":"GET","path":"/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js","status":200}
+{"correlation_id":"9671ab4d-95ab-48cb-9d38-c75157025d17","event":"request","method":"GET","path":"/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js","status":200}
+{"correlation_id":"6528b950-1e43-4c27-bc8c-3beccf4a0c4a","event":"request","method":"GET","path":"/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js","status":200}
+[wrangler:info] GET /assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js 200 OK (33ms)
+[wrangler:info] GET /assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js 200 OK (40ms)
+[wrangler:info] GET /assets/snippets/dioxus-web-eae67878b22d6805/inline0.js 200 OK (43ms)
+[wrangler:info] GET /assets/snippets/dioxus-web-eae67878b22d6805/inline1.js 200 OK (38ms)
+{"correlation_id":"045845cc-ff6d-4c2c-a795-126363bf7258","event":"request","method":"GET","path":"/assets/eezfunnel_bg.wasm","status":200}
+[wrangler:info] GET /assets/eezfunnel_bg.wasm 200 OK (9ms)
+{"correlation_id":"1622c464-ee85-46a0-a908-c6843f822af4","event":"request","method":"GET","path":"/api/funnels","status":200}
+[wrangler:info] GET /api/funnels 200 OK (9ms)
+{"correlation_id":"d72559df-5967-4efe-99eb-7323b220723b","event":"request","method":"GET","path":"/api/funnels/0d9c02e6-ab0b-4bbb-a814-de4a42c887fb","status":200}
+[wrangler:info] GET /api/funnels/0d9c02e6-ab0b-4bbb-a814-de4a42c887fb 200 OK (21ms)
+

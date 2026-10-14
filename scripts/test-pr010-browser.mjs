@@ -143,6 +143,46 @@ async function sectionOrder(page) {
   );
 }
 
+async function responsivePreviewSnapshot(page, selectedLabel) {
+  const frame = page.locator("iframe");
+  const frameClientWidth = await frame.evaluate((element) => element.clientWidth);
+  const rendered = await page.frameLocator("iframe").locator("html").evaluate((root) => {
+    const features = root.querySelector(".features-grid");
+    const funnel = root.querySelector("#funnel");
+    const firstFeature = features?.querySelector(".feature");
+    if (!features || !firstFeature || !funnel) return null;
+    const columnWidths = getComputedStyle(features)
+      .gridTemplateColumns.trim().split(/\s+/).map((width) => Number.parseFloat(width));
+    return {
+      browsingContextWidth: window.innerWidth,
+      documentWidth: root.clientWidth,
+      featureColumns: columnWidths.filter((width) => width > 0).length,
+      featureGridWidth: Math.round(features.getBoundingClientRect().width),
+      featureCardWidth: Math.round(firstFeature.getBoundingClientRect().width),
+      funnelWidth: Math.round(funnel.getBoundingClientRect().width),
+      sectionOrder: [...root.querySelectorAll("[data-section-id]")].map((section) =>
+        section.getAttribute("data-section-id"),
+      ),
+    };
+  });
+  assert(rendered, "Rendered funnel should contain its layout root and features grid");
+  const canvas = await page.locator(".editor-preview-canvas").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  const pageWidth = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  return {
+    selectedLabel,
+    frameClientWidth,
+    ...rendered,
+    canvas,
+    pageWidth,
+  };
+}
+
 async function waitForOrder(page, expected) {
   await page.waitForFunction(
     (order) => {
@@ -305,10 +345,14 @@ try {
   });
   const probeRequests = [];
   const previewRequests = [];
+  const saveRequests = [];
   page.on("request", (request) => {
     const url = request.url();
     if (url.includes("/__pr010_probe/")) probeRequests.push(url);
     if (url.includes(`/api/funnels/${primaryId}/preview`)) previewRequests.push(url);
+    if (request.method() === "PUT" && url.includes(`/api/funnels/${primaryId}/revisions`)) {
+      saveRequests.push(url);
+    }
   });
   await page.goto(`${origin}/funnels`, { waitUntil: "networkidle" });
   const primaryLink = page.getByRole("link", { name: "PR-010 browser editor" });
@@ -353,6 +397,74 @@ try {
   const criticalAxeFindings = axe.filter((finding) => finding.impact === "critical");
   assert.deepEqual(criticalAxeFindings, [], `Critical axe findings: ${JSON.stringify(criticalAxeFindings)}`);
 
+  {
+    const viewportGroup = page.getByRole("group", { name: "Preview viewport" });
+    const viewportSnapshots = [
+      { label: "Mobile (375 px)", width: 375, columns: 1, featureGridWidth: 327, featureCardWidth: 327 },
+      { label: "Tablet (768 px)", width: 768, columns: 2, featureGridWidth: 720, featureCardWidth: 352 },
+      { label: "Desktop (1280 px)", width: 1280, columns: 2, featureGridWidth: 1104, featureCardWidth: 544 },
+    ];
+    const frame = page.locator("iframe");
+    const originalSrcdoc = await frame.getAttribute("srcdoc");
+    const originalTitle = await frame.getAttribute("title");
+    const originalSandbox = await frame.getAttribute("sandbox");
+    const previewCountBefore = previewRequests.length;
+    const saveCountBefore = saveRequests.length;
+    const snapshots = [];
+
+    assert.equal(await viewportGroup.getByRole("button", { name: "Desktop (1280 px)" }).getAttribute("aria-pressed"), "true");
+    for (const expected of viewportSnapshots) {
+      const option = viewportGroup.getByRole("button", { name: expected.label });
+      await option.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        ({ label }) =>
+          document.querySelector('[aria-label="Preview viewport"]')?.querySelector('[aria-pressed="true"]')?.textContent?.trim() === label,
+        { label: expected.label },
+      );
+      const snapshot = await responsivePreviewSnapshot(page, expected.label);
+      assert.equal(snapshot.frameClientWidth, expected.width);
+      assert.equal(snapshot.browsingContextWidth, expected.width);
+      assert.equal(snapshot.documentWidth, expected.width);
+      assert.equal(snapshot.featureColumns, expected.columns, JSON.stringify(snapshot));
+      assert.equal(snapshot.featureGridWidth, expected.featureGridWidth, JSON.stringify(snapshot));
+      assert.equal(snapshot.featureCardWidth, expected.featureCardWidth, JSON.stringify(snapshot));
+      assert.equal(snapshot.funnelWidth, expected.width);
+      assert.deepEqual(snapshot.sectionOrder, ["hero", "features", "cta"]);
+      assert.equal(snapshot.pageWidth.scrollWidth, snapshot.pageWidth.clientWidth);
+      assert(snapshot.canvas.scrollWidth >= expected.width);
+      snapshots.push(snapshot);
+    }
+    assert.equal(await frame.getAttribute("srcdoc"), originalSrcdoc);
+    assert.equal(await frame.getAttribute("title"), originalTitle);
+    assert.equal(await frame.getAttribute("sandbox"), originalSandbox);
+    assert.equal(originalSandbox, "");
+    assert.equal(previewRequests.length, previewCountBefore);
+    assert.equal(saveRequests.length, saveCountBefore);
+    assert.equal(await page.getByRole("button", { name: "Undo" }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Redo" }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), true);
+    assert.equal(await page.getByText("All changes saved").count(), 1);
+
+    await page.setViewportSize({ width: 375, height: 1000 });
+    const mobileCanvas = await page.locator(".editor-preview-canvas").evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    const mobilePageWidth = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    assert(mobileCanvas.scrollWidth >= 1280);
+    assert(mobileCanvas.scrollWidth > mobileCanvas.clientWidth);
+    assert.equal(mobilePageWidth.scrollWidth, mobilePageWidth.clientWidth);
+    assert.equal(await page.frameLocator("iframe").locator("html").evaluate(() => window.innerWidth), 1280);
+    await page.setViewportSize({ width: 1360, height: 1000 });
+    assert.equal(previewRequests.length, previewCountBefore);
+    assert.equal(saveRequests.length, saveCountBefore);
+    console.log(`PR-013 responsive layout snapshots: ${JSON.stringify(snapshots)}`);
+  }
+
   await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
   {
     const historyTitle = page.locator('[id="setting-section.hero.title"]');
@@ -360,10 +472,22 @@ try {
     const undoButton = page.getByRole("button", { name: "Undo" });
     const redoButton = page.getByRole("button", { name: "Redo" });
     const historySaveButton = page.getByRole("button", { name: "Save revision" });
+    const tabletViewport = page
+      .getByRole("group", { name: "Preview viewport" })
+      .getByRole("button", { name: "Tablet (768 px)" });
+
+    const previewCountBeforeSelection = previewRequests.length;
+    await tabletViewport.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(previewRequests.length, previewCountBeforeSelection);
+    assert.equal(await tabletViewport.getAttribute("aria-pressed"), "true");
+    assert.equal(await undoButton.isDisabled(), true);
 
     let historyPreview = editorPreviewResponse(page, primaryId);
     await historyTitle.fill("PR-012 undo shortcut headline");
     assert.equal((await historyPreview).status(), 200);
+    assert.equal(await page.locator("iframe").getAttribute("width"), "768");
+    assert.equal(await page.frameLocator("iframe").locator("html").evaluate(() => window.innerWidth), 768);
     assert.equal(await undoButton.isDisabled(), false);
     assert.equal(await redoButton.isDisabled(), true);
 
@@ -914,7 +1038,7 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010/011/012 browser: navigation, keyboard, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  console.log(`PR-010/011/012/013 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,
