@@ -81,6 +81,16 @@ fn public_read_accepts_only_a_bounded_generated_slug() {
 }
 
 #[test]
+fn public_read_missing_slug_is_classified_before_typed_deserialization() {
+    assert_eq!(
+        FunnelPublicReadCommand::from_json("{}")
+            .expect_err("slug is required")
+            .code(),
+        "validation/missing_field"
+    );
+}
+
+#[test]
 fn public_unsupported_schema_is_a_validation_error() {
     assert_eq!(
         FunnelCommandError::Storage(RepositoryError::UnsupportedSchemaVersion(2)).code(),

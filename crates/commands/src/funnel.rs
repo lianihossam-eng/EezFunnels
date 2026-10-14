@@ -213,7 +213,6 @@ impl FunnelPublicReadCommand {
     const ID: &'static str = "funnel.public.read";
 
     pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
-        let command: Self = serde_json::from_str(parameters)?;
         let value: Value = serde_json::from_str(parameters)?;
         let object = value
             .as_object()
@@ -221,6 +220,7 @@ impl FunnelPublicReadCommand {
         if object.get("slug").is_none() {
             return Err(FunnelCommandError::MissingField);
         }
+        let command: Self = serde_json::from_str(parameters)?;
         if !valid_public_slug(&command.slug) {
             return Err(FunnelCommandError::InvalidParameters);
         }
