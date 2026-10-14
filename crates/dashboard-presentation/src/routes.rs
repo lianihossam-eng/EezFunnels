@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use eez_domain::FunnelBlueprint;
 use serde::Deserialize;
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
 use sha2::{Digest, Sha256};
@@ -336,38 +336,31 @@ fn Funnels() -> Element {
                     create_idempotency_key.set(Some(prepared_key.clone()));
                     #[cfg(feature = "browser")]
                     spawn(async move {
-                        match api_request(
+                        let response = api_request(
                             "POST",
                             "/api/funnels",
                             Some(request_body),
                             Some(prepared_key.clone()),
-                        ).await {
-                            Ok(response) if response.status == 201 => {
-                                let message = created_summary(&response.body, &request_name);
+                        );
+                        let retry_key = prepared_key.clone();
+                        finish_create_response(
+                            response,
+                            request_name,
+                            move |message| {
                                 let _ = clear_idempotency_storage(&prepared_key);
-                                finish_create_before_refresh(
-                                    move || {
-                                        create_success.set(Some(message));
-                                        create_open.set(false);
-                                        funnel_name.set(String::new());
-                                        blueprint.set(FunnelBlueprint::Tripwire);
-                                        create_idempotency_key.set(None);
-                                        create_pending.set(false);
-                                    },
-                                    refresh_funnel_list(load_state),
-                                )
-                                .await;
-                            }
-                            Ok(response) => {
-                                create_idempotency_key.set(Some(prepared_key.clone()));
-                                create_error.set(Some(error_message(&response.body)));
-                                create_pending.set(false);
-                            }
-                            Err(()) => {
-                                create_error.set(Some("The funnel could not be created. Try again.".to_owned()));
-                                create_pending.set(false);
-                            }
-                        }
+                                create_success.set(Some(message));
+                                create_open.set(false);
+                                funnel_name.set(String::new());
+                                blueprint.set(FunnelBlueprint::Tripwire);
+                                create_idempotency_key.set(None);
+                            },
+                            move |message| {
+                                create_idempotency_key.set(Some(retry_key));
+                                create_error.set(Some(message));
+                            },
+                            move || create_pending.set(false),
+                            refresh_funnel_list(load_state),
+                        ).await;
                     });
                     #[cfg(not(feature = "browser"))]
                     create_pending.set(false);
@@ -530,7 +523,7 @@ struct FunnelListResponse {
     items: Vec<FunnelCard>,
 }
 
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 #[derive(Deserialize)]
 struct BrowserResponse {
     status: u16,
@@ -607,7 +600,7 @@ fn clear_idempotency_storage(prepared_key: &PreparedIdempotencyKey) -> Result<()
         .map_err(|_| ())
 }
 
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 fn created_summary(body: &str, name: &str) -> String {
     let section_types = serde_json::from_str::<Value>(body)
         .ok()
@@ -627,7 +620,7 @@ fn created_summary(body: &str, name: &str) -> String {
     format!("Created {name} with {section_types}.")
 }
 
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 fn section_label(section_type: &str) -> String {
     match section_type {
         "hero" => "Hero".to_owned(),
@@ -639,7 +632,7 @@ fn section_label(section_type: &str) -> String {
     }
 }
 
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 fn error_message(body: &str) -> String {
     let correlation_id = serde_json::from_str::<Value>(body)
         .ok()
@@ -728,13 +721,35 @@ async fn refresh_funnel_list(mut load_state: Signal<FunnelListLoad>) {
 }
 
 #[cfg(any(feature = "browser", test))]
-async fn finish_create_before_refresh<F, R>(finish_create: F, refresh: R)
-where
-    F: FnOnce(),
+async fn finish_create_response<Q, S, E, P, R>(
+    response: Q,
+    request_name: String,
+    finish_success: S,
+    finish_error: E,
+    mut clear_pending: P,
+    refresh: R,
+) where
+    Q: Future<Output = Result<BrowserResponse, ()>>,
+    S: FnOnce(String),
+    E: FnOnce(String),
+    P: FnMut(),
     R: Future<Output = ()>,
 {
-    finish_create();
-    refresh.await;
+    match response.await {
+        Ok(response) if response.status == 201 => {
+            finish_success(created_summary(&response.body, &request_name));
+            clear_pending();
+            refresh.await;
+        }
+        Ok(response) => {
+            finish_error(error_message(&response.body));
+            clear_pending();
+        }
+        Err(()) => {
+            finish_error("The funnel could not be created. Try again.".to_owned());
+            clear_pending();
+        }
+    }
 }
 
 fn can_create_funnel(name: &str) -> bool {
@@ -899,11 +914,21 @@ mod tests {
         let refresh_ready = Rc::new(Cell::new(false));
         let finished_dialog = Rc::clone(&dialog_open);
         let finished_pending = Rc::clone(&mutation_pending);
-        let refresh = finish_create_before_refresh(
-            move || {
+        let response = async {
+            Ok(BrowserResponse {
+                status: 201,
+                body: "{}".to_owned(),
+            })
+        };
+        let refresh = finish_create_response(
+            response,
+            "Offer".to_owned(),
+            move |message| {
+                assert_eq!(message, "Created Offer with starter sections.");
                 finished_dialog.set(false);
-                finished_pending.set(false);
             },
+            |_| panic!("a successful creation must not take the error path"),
+            move || finished_pending.set(false),
             ManualRefresh(Rc::clone(&refresh_ready)),
         );
         let mut refresh = std::pin::pin!(refresh);
@@ -927,6 +952,63 @@ mod tests {
             mutation_pending.get(),
             "the first refresh completion must not clear the second create's pending state"
         );
+    }
+
+    #[test]
+    fn unsuccessful_create_responses_clear_pending_without_refreshing() {
+        use std::cell::Cell;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::rc::Rc;
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct NoopWake;
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        struct Refresh(Rc<Cell<bool>>);
+        impl Future for Refresh {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+                self.0.set(true);
+                Poll::Ready(())
+            }
+        }
+
+        let responses = [
+            Ok(BrowserResponse {
+                status: 400,
+                body: "{}".to_owned(),
+            }),
+            Err(()),
+        ];
+        for response in responses {
+            let mutation_pending = Rc::new(Cell::new(true));
+            let error_reported = Rc::new(Cell::new(false));
+            let refresh_polled = Rc::new(Cell::new(false));
+            let finished_pending = Rc::clone(&mutation_pending);
+            let reported_error = Rc::clone(&error_reported);
+            let response = async move { response };
+            let future = finish_create_response(
+                response,
+                "Offer".to_owned(),
+                |_| panic!("an unsuccessful creation must not take the success path"),
+                move |message| reported_error.set(!message.is_empty()),
+                move || finished_pending.set(false),
+                Refresh(Rc::clone(&refresh_polled)),
+            );
+            let mut future = std::pin::pin!(future);
+            let waker = Waker::from(Arc::new(NoopWake));
+            let mut context = Context::from_waker(&waker);
+
+            assert!(future.as_mut().poll(&mut context).is_ready());
+            assert!(error_reported.get());
+            assert!(!mutation_pending.get());
+            assert!(!refresh_polled.get());
+        }
     }
 
     #[test]
