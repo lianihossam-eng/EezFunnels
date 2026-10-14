@@ -17,41 +17,107 @@ funnel_ids_file="$state_dir/funnel-ids.txt"
 port=8787
 worker_pid=""
 worker_pgid=""
+worker_sid=""
+worker_launcher_pid=""
+
+worker_tree_pids() {
+  local pending=("$1")
+  local seen=()
+  local current children child
+  while [ "${#pending[@]}" -gt 0 ]; do
+    current="${pending[0]}"
+    pending=("${pending[@]:1}")
+    case " ${seen[*]} " in
+      *" $current "*) continue ;;
+    esac
+    seen+=("$current")
+    children="$(ps -o pid= --ppid "$current" 2>/dev/null | awk '{$1=$1; print}' || true)"
+    if [ -n "$children" ]; then
+      while IFS= read -r child; do
+        [ -n "$child" ] && pending+=("$child")
+      done <<< "$children"
+    fi
+  done
+  printf '%s\n' "${seen[@]}"
+}
 
 stop_worker() {
-  if [ -z "$worker_pid" ]; then
+  if [ -z "$worker_launcher_pid" ] && [ -z "$worker_pid" ]; then
     return
   fi
-  kill -INT "$worker_pid" 2>/dev/null || true
-  for attempt in $(seq 1 20); do
-    worker_state="$(ps -o stat= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [ -z "$worker_state" ] || [[ "$worker_state" == Z* ]]; then
-      break
-    fi
-    sleep 0.1
-  done
-  worker_state="$(ps -o stat= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
-  if [ -n "$worker_state" ] && [[ "$worker_state" != Z* ]]; then
-    workerd_pids="$(ps -eo pid=,pgid=,comm=,stat= | awk -v pgid="$worker_pgid" '$2 == pgid && $3 == "workerd" && $4 !~ /^Z/ { print $1 }')"
-    if [ -n "$workerd_pids" ]; then
-      kill -TERM $workerd_pids 2>/dev/null || true
-    fi
-    if [ "$worker_pgid" = "$worker_pid" ] && [ "$worker_pgid" != "$$" ]; then
+
+  if [ -n "$worker_pid" ] && [ "$worker_pgid" = "$worker_pid" ] && [ "$worker_pgid" != "$$" ]; then
+    kill -INT -- "-$worker_pgid" 2>/dev/null || true
+    for attempt in $(seq 1 20); do
+      launcher_state="$(ps -o stat= -p "$worker_launcher_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [ -z "$launcher_state" ] || [[ "$launcher_state" == Z* ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    launcher_state="$(ps -o stat= -p "$worker_launcher_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -n "$launcher_state" ] && [[ "$launcher_state" != Z* ]]; then
       kill -TERM -- "-$worker_pgid" 2>/dev/null || true
       sleep 1
       kill -KILL -- "-$worker_pgid" 2>/dev/null || true
-    else
-      kill -TERM "$worker_pid" 2>/dev/null || true
+    fi
+  else
+    if [ -n "$worker_launcher_pid" ]; then
+      worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
+      if [ -n "$worker_pids" ]; then
+        while IFS= read -r pid; do
+          kill -INT "$pid" 2>/dev/null || true
+        done <<< "$worker_pids"
+      fi
+    elif [ -n "$worker_pid" ]; then
+      kill -INT "$worker_pid" 2>/dev/null || true
+    fi
+    sleep 2
+    if [ -n "$worker_launcher_pid" ]; then
+      worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
+      if [ -n "$worker_pids" ]; then
+        while IFS= read -r pid; do
+          kill -TERM "$pid" 2>/dev/null || true
+        done <<< "$worker_pids"
+        sleep 1
+        worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
+        if [ -n "$worker_pids" ]; then
+          while IFS= read -r pid; do
+            kill -KILL "$pid" 2>/dev/null || true
+          done <<< "$worker_pids"
+        fi
+      fi
     fi
   fi
-  wait "$worker_pid" 2>/dev/null || true
+
+  if [ -n "$worker_launcher_pid" ]; then
+    wait "$worker_launcher_pid" 2>/dev/null || true
+  elif [ -n "$worker_pid" ]; then
+    wait "$worker_pid" 2>/dev/null || true
+  fi
   worker_pid=""
   worker_pgid=""
+  worker_launcher_pid=""
 }
 
 cleanup() {
+  local had_worker="$worker_launcher_pid"
+  local cleanup_status=0
   stop_worker
+  if [ -n "$had_worker" ]; then
+    for attempt in $(seq 1 20); do
+      if ! curl --silent --output /dev/null --connect-timeout 1 "http://127.0.0.1:$port/health"; then
+        break
+      fi
+      sleep 0.1
+    done
+    if curl --silent --output /dev/null --connect-timeout 1 "http://127.0.0.1:$port/health"; then
+      printf 'Wrangler left port %s open after shutdown\n' "$port" >&2
+      cleanup_status=1
+    fi
+  fi
   rm -rf "$state_dir"
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -63,11 +129,32 @@ fi
 npm ci --no-audit --no-fund
 bash scripts/install-worker-build.sh
 ./node_modules/.bin/wrangler d1 migrations apply DB --local --env dev --persist-to "$state_dir"
-setsid ./node_modules/.bin/wrangler dev --local --env dev --port "$port" --ip 127.0.0.1 --persist-to "$state_dir" > "$log_file" 2>&1 &
-worker_pid=$!
-worker_pgid="$(ps -o pgid= -p "$worker_pid" | tr -d '[:space:]')"
-if [ "$worker_pgid" != "$worker_pid" ] || [ "$worker_pgid" = "$$" ]; then
-  printf 'Wrangler did not start in its own process group (pid=%s pgid=%s)\n' "$worker_pid" "$worker_pgid" >&2
+setsid --fork --wait ./node_modules/.bin/wrangler dev --local --env dev --port "$port" --ip 127.0.0.1 --persist-to "$state_dir" > "$log_file" 2>&1 &
+worker_launcher_pid=$!
+for attempt in $(seq 1 100); do
+  candidate_pids="$(ps -o pid= --ppid "$worker_launcher_pid" 2>/dev/null | awk '{$1=$1; print}' || true)"
+  while IFS= read -r candidate_pid; do
+    [ -n "$candidate_pid" ] || continue
+    candidate_pgid="$(ps -o pgid= -p "$candidate_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    candidate_sid="$(ps -o sid= -p "$candidate_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    candidate_state="$(ps -o stat= -p "$candidate_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ "$candidate_pgid" = "$candidate_pid" ] && [ "$candidate_sid" = "$candidate_pid" ] && \
+      [ -n "$candidate_state" ] && [[ "$candidate_state" != Z* ]]; then
+      worker_pid="$candidate_pid"
+      worker_pgid="$candidate_pgid"
+      worker_sid="$candidate_sid"
+      break 2
+    fi
+  done <<< "$candidate_pids"
+  launcher_state="$(ps -o stat= -p "$worker_launcher_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -z "$launcher_state" ] || [[ "$launcher_state" == Z* ]]; then
+    break
+  fi
+  sleep 0.02
+done
+if [ -z "$worker_pid" ] || [ "$worker_pgid" = "$$" ]; then
+  printf 'Wrangler did not start in its own session and process group (launcher=%s pid=%s pgid=%s sid=%s)\n' \
+    "$worker_launcher_pid" "$worker_pid" "$worker_pgid" "$worker_sid" >&2
   exit 1
 fi
 
