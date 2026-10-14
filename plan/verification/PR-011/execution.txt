@@ -1,8 +1,8 @@
 PR-011 settings inspector verification
-Evidence refreshed: 2026-10-14T15:24:28Z
+Evidence refreshed: 2026-10-14T15:26:51Z
 Branch: feat/011_inspector
 Base commit: 883ee7b98f0203d38654f15d2633010da9e420ee (exact merged origin/main SHA)
-Verified source commit: pending implementation commit; source fingerprint below identifies the tested working tree.
+Verified source commit: 0e9be45776803247a1563a46ce5dc35d55669a8a (implementation source commit; the later evidence commit changes only excluded verification metadata).
 Source fingerprint: 43876cd1437143fbae23d901a776a7895dd1cec4afa4286b4156bbec0627d6de (120 source files)
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
 

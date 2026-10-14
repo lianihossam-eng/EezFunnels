@@ -1,10 +1,10 @@
 {
   "task": "PR-011",
-  "evidence_refreshed_at_utc": "2026-10-14T15:24:28Z",
+  "evidence_refreshed_at_utc": "2026-10-14T15:26:51Z",
   "branch": "feat/011_inspector",
   "base_commit": "883ee7b98f0203d38654f15d2633010da9e420ee",
-  "verified_source_commit": null,
-  "source_commit_role": "The source fingerprint identifies the tested pre-commit worktree. The exact implementation commit will be added after commit; verification files and plan/STATUS.md are excluded from the fingerprint.",
+  "verified_source_commit": "0e9be45776803247a1563a46ce5dc35d55669a8a",
+  "source_commit_role": "Implementation source commit 0e9be45776803247a1563a46ce5dc35d55669a8a contains all fingerprinted source changes. The later evidence commit changes only excluded verification metadata.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.",
   "source_fingerprint_sha256": "43876cd1437143fbae23d901a776a7895dd1cec4afa4286b4156bbec0627d6de",
   "source_file_count": 120,
