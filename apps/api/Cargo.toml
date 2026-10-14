@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 axum.workspace = true
-eez-dashboard = { path = "../dashboard" }
+eez-dashboard-presentation = { path = "../../crates/dashboard-presentation", default-features = false, features = ["ssr"] }
 eez-storage = { path = "../../crates/storage" }
 serde.workspace = true
 serde_json.workspace = true

@@ -5,6 +5,7 @@ members = [
     "crates/render",
     "crates/storage",
     "crates/commands",
+    "crates/dashboard-presentation",
     "apps/api",
     "apps/dashboard",
     "apps/cli",

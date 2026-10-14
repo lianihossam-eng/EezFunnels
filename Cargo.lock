@@ -982,7 +982,7 @@ name = "eez-api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "eez-dashboard",
+ "eez-dashboard-presentation",
  "eez-storage",
  "serde",
  "serde_json",
@@ -1010,10 +1010,19 @@ name = "eez-dashboard"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "dioxus-web",
+ "eez-dashboard-presentation",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "eez-dashboard-presentation"
+version = "0.1.0"
+dependencies = [
+ "dioxus",
  "dioxus-fullstack-core",
  "dioxus-web",
  "serde_json",
- "wasm-bindgen",
  "web-sys",
 ]
 

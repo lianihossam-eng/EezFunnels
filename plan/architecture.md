@@ -7,10 +7,10 @@ Self-hosted single-user funnel builder on Cloudflare Workers, D1, R2, KV.
 ## Layering
 
 L0: domain    (types, contracts, invariants)
-L1: render    (HTML generation, sandboxed)
+L1: render, dashboard-presentation (HTML generation, sandboxed)
 L2: storage   (D1, R2, KV bindings)
-L3: commands, dashboard (dispatcher, policies, Dioxus presentation tree)
-L4: api, cli
+L3: commands  (dispatcher, policies)
+L4: api, dashboard app, cli
 
 Enforced by cargo xtask layers.
 
