@@ -29,10 +29,13 @@ mod unix {
                 "apps/dashboard",
                 "apps/cli",
                 "xtask",
+                "scripts",
             ] {
                 fs::create_dir_all(workspace.join(package_directory))
                     .expect("create workspace fixture package");
             }
+            fs::write(workspace.join("scripts/smoke-pr009.sh"), "")
+                .expect("write smoke placeholder");
             fs::write(
                 workspace.join("crates/dashboard-presentation/assets/bootstrap.js"),
                 "export {};\n",
@@ -259,6 +262,38 @@ mod unix {
             actual,
             "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --release --locked\naudit\n"
         );
+    }
+
+    #[test]
+    fn ci_runs_funnel_smoke_before_audit() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.workspace().join("scripts/smoke-pr009.sh"),
+            "printf 'funnel-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
+        )
+        .expect("write funnel smoke fixture");
+        let output = run_ci_with_cargo(
+            &fixture,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\n",
+        );
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = fs::read_to_string(fixture.root.join("cargo-arguments.txt"))
+            .expect("read CI and smoke gates");
+        let lines = actual.lines().collect::<Vec<_>>();
+        let smoke_position = lines
+            .iter()
+            .position(|line| *line == "funnel-smoke")
+            .expect("funnel smoke gate");
+        let audit_position = lines
+            .iter()
+            .position(|line| *line == "audit")
+            .expect("audit gate");
+        assert!(smoke_position < audit_position, "{actual}");
     }
 
     #[test]
