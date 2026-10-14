@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T03:18:30Z",
+  "evidence_refreshed_at_utc": "2026-10-14T03:44:40Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "4cad1bf739e0a800b6d0af64fd9483b9a78e996d",
-  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, local CRUD smoke, and reviewed dialog/CI fixes. STATUS and fingerprinted evidence are finalized in a follow-up documentation commit.",
+  "verified_source_commit": "01ca9d44c56b4959c4dee6918d56c2cf2b79f819",
+  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, CRUD smoke, review fixes, and sessionStorage retry-key persistence before mutation dispatch.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, and toolchain files are excluded.",
-  "source_fingerprint_sha256": "b21c3186636813f5fd5bed1c7a9105185663ac6842c18751bb490082307b14e9",
+  "source_fingerprint_sha256": "8a6edc1b3c996066e2a70afcf9792a3e70d3f997332796309234e911b992d057",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -21,7 +21,7 @@
     "CHANGELOG.md": "14af49db6823e7a9fc936c062b69f6abb5baefc304f837ca18ec1123172643bd",
     "CODE_OF_CONDUCT.md": "35837af79068e2ff370903f24f6244b991799e829d0a75dd97df7a42b331ea20",
     "CONTRIBUTING.md": "59abb575b9a2f45ec9af29d4597322d30e8e717ce26d3bffde055bc2a8c75062",
-    "Cargo.lock": "04af2936ba49ae8002f7bd8998269eb7151fb96dcaed7aaf449f5347c87a3e00",
+    "Cargo.lock": "c58ca81aafa09b75bf74ec9037a04bcc64be21fcdd4cfc24320ff95889c316b4",
     "Cargo.toml": "ada0a82cb1b0fd7c604c465961b3b1cf05efc33c6ab0224d5f0f7357d9fafe80",
     "GLOSSARY.md": "9c1756e9445854206eeb994ead4fa8ed0836890472a598a534a5a7017cff4819",
     "LICENSE": "256c86ed34a35d3f4e923043b7322f3e54fa050d20875200e489fc5d640f6029",
@@ -41,12 +41,12 @@
     "crates/commands/src/funnel_create_tests.rs": "aa46fec2e9fdeb183096989faee9f2dced7adbff4cf8e0eeac4e469baf3f8c60",
     "crates/commands/src/lib.rs": "c135d794600ce30e8332f44b6af7085428b5e3d7ce0b3e300ee94752290f6d63",
     "crates/commands/src/theme_set_tests.rs": "03bfdbe4566e595a27440c3cfea097dcd6354a2f0f214e1a74164b0ce3c740b7",
-    "crates/dashboard-presentation/Cargo.toml": "b34e95cf8f9dffa6dea0fc42624c4570bffd445c841211d0390e4aa9d8d67880",
+    "crates/dashboard-presentation/Cargo.toml": "5c0c46162cc31a227428581f92eb094e0f8e9d10762ac6a5136c4045adbdb6a4",
     "crates/dashboard-presentation/assets/bootstrap.js": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110",
     "crates/dashboard-presentation/assets/dashboard.css": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b",
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "bf13826b697575d8f57e6479187d10ca3bb843243cbf86c1f43e623bad5374d7",
-    "crates/dashboard-presentation/src/routes.rs": "058e72c7c105d241d919d190d6254fa07019f0060f157d27a188b52885a27e3b",
+    "crates/dashboard-presentation/src/routes.rs": "be2a90743eb52fab522ba464649cd44c3aa399b28b663e357d3bdc598b751b1d",
     "crates/dashboard-presentation/src/ssr.rs": "adc4e1eb07f0aac7b6e3edffd79887945fc3ee54d19c17acac1152b7980b9495",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
     "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
@@ -90,7 +90,7 @@
     "plan/decisions/D10_render_section_content.md": "c8c63e9b37d14c1b5bbd9e8851dcec736130c0dd6f17defb91090c1629492696",
     "plan/decisions/D11_theme_presets.md": "181399d45c91b76265edb1789cce97f53c36a63bd8d271dd88c87e2ed0ba924a",
     "plan/decisions/D12_dashboard_rendering.md": "e5c09492d9f932dbe94e74f87238312a8555bcbc340ca3595eca42a8f881204a",
-    "plan/decisions/D13_funnel_creation.md": "13762e811a560f470d64c938d9508c8d7faf35018838cec38964bcc96b8169d1",
+    "plan/decisions/D13_funnel_creation.md": "76639a0315b097d5f6e715286964d315732daf946f7eb32fef95f754bc9623c0",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -130,6 +130,16 @@
       "post_fix_log": "/tmp/eezfunnel-pr009-modal-cancel-green.log",
       "post_fix_log_sha256": "6cbe7bfd5b1fa2d6d2fb0cd247611975c13da7e36b6c0b2c2d212581e0c186ad",
       "diagnostic": "Before the helper existed, Rust reported unresolved dialog_cancel_disposition and DialogCancelDisposition; the targeted test passed after implementation."
+    },
+    "idempotency_storage_slot": {
+      "test": "idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-key-slot-red.log",
+      "pre_fix_log_sha256": "b65e95de2d132d25359442978b5108b93fd263378c911a1426b827c96af765e5",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-sessionstorage-test.log",
+      "post_fix_log_sha256": "09bc72698ba830cb8453c2056eaed21fb09305d860a788748bb90e52e7894621",
+      "diagnostic": "Before the slot helper existed, the test failed to compile with unresolved idempotency_storage_slot. After implementation, it passed canonical-property-order, changed-payload, method/route-scope, and no-cleartext-field assertions."
     }
   },
   "checks": {
@@ -140,7 +150,7 @@
       "workspace_test_counts": {
         "api": 11,
         "commands": 7,
-        "dashboard_presentation": 9,
+        "dashboard_presentation": 10,
         "domain": 13,
         "render": 33,
         "storage": 5,
@@ -148,19 +158,18 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-final-check.log",
-      "log_sha256": "b86addca338633a272831b720c2cfbe9d8f38a94a1524e3216ace2327a3de229"
+      "log": "/tmp/eezfunnel-pr009-key-fix-check.log",
+      "log_sha256": "466a01284af23d676fa5ad8b174e4e2ec52cbabe6815a62ca13c0c335e497f29"
     },
     "final_ci": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-final5-ci cargo +1.85.0 xtask ci",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-sessionstorage-ci CARGO_INCREMENTAL=0 cargo +1.85.0 xtask ci",
       "exit_code": 0,
-      "exit_marker": "CI_EXIT=0",
       "fresh_isolated_target": true,
       "target_was_empty_at_start": true,
-      "target_dir": "/workspace/.eezfunnel-pr009-final5-ci",
-      "outcome": "Workspace checks/tests, API and dashboard browser WASM, asset generation, local CRUD smoke integrated into xtask, and cargo audit passed.",
-      "log": "/tmp/eezfunnel-pr009-final-ci.log",
-      "log_sha256": "0b6f7e46ab57ef2023544f817517afd5c642e8fafb51912e41a847e29c83314d",
+      "target_dir": "/workspace/.eezfunnel-pr009-sessionstorage-ci",
+      "outcome": "Fresh-target workspace checks/tests, API and dashboard browser WASM, generated dashboard assets, local CRUD smoke integrated into xtask, and cargo audit passed.",
+      "log": "/tmp/eezfunnel-pr009-sessionstorage-ci.log",
+      "log_sha256": "42ccf4da4e58f80afa9c53e244503bf74b767e91351fc5e397a28ad7e29eb487",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -181,8 +190,8 @@
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
           "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 761830,
-          "sha256": "75a430511ecb2c91456754989a2754103c733cb5040e2e0bd06c28d74430ef8f"
+          "bytes": 784416,
+          "sha256": "9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39"
         }
       },
       "generated_bundle_sha256": {
@@ -198,13 +207,13 @@
         },
         "apps/dashboard/dist/assets/eezfunnel.js": {
           "path": "apps/dashboard/dist/assets/eezfunnel.js",
-          "bytes": 73511,
-          "sha256": "ece69e3b91e1da6a1c503c97a765c0d5f553632d94cbd6f3cf9625ea54b6661f"
+          "bytes": 74916,
+          "sha256": "9faa2d972d1a71e2f0b1d37a30c71d585a38e9d070aefac251da721d2f9f5664"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
           "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 761830,
-          "sha256": "75a430511ecb2c91456754989a2754103c733cb5040e2e0bd06c28d74430ef8f"
+          "bytes": 784416,
+          "sha256": "9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
           "path": "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
@@ -249,13 +258,12 @@
       }
     },
     "local_wrangler_smoke": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-final5-ci bash scripts/smoke-pr009.sh",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-sessionstorage-ci bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "exit_marker": "SMOKE_EXIT=0",
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-final-smoke.log",
-      "smoke_stdout_sha256": "c1ad5f65af817596cc65a890c79505fe68f46aea9ca99f842d0b37cc8f5da8a9",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-sessionstorage-smoke.log",
+      "smoke_stdout_sha256": "3411f800c05c6b6a855730c10857067f5163f40bdfb180963cf0ef2f9b219261",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "d562d9f437a5030ffff35d4096587c18075b28b000c52b49be0b284a0a34af27",
+      "wrangler_log_sha256": "152d24637b39621305edfe72d7335cec9f6f6d5f683a8b84469d6d4a8b7d44bb",
       "assertions": {
         "initial_and_final_list": "empty and final list responses returned HTTP 200",
         "create": "all 5 blueprints produced the expected ordered section types and unique initial section IDs",
@@ -269,14 +277,14 @@
         "host_denial": "HTTP 403 authorization/host_not_allowed"
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The same local CRUD smoke also passed as a cargo xtask ci gate before audit."
+      "ci_smoke_integration": "The same local CRUD smoke passed inside the fresh cargo xtask ci run before audit."
     },
     "source_format_and_comment_checks": {
       "cargo_fmt_check": "passed as part of cargo xtask check",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "No source comments, TODO/FIXME markers, or lint suppressions were added or removed; the reviewed diff contains no outstanding no-comments findings.",
-      "source_commit_check": "git show --check passed for source commit 4cad1bf739e0a800b6d0af64fd9483b9a78e996d"
+      "no_comments_review": "The internal read-only no-comments review found no source comments, TODO/FIXME markers, lint suppressions, or outstanding cleanup findings in this delta.",
+      "source_commit_check": "git show --check passed for source commit 01ca9d44c56b4959c4dee6918d56c2cf2b79f819"
     }
   },
   "tool_versions": {
@@ -294,8 +302,8 @@
     "funnel.list, funnel.create, and funnel.delete are routed through Session::execute; HTTP handlers remain an adapter.",
     "Five closed blueprints use stable IDs and each create atomically stores a funnel plus an immutable initial revision with a versioned snapshot and render manifest.",
     "D13 records the snapshot format and C-03 24-hour create/delete idempotency behavior; matching replays return their stored result and a key reused with different command parameters conflicts.",
-    "The dashboard list loads from the same-origin API, supports create/delete, locks create fields during pending requests, preserves retry keys after ambiguous results, and keeps native modal dialogs open until pending mutations settle.",
-    "The local API smoke runs inside cargo xtask ci before audit and was also run separately; no headless browser ran, so browser hydration completion remains unverified.",
+    "The dashboard list loads from the same-origin API, supports create/delete, locks create fields during pending requests, and stores only a validated UUID per sessionStorage slot. Each slot is scoped by method/route and a canonical JSON SHA-256 digest, written before dispatch, retained after ambiguous failures, and cleared after a successful response.",
+    "The local API smoke runs inside cargo xtask ci before audit and was also run separately; no headless browser ran, so browser hydration completion and native Escape interaction remain unverified.",
     "No remote bindings, production deployment, or remote migration were run."
   ],
   "hosted_ci": {

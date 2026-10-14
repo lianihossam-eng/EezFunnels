@@ -123,17 +123,20 @@ Worker exposes `GET/POST /api/funnels` and `DELETE /api/funnels/:id`; command ha
 `Session::execute`. D13 records the versioned snapshot format and the initial immutable revision
 created atomically with each funnel. Create and delete receipts enforce C-03's 24-hour same-key,
 same-payload replay and reject key reuse with different command parameters. The dashboard locks
-create fields during pending requests, preserves retry keys after ambiguous network results, and
-uses native modal dialogs that cannot be dismissed with Escape while a mutation is pending.
+create fields during pending requests and uses native modal dialogs that cannot be dismissed with
+Escape while a mutation is pending. Before create/delete dispatch, it stores only a UUID idempotency
+key in `sessionStorage`, in a method/route slot keyed by a SHA-256 digest of the canonical request
+tuple. Ambiguous failures retain the key for replay; successful responses clear the slot. D13
+records this lifecycle.
 
-Final source commit `4cad1bf739e0a800b6d0af64fd9483b9a78e996d` passes `cargo xtask check` with API
-11, commands 7, dashboard presentation 9, domain 13, render 33, storage 5, xtask 26, and CLI tests
-2 and 6. A fresh-target `cargo xtask ci` passes workspace checks/tests, API and dashboard WASM,
-asset generation, the local CRUD smoke gate, and audit of 345 locked dependencies against 1,310
-advisories with zero findings. The separate local-only Wrangler smoke verifies all five blueprint
-snapshots, create replay, payload-mismatch conflict, delete/replay, malformed JSON, missing
-idempotency key, missing funnel, unsupported method, and host denial. Fingerprinted evidence is in
-`plan/verification/PR-009/execution.txt` and `results.json`.
+Final source commit `01ca9d44c56b4959c4dee6918d56c2cf2b79f819` passes `cargo +1.85.0 xtask check`
+with API 11, commands 7, dashboard presentation 10, domain 13, render 33, storage 5, xtask 26, and
+CLI tests 2 and 6. Fresh-target `cargo +1.85.0 xtask ci` passes workspace checks/tests, API and
+dashboard browser WASM, asset generation, local CRUD smoke, and audit of 345 locked dependencies
+against 1,310 advisories with zero findings. A separate local-only Wrangler smoke also passes the
+five blueprint snapshots, create replay, payload-mismatch conflict, delete/replay, malformed JSON,
+missing idempotency key, missing funnel, unsupported method, and host denial checks. Fingerprinted
+evidence is in `plan/verification/PR-009/execution.txt` and `results.json`.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding

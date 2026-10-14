@@ -1,25 +1,28 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T03:18:30Z
+Evidence refreshed: 2026-10-14T03:44:40Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: 4cad1bf739e0a800b6d0af64fd9483b9a78e996d
-Source fingerprint: b21c3186636813f5fd5bed1c7a9105185663ac6842c18751bb490082307b14e9
+Verified source commit: 01ca9d44c56b4959c4dee6918d56c2cf2b79f819
+Source fingerprint: 8a6edc1b3c996066e2a70afcf9792a3e70d3f997332796309234e911b992d057
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, and toolchain files excluded.
 
 Implementation:
 - Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id; commands remain in Session::execute.
 - The five stable blueprints create an atomic funnel plus immutable initial revision and versioned snapshot/manifest; D13 defines this format.
 - C-03 create/delete receipts return matching 24-hour retries and reject key reuse with changed payloads.
-- The dashboard locks create fields during requests, preserves idempotency keys after ambiguous results, and uses native modal dialogs; Escape cannot dismiss a pending mutation.
-- xtask CI runs the local CRUD smoke after browser asset generation and before cargo audit; GitHub CI pins Node 24.19.0 for the smoke.
+- Before create/delete dispatch, the browser prepares and stores a UUID key synchronously. Each sessionStorage slot is scoped by method and route and uses a SHA-256 digest of the canonical request tuple; only the UUID is stored as the value, with user body fields absent from the slot name.
+- Ambiguous evaluator/network failures and non-success responses retain the key; a successful 201/200 response clears that slot. D13 documents the lifecycle. The dashboard also locks create inputs during requests and uses native modal dialogs that prevent Escape dismissal while mutations are pending.
+- xtask CI runs the local CRUD smoke after dashboard asset generation and before cargo audit; GitHub CI pins Node 24.19.0 for the smoke.
 
 Checks:
-- `cargo +1.85.0 xtask check`: CHECK_EXIT=0; tests API 11, commands 7, dashboard presentation 9, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: b86addca338633a272831b720c2cfbe9d8f38a94a1524e3216ace2327a3de229.
-- Fresh-target `cargo +1.85.0 xtask ci` at `/workspace/.eezfunnel-pr009-final5-ci`: CI_EXIT=0, including tests, API/dashboard WASM, asset generation, local CRUD smoke, and audit of 345 dependencies against 1,310 advisories with zero findings. Log SHA-256: 0b6f7e46ab57ef2023544f817517afd5c642e8fafb51912e41a847e29c83314d.
-- Separate local-only Wrangler smoke: SMOKE_EXIT=0; all five blueprints, create replay, payload mismatch, delete/replay, validation, method, not-found, and host-denial checks passed. Log SHA-256: c1ad5f65af817596cc65a890c79505fe68f46aea9ca99f842d0b37cc8f5da8a9.
-- Final source fingerprint covers 109 source/plan files; see results.json for file hashes, raw and transformed WASM sizes/hashes, and generated bundle hashes.
-- Dialog-cancel regression first failed before the shared policy existed (exit 101; log SHA-256 a39f9d21a8beddbe3c74acdeac9bf2c666507a58effed3b194c84dedf2f14ab3) and passed after implementation (exit 0; log SHA-256 6cbe7bfd5b1fa2d6d2fb0cd247611975c13da7e36b6c0b2c2d212581e0c186ad).
-- No headless browser ran, so browser hydration completion remains unverified. Wrangler used local bindings only; no remote deployment or migration ran.
+- `cargo +1.85.0 xtask check`: exit 0; formatting, warning-denied Clippy, tests and strict layer checks passed. Counts: API 11, commands 7, dashboard presentation 10, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: 466a01284af23d676fa5ad8b174e4e2ec52cbabe6815a62ca13c0c335e497f29.
+- Fresh-target `cargo +1.85.0 xtask ci` at `/workspace/.eezfunnel-pr009-sessionstorage-ci`: exit 0, with `CARGO_INCREMENTAL=0` to fit the isolated build in available disk. Workspace checks/tests, API and dashboard browser WASM builds, asset generation, local CRUD smoke, and cargo audit all passed. RustSec scanned 345 locked dependencies against 1,310 advisories with zero findings. Log SHA-256: 42ccf4da4e58f80afa9c53e244503bf74b767e91351fc5e397a28ad7e29eb487.
+- CI artifacts: API WASM 55,626,223 bytes (SHA-256 8e67d342f96e5f0ab58388a1236735d08e4a80528ab66cc1cac7eed3c983c346); raw dashboard WASM 1,695,657 bytes (SHA-256 372fbc18a57400659c83b6ef8b151d279d9e7fa724656740c47e7585d6f7cdba); transformed `apps/dashboard/dist/assets/eezfunnel_bg.wasm` 784,416 bytes (SHA-256 9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39). Generated bundle hashes are listed in results.json.
+- Separate local-only Wrangler smoke: exit 0; all five blueprints, create replay, payload mismatch, delete/replay, validation, unsupported method, not-found and host-denial assertions passed. Smoke log SHA-256: 3411f800c05c6b6a855730c10857067f5163f40bdfb180963cf0ef2f9b219261; Wrangler log SHA-256: 152d24637b39621305edfe72d7335cec9f6f6d5f683a8b84469d6d4a8b7d44bb.
+- The idempotency-slot regression first failed before the slot helper existed (exit 101, unresolved function; log SHA-256 b65e95de2d132d25359442978b5108b93fd263378c911a1426b827c96af765e5). It passes after implementation (exit 0; log SHA-256 09bc72698ba830cb8453c2056eaed21fb09305d860a788748bb90e52e7894621), checking canonical property order, changed payload, method/route scope and absence of cleartext user fields.
+- The dialog-cancel regression first failed before the shared policy existed (exit 101; log SHA-256 a39f9d21a8beddbe3c74acdeac9bf2c666507a58effed3b194c84dedf2f14ab3) and passed afterward (exit 0; log SHA-256 6cbe7bfd5b1fa2d6d2fb0cd247611975c13da7e36b6c0b2c2d212581e0c186ad).
+- `git show --check` passed for source commit 01ca9d44c56b4959c4dee6918d56c2cf2b79f819. The read-only internal no-comments and Luna reviews found no outstanding findings.
+- No headless browser ran, so hydration completion and native Escape interaction remain unverified. The smoke validates local API behavior and does not execute browser JavaScript. Wrangler used local bindings only; no remote deployment or migration ran.
 
 Hosted CI and @codex/Sol reviews are pending on the exact pushed evidence head.
