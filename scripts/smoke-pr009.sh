@@ -496,6 +496,152 @@ with open(sys.argv[1], encoding="utf-8") as response_file:
 assert response["items"] == [], response
 PY
 
+python3 - "$state_dir/fill-to-cap.sql" <<'PY'
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as sql_file:
+    for index in range(1, 100):
+        funnel_id = f"pr009-cap-seed-{index:03d}"
+        sql_file.write(
+            "INSERT INTO funnels (id, name, slug) VALUES "
+            f"('{funnel_id}', 'Capacity seed {index}', '{funnel_id}');\n"
+        )
+PY
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --file "$state_dir/fill-to-cap.sql" > "$state_dir/fill-to-cap.log"
+last_slot_status="$(request POST /api/funnels "$state_dir/last-slot.json" "$state_dir/last-slot.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr009-create-last-slot' \
+  --data '{"name":"Last capacity slot","blueprint":"tripwire"}')"
+test "$last_slot_status" = 201
+last_slot_replay_status="$(request POST /api/funnels "$state_dir/last-slot-replay.json" "$state_dir/last-slot-replay.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr009-create-last-slot' \
+  --data '{"name":"Last capacity slot","blueprint":"tripwire"}')"
+test "$last_slot_replay_status" = 201
+python3 - "$state_dir/last-slot.json" "$state_dir/last-slot-replay.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as first_file:
+    first = json.load(first_file)
+with open(sys.argv[2], encoding="utf-8") as replay_file:
+    replay = json.load(replay_file)
+assert first["funnel"] == replay["funnel"], (first, replay)
+assert first["initial_revision"] == replay["initial_revision"], (first, replay)
+PY
+bounded_list_status="$(request GET /api/funnels "$state_dir/cap-list.json" "$state_dir/cap-list.headers")"
+test "$bounded_list_status" = 200
+python3 - "$state_dir/cap-list.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert len(response["items"]) == 100, len(response["items"])
+PY
+
+capacity_status="$(request POST /api/funnels "$state_dir/capacity.json" "$state_dir/capacity.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr009-create-at-cap' \
+  --data '{"name":"Beyond capacity","blueprint":"tripwire"}')"
+python3 - "$state_dir/capacity.json" "$capacity_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "409", (sys.argv[2], response)
+assert response["code"] == "conflict/funnel_limit_reached", response
+assert response["category"] == "conflict", response
+assert response["message"] == "The workspace has reached its funnel limit.", response
+PY
+
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "SELECT (SELECT COUNT(*) FROM funnels) AS funnel_count, (SELECT COUNT(*) FROM command_receipts WHERE idempotency_key = 'pr009-create-at-cap') AS receipt_count;" \
+  > "$state_dir/capacity-persistence.json"
+python3 - "$state_dir/capacity-persistence.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as result_file:
+    result = json.load(result_file)
+counts = result[-1]["results"][0]
+assert counts == {"funnel_count": 100, "receipt_count": 0}, counts
+PY
+
+python3 - "$state_dir/over-cap-insert.sql" <<'PY'
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as sql_file:
+    sql_file.write(
+        "INSERT INTO funnels (id, name, slug) "
+        "VALUES ('pr009-cap-overflow', 'Over capacity', 'pr009-cap-overflow');\n"
+    )
+PY
+if ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --file "$state_dir/over-cap-insert.sql" > "$state_dir/over-cap-insert.log" 2>&1; then
+  printf 'The database accepted a direct insert beyond the workspace funnel limit\n' >&2
+  exit 1
+fi
+rg -q 'workspace funnel limit reached' "$state_dir/over-cap-insert.log"
+
+python3 - "$state_dir/seed-list-overflow.sql" <<'PY'
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as sql_file:
+    sql_file.write(
+        "DROP TRIGGER funnels_workspace_funnel_limit;\n"
+        "INSERT INTO funnels (id, name, slug) "
+        "VALUES ('pr009-cap-overflow', 'Over capacity', 'pr009-cap-overflow');\n"
+        "CREATE TRIGGER funnels_workspace_funnel_limit\n"
+        "BEFORE INSERT ON funnels\n"
+        "WHEN (SELECT COUNT(*) FROM funnels) >= 100\n"
+        "BEGIN\n"
+        "    SELECT RAISE(ABORT, 'workspace funnel limit reached');\n"
+        "END;\n"
+    )
+PY
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --file "$state_dir/seed-list-overflow.sql" > "$state_dir/seed-list-overflow.log"
+overflow_list_status="$(request GET /api/funnels "$state_dir/overflow-list.json" "$state_dir/overflow-list.headers")"
+test "$overflow_list_status" = 200
+python3 - "$state_dir/overflow-list.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert len(response["items"]) == 100, len(response["items"])
+PY
+
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --command "DELETE FROM funnels WHERE id = 'pr009-cap-overflow';" > /dev/null
+last_slot_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["id"])' \
+  "$state_dir/last-slot.json")"
+free_slot_delete_status="$(request DELETE "/api/funnels/$last_slot_id" "$state_dir/free-slot-delete.json" \
+  "$state_dir/free-slot-delete.headers" -H 'Idempotency-Key: pr009-delete-last-slot')"
+test "$free_slot_delete_status" = 200
+freed_slot_create_status="$(request POST /api/funnels "$state_dir/freed-slot.json" "$state_dir/freed-slot.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr009-create-after-limit' \
+  --data '{"name":"Freed capacity slot","blueprint":"tripwire"}')"
+test "$freed_slot_create_status" = 201
+freed_slot_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["id"])' \
+  "$state_dir/freed-slot.json")"
+freed_slot_delete_status="$(request DELETE "/api/funnels/$freed_slot_id" "$state_dir/freed-slot-delete.json" \
+  "$state_dir/freed-slot-delete.headers" -H 'Idempotency-Key: pr009-delete-freed-slot')"
+test "$freed_slot_delete_status" = 200
+
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --command "DELETE FROM funnels WHERE id LIKE 'pr009-cap-seed-%' OR id = 'pr009-cap-overflow';" > /dev/null
+final_empty_status="$(request GET /api/funnels "$state_dir/final-empty-list.json" "$state_dir/final-empty-list.headers")"
+test "$final_empty_status" = 200
+python3 - "$state_dir/final-empty-list.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert response["items"] == [], response
+PY
+
 unknown_status="$(request DELETE /api/funnels/unknown-funnel "$state_dir/not-found.json" "$state_dir/not-found.headers" \
   -H 'Idempotency-Key: pr009-delete-missing')"
 python3 - "$state_dir/not-found.json" "$unknown_status" <<'PY'
@@ -534,4 +680,4 @@ assert sys.argv[2] == "403", (sys.argv[2], response)
 assert response["code"] == "authorization/host_not_allowed", response
 PY
 
-printf 'list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 host-denial=403\n'
+printf 'list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403\n'

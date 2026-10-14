@@ -445,6 +445,7 @@ impl FunnelCommandError {
             Self::Domain(_) | Self::Render(_) => "internal/unexpected",
             Self::IdempotencyPayloadMismatch => "conflict/idempotency_payload_mismatch",
             Self::FunnelNotFound => "not_found/funnel",
+            Self::Storage(RepositoryError::FunnelLimitReached) => "conflict/funnel_limit_reached",
             Self::UnknownCommand => "validation/operation_not_supported",
             Self::Storage(RepositoryError::FunnelNotFound) => "not_found/funnel",
             Self::Storage(RepositoryError::InvalidJson | RepositoryError::InvalidField(_)) => {

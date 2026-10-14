@@ -85,11 +85,17 @@ impl ApiError {
                 "The requested route was not found.",
                 false,
             ),
-            "conflict/publish_stale_revision" | "conflict/idempotency_payload_mismatch" => (
+            "conflict/publish_stale_revision"
+            | "conflict/idempotency_payload_mismatch"
+            | "conflict/funnel_limit_reached" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
-                "The request conflicts with the current state.",
+                if code == "conflict/funnel_limit_reached" {
+                    "The workspace has reached its funnel limit."
+                } else {
+                    "The request conflicts with the current state."
+                },
                 false,
             ),
             "rate_limit/exceeded" => (
@@ -219,6 +225,11 @@ mod tests {
         ),
         (
             "conflict/idempotency_payload_mismatch",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/funnel_limit_reached",
             ErrorCategory::Conflict,
             409,
         ),
