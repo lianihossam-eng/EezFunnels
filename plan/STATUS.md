@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-011 Inspector (`feat/011_inspector`; local gates and five-control browser suite pass; hosted CI and Sol review pending)
+Current phase: PR-011 Inspector (`feat/011_inspector`; PR #12 open; latest review fixes and local gates pass; fresh hosted CI and Sol re-review pending)
 Last updated: 2026-10-14
 
 ## Phases
@@ -36,9 +36,7 @@ for validated theme overrides. It preserves V1 decoding and order-only requests,
 key rejection, C-01/C-04 idempotency/CAS behavior, and the existing 16 KiB API request cap; no
 frozen contract, manifest dependency, or migration changed. Fresh `cargo xtask ci`, aggregate-budget
 and request-contract regressions, migration preflight, and five-control browser coverage pass.
-Fingerprinted evidence is recorded in `plan/verification/PR-011`. PR-011 is awaiting PR creation,
-Sol review, and hosted CI on its pushed head. No remote migration, Cloudflare deployment, or merge
-was run for PR-011.
+The duplicate-key HTTP parser and preview-only renderer fixes address both Sol findings from the prior PR head. Fresh interrogate and no-comments audits are clean; `cargo xtask check`, `cargo xtask ci`, focused API/command/render suites, migration preflight, and the five-control browser suite pass. Fingerprinted evidence is in `plan/verification/PR-011`. PR #12 is open and awaiting fresh hosted CI and Sol re-review on the pushed fix head. No remote migration, Cloudflare deployment, or merge was run for PR-011.
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
 implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository
@@ -249,4 +247,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Review PR-010, resolve hosted CI and review findings, then merge only after those gates pass. Do not apply remote migrations or deploy as part of this PR. Tag @codex on PRs when requesting reviews, edits, or questions.
+Wait for fresh hosted CI and Sol re-review on PR #12. Merge only after those gates pass. Do not apply remote migrations or deploy as part of PR-011. Tag @codex on PRs when requesting reviews, edits, or questions.

@@ -1,12 +1,12 @@
 {
   "task": "PR-011",
-  "evidence_refreshed_at_utc": "2026-10-14T15:26:51Z",
+  "evidence_refreshed_at_utc": "2026-10-14T15:47:32Z",
   "branch": "feat/011_inspector",
   "base_commit": "883ee7b98f0203d38654f15d2633010da9e420ee",
-  "verified_source_commit": "0e9be45776803247a1563a46ce5dc35d55669a8a",
-  "source_commit_role": "Implementation source commit 0e9be45776803247a1563a46ce5dc35d55669a8a contains all fingerprinted source changes. The later evidence commit changes only excluded verification metadata.",
-  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "43876cd1437143fbae23d901a776a7895dd1cec4afa4286b4156bbec0627d6de",
+  "verified_source_commit": "4d51591228627e6ddef86bf12b5ca5989b41c14b",
+  "source_commit_role": "Code fix commit 5256443e33487a4b128157b905aa579bb15703f5 and D16 wording commit 4d51591228627e6ddef86bf12b5ca5989b41c14b contain all fingerprinted source changes. This evidence/status commit changes only excluded plan/verification metadata.",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.",
+  "source_fingerprint_sha256": "3444119e7ce31c2854425f195da93cd129cd747089a5eac505199e43b5d8f28f",
   "source_file_count": 120,
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
@@ -31,7 +31,7 @@
     "apps/api/Cargo.toml": "2cc930112db9a105b4e931f3326d3b04894445618997f2c47f1aa3808a293190",
     "apps/api/src/errors.rs": "71214176afa968ef64fcc3099a5ad94df4ecc786b2fb3657afacfd03b7b0f4e1",
     "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
-    "apps/api/src/lib.rs": "90d4ceb570fecb6baf04a575e300a18a023f1c274188e3f366d82a09698627ca",
+    "apps/api/src/lib.rs": "7c3c66cbf332c1d25381c807b57954fb1bb535ae4ae140de2bb344b5d2b6bd28",
     "apps/cli/Cargo.toml": "fdf35111e8406b0e3d9418a969eff6bebf510a922a7df519f2cfbfa8bf132a22",
     "apps/cli/src/main.rs": "f90c845d65c6729db5fa87e83ed4d0766a99594b63aedc1b7a5a4f5b65ef9ae7",
     "apps/dashboard/Cargo.toml": "c1f80286d887e68696442b263f0217c05d36b735906b3180bb6fa52fbf7153e4",
@@ -62,9 +62,9 @@
     "crates/render/snapshots/theme-elegant.properties": "e9879887b8a316cf3a38818b4121c0f5b0073d0f8958d9bdd228e703545d6194",
     "crates/render/snapshots/theme-minimal.properties": "df87bc2f9d993e2c968c8aad857d9b763fb7442ddfca786f761e9328150320ac",
     "crates/render/snapshots/theme-playful.properties": "e819c2de382322629618675e3ea6f7aff5605221b6da588a4ca90015376fc6fd",
-    "crates/render/snapshots/theme.css": "8d68a1ab09453601564066939e45bcf788ae85797d0fc86792733a96a1f40d32",
-    "crates/render/src/lib.rs": "ce9cb9c036f064f7c4f2ed5d515e8468092441d16d2a04158c71b71fcaf6433e",
-    "crates/render/src/renderer_tests.rs": "3b757f9d87357c04bbb7946b0ab85c86f9c399584a769487e64ac20a4b295d7d",
+    "crates/render/snapshots/theme.css": "9b817c3207ff4adbc4c38d00adbbd26fbb8efb681dffc16b2a9b2b2e866c7954",
+    "crates/render/src/lib.rs": "779517837288cbe272438f1b17a7f4dfa0e8c1480bc8eaa88e3143ed206a5ded",
+    "crates/render/src/renderer_tests.rs": "4dd4ff61590d4598a03a52da99176cc13e4476667dc670cdf52d0eef56e0a374",
     "crates/render/src/section_content_tests.rs": "e32cf26f27e99ba3d89a989687dce037a3a2baf950c9d5d14b26e172701752df",
     "crates/render/src/test_support.rs": "d80307fa79eeeb13b89de24d04ac5f4956e0967e8103e88de9248579b1039ca5",
     "crates/storage/Cargo.toml": "6d851d3347b1a4453c98f55fe131528e69e75f19d6cebd3803e97a33124b3e53",
@@ -100,7 +100,7 @@
     "plan/decisions/D13_funnel_creation.md": "74f25ca884b6784eac59062dcb7e7b3c4f019f67c00b23f7dafbb5882674da0e",
     "plan/decisions/D14_workspace_funnel_limit.md": "36e7cc5c2b6cc7aa1af3264d56c8d7aa2104a417669d01e49e0bb5cf63a92207",
     "plan/decisions/D15_visual_editor.md": "85c06296b35c8fe847554fd71c29b49a2db1ded39fb01e04bdda905bd1756260",
-    "plan/decisions/D16_settings_inspector.md": "d1a44f5f2a093530b68f6e065a38df81a1ff7520a20f81ff1845e70c122cbb7d",
+    "plan/decisions/D16_settings_inspector.md": "4497a55412336ba8f6c8c647777bbfef22da6d1e2e54a0f28e42692d25af59e4",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -120,7 +120,7 @@
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
     "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
-    "scripts/test-pr010-browser.mjs": "02440e4632ebcac6db8b85aae978c1039fa07ca9b4f16d2e9596b6f524f9fbf7",
+    "scripts/test-pr010-browser.mjs": "497a9e0e22088f939ae928f7100e6a898a73afcc2633170213eba95c81fc1977",
     "scripts/test-pr010-migration.py": "ac3faaa4f07c2e5d2fb52a2165e1780edb6552b48848d93df406f3ea28ea9fd3",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
@@ -160,16 +160,16 @@
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "log": "/tmp/pr011-cargo-xtask-check-final.log",
-      "log_sha256": "ef64a9341c8a1418e19fe81667f3dbdead8fb61ace7bb62dbecd6952c983d5ff",
-      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Test counts: API 12, commands 18, dashboard presentation 27, domain 13, render 34, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6."
+      "log": "/tmp/pr011-review2-xtask-check.log",
+      "log_sha256": "d41bbed578ba95287ed8c18318efef908723ec8777290d4ddf4ae279e92a556d",
+      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Test counts: API 12, commands 18, dashboard presentation 27, domain 13, render 35, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6."
     },
     "cargo_xtask_ci": {
       "command": "source .project-tools/env.sh && cargo +1.85.0 xtask ci",
       "exit_code": 0,
-      "log": "/tmp/pr011-cargo-xtask-ci-contract-fix.log",
-      "log_sha256": "971d2aaf66f05d4a9d2a4bcfa619b6c5f2ff2780a39b1819c5a7686b94212e8e",
-      "outcome": "Workspace check/tests, dashboard WASM build and asset generation, local D1 smoke, and cargo audit passed.",
+      "log": "/tmp/pr011-review2-xtask-ci.log",
+      "log_sha256": "7347168eead59e929cd7dcd9a2bef26919d1f5d65e075414d895516c22956d8f",
+      "outcome": "Workspace checks/tests, WASM build, asset generation, local D1 smoke, and cargo audit passed.",
       "audit": {
         "advisories_loaded": 1314,
         "locked_crate_dependencies_scanned": 346,
@@ -181,15 +181,20 @@
     "browser_integration": {
       "command": "npm run test:pr011:browser",
       "exit_code": 0,
-      "log": "/tmp/pr011-browser-final.log",
-      "log_sha256": "b223ed0cdafee395f1cfba1ce7b296983c18bf82fffd844c491118af96a41621",
-      "outcome": "Navigation, keyboard and pointer reorder, five controls, live preview, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed.",
+      "log": "/tmp/pr011-review2-browser.log",
+      "log_sha256": "6ff5765d7269ec75a6e0c268ed735ecd0d1270d9eb31e0d02e7aa4f995226b4c",
+      "outcome": "Navigation, keyboard/pointer reorder, all five inspector controls, live preview, V2 save/reload, sandbox/network, receipt replay, stale CAS, route races, and duplicate-key HTTP regressions passed; axe critical findings: 0.",
       "controls_covered": [
         "text",
         "color",
         "select",
         "toggle",
         "image"
+      ],
+      "duplicate_key_http_regressions": [
+        "Duplicate schema_version and nested text value keys return 400 on preview without advancing the revision.",
+        "Duplicate save bodies return 400 before replay for an already-used key.",
+        "Duplicate save bodies with a fresh key return 400 without a revision or receipt; a valid save with that same key then succeeds."
       ],
       "axe_critical_findings": 0
     },
@@ -210,9 +215,9 @@
     "migration_preflight": {
       "command": "npm run test:pr010:migration",
       "exit_code": 0,
-      "log": "/tmp/pr011-migration-check.log",
+      "log": "/tmp/pr011-review2-migration.log",
       "log_sha256": "bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192",
-      "outcome": "Zero/multiple revision fixtures fail atomically and valid one-revision head backfill passes; PR-011 adds no migration."
+      "outcome": "Zero/multiple revision preflight and valid backfill fixtures pass; PR-011 adds no migration."
     },
     "source_checks": {
       "node_syntax": {
@@ -222,7 +227,28 @@
       "git_diff_check": {
         "command": "git diff --check origin/main",
         "exit_code": 0
+      },
+      "frozen_surface_check": {
+        "command": "git diff --exit-code origin/main -- plan/contracts Cargo.toml Cargo.lock migrations",
+        "exit_code": 0,
+        "log": "/tmp/pr011-review2-frozen-surface.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "outcome": "No frozen contract, manifest/lockfile, or migration changes."
       }
+    },
+    "focused_review_regressions": {
+      "command": "source .project-tools/env.sh && cargo +1.85.0 test -p eez-api --lib && cargo +1.85.0 test -p eez-commands --lib && cargo +1.85.0 test -p eez-render --lib",
+      "exit_code": 0,
+      "log": "/tmp/pr011-review2-focused.log",
+      "log_sha256": "e46195483898003f4707642932e5958fa26eb6309b0aa2746353be6dfbabde9b",
+      "outcome": "API 12, commands 18, and render 35 tests passed, including strict decoder/settings controls, aggregate budget boundaries, and published renderer-v2 byte compatibility."
+    },
+    "published_renderer_compatibility": {
+      "test": "eez_render::renderer_tests::hero_image_placeholder_styles_do_not_change_published_renderer_v2_bytes",
+      "exit_code": 0,
+      "log": "/tmp/pr011-review2-xtask-check.log",
+      "log_sha256": "d41bbed578ba95287ed8c18318efef908723ec8777290d4ddf4ae279e92a556d",
+      "outcome": "Published output matches the exact renderer-v2 baseline bytes; placeholder CSS and markup remain available in preview."
     }
   },
   "reviews": {
@@ -230,9 +256,9 @@
       "independent_reviewers": 2,
       "final_actionable_findings": 0,
       "resolved_findings": [
-        "Unsupported expected_revision_id corrected to API-required base_revision_id and asserted in regression.",
-        "Inspector types, state helpers, controls, and components extracted to routes/editor/inspector.rs to address module-size warning.",
-        "Prior color synchronization, custom-color intent, definitive 4xx recovery, nullable attribution, and request-bound findings remain fixed."
+        "Sol P2: recursive duplicate-key detection now rejects ambiguous HTTP JSON before Value normalization; preview and save HTTP regressions cover nested keys, used-receipt keys, and fresh keys.",
+        "Sol P2: hero placeholder CSS is preview-only; a regression pins published renderer-v2 bytes.",
+        "Interrogate documentation finding: D16 now states the duplicate-object-key exception to D15 receipt precedence; request bodies without duplicate object keys retain existing receipt ordering."
       ]
     },
     "no_comments": {
@@ -245,8 +271,10 @@
     }
   },
   "hosted_ci": {
-    "status_at_evidence_capture": "Pending push and PR #12 creation",
-    "required_before_merge": true
+    "pull_request": 12,
+    "status_at_evidence_capture": "Pending fresh CI on the pushed fix head",
+    "required_before_merge": true,
+    "review_handoff": "GPT-6.1-Sol; this work did not perform PR review or merge."
   },
   "deployment": {
     "remote_d1_operation_run": false,

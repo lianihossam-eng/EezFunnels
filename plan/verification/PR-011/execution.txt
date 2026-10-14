@@ -1,28 +1,26 @@
 PR-011 settings inspector verification
-Evidence refreshed: 2026-10-14T15:26:51Z
+Evidence refreshed: 2026-10-14T15:47:32Z
 Branch: feat/011_inspector
 Base commit: 883ee7b98f0203d38654f15d2633010da9e420ee (exact merged origin/main SHA)
-Verified source commit: 0e9be45776803247a1563a46ce5dc35d55669a8a (implementation source commit; the later evidence commit changes only excluded verification metadata).
-Source fingerprint: 43876cd1437143fbae23d901a776a7895dd1cec4afa4286b4156bbec0627d6de (120 source files)
-Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
+Verified source commit: 4d51591228627e6ddef86bf12b5ca5989b41c14b
+Source fingerprint: 3444119e7ce31c2854425f195da93cd129cd747089a5eac505199e43b5d8f28f (120 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.
 
 Implementation and compatibility:
-- D16 adds a closed server-owned settings schema for text, color, select, toggle, and image controls. The inspector only maps existing typed section content and theme tokens; no arbitrary content, CSS, HTML, or client-owned schema is accepted.
-- Validated edits preview live and save as immutable V2 settings snapshots when theme overrides require them. V1 remains strict and decodes unchanged; V1 order-only saves remain V1. Duplicate keys, unknown fields, malformed values, and unknown controls fail closed.
-- The API request cap remains 16 KiB and the command cap remains 17 KiB. Settings changes have a 12 KiB aggregate serialized budget alongside existing per-field and count bounds. No frozen contract, manifest dependency, or SQL migration changed. D16 supersedes only D15's order-only settings restriction; idempotency/CAS and preview sandbox invariants remain intact.
-- The inspector DTOs, state helpers, and controls now live in `crates/dashboard-presentation/src/routes/editor/inspector.rs`. The editor route is 1,616 lines versus 1,059 at the exact base; inspector UI and setting behavior are isolated in the new child module.
+- D16 provides the closed server-owned settings schema for text, color, select, toggle, and image. It accepts only typed existing section fields and closed theme values; it does not accept arbitrary content, CSS, HTML, or client-owned schemas.
+- The HTTP adapter recursively checks JSON object keys before Value normalization. Duplicate decoded keys at any depth return 400 as validation/invalid_json before receipt lookup. Browser regressions prove rejection for duplicate schema_version and nested text value keys on preview, for an already-used save key, and for a fresh key without consuming its receipt. A valid save with the same fresh key succeeds afterward.
+- Preview placeholder styles are appended only for RenderPolicy::Preview. Published renderer-v2 bytes match the exact baseline CSS/output, verified by `hero_image_placeholder_styles_do_not_change_published_renderer_v2_bytes`.
+- D16 records duplicate object keys as a narrow syntax exception to D15 receipt precedence; requests without duplicate object keys retain D15's classification/replay ordering. V1 decoding and order-only writes, V2 theme override persistence, C-01/C-04 idempotency/CAS rules, and the 16 KiB API request cap remain intact. No frozen contract, dependency declaration/lockfile, or SQL migration changed.
 
 Validation:
-- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Log: `/tmp/pr011-cargo-xtask-check-final.log`; SHA-256: `ef64a9341c8a1418e19fe81667f3dbdead8fb61ace7bb62dbecd6952c983d5ff`.
-- `source .project-tools/env.sh && cargo +1.85.0 xtask ci`: exit 0. Workspace check/tests, WASM build, dashboard asset generation, local D1 smoke, and cargo audit passed. Audit loaded 1,314 advisories, scanned 346 locked dependencies, and reported zero findings. Log: `/tmp/pr011-cargo-xtask-ci-contract-fix.log`; SHA-256: `971d2aaf66f05d4a9d2a4bcfa619b6c5f2ff2780a39b1819c5a7686b94212e8e`.
-- `npm run test:pr011:browser`: exit 0. Navigation, keyboard and pointer reorder, all five inspector controls, live preview, V2 save/reload, sandbox/network isolation, save replay, stale CAS, and route-race checks passed. Axe critical findings: 0. Log: `/tmp/pr011-browser-final.log`; SHA-256: `b223ed0cdafee395f1cfba1ce7b296983c18bf82fffd844c491118af96a41621`.
-- Aggregate budget boundary regression: exact 12 KiB accepted, one byte over rejected, and constructed API request remains within 16 KiB. Exit 0. Log: `/tmp/pr011-parser-budget.log`; SHA-256: `eedc8905a0829b92dcfbdec5c48a4de8d282daaa91b3d2a113013a177978cabc`.
-- Request contract regression: body contains `base_revision_id`, excludes `expected_revision_id`, and settings payload carries schema version 1. Exit 0. Log: `/tmp/pr011-request-contract.log`; SHA-256: `09419de75b5bb6b00d21ba134f57e4a474f2f160214f778b1c5a1a52b3104540`.
-- `npm run test:pr010:migration`: exit 0. Zero/multiple revision preflight and valid backfill fixtures pass; PR-011 adds no migration. Log: `/tmp/pr011-migration-check.log`; SHA-256: `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
-- `node --check scripts/test-pr010-browser.mjs` and `git diff --check origin/main`: passed.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: PASS; formatting, Clippy with warnings denied, tests, and layer validation. API 12, commands 18, dashboard presentation 27, domain 13, render 35, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/pr011-review2-xtask-check.log`; SHA-256 `d41bbed578ba95287ed8c18318efef908723ec8777290d4ddf4ae279e92a556d`.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask ci`: PASS; workspace checks/tests, WASM build, asset generation, local D1 smoke, and audit. RustSec loaded 1,314 advisories and scanned 346 locked dependencies; cargo audit exited 0 with no reported vulnerability findings. Log `/tmp/pr011-review2-xtask-ci.log`; SHA-256 `7347168eead59e929cd7dcd9a2bef26919d1f5d65e075414d895516c22956d8f`.
+- Focused `eez-api`, `eez-commands`, and `eez-render` suites: PASS (12, 18, 35). Log `/tmp/pr011-review2-focused.log`; SHA-256 `e46195483898003f4707642932e5958fa26eb6309b0aa2746353be6dfbabde9b`.
+- `npm run test:pr011:browser`: PASS, including all five controls and duplicate-key preview/save/receipt cases; axe critical findings: 0. Log `/tmp/pr011-review2-browser.log`; SHA-256 `6ff5765d7269ec75a6e0c268ed735ecd0d1270d9eb31e0d02e7aa4f995226b4c`.
+- `npm run test:pr010:migration`: PASS; no new migration. Log `/tmp/pr011-review2-migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `node --check scripts/test-pr010-browser.mjs`, `git diff --check origin/main`, and `git diff --exit-code origin/main -- plan/contracts Cargo.toml Cargo.lock migrations`: PASS. Frozen-surface log `/tmp/pr011-review2-frozen-surface.log`; SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 
 Review and delivery:
-- Final local interrogate reviewers found no open findings after fixing the request key to `base_revision_id` and splitting the inspector module.
-- Final project no-comments/Comment Sicko audits found zero comment additions/deletions, TODO/FIXME markers, lint suppressions, or substantive workaround prose. Diff check passed.
-- Hosted CI is pending push and PR creation. PR review and merge are reserved for GPT-6.1-Sol.
-- No remote D1 operation, Cloudflare deployment, publication, or merge occurred.
+- Fresh interrogate reviewers A/B found no code findings. Both confirmed D16's duplicate-key exception to receipt precedence.
+- Fresh project no-comments/Comment Sicko audit found zero comment changes, actionable TODO/FIXME markers, lint suppressions, or substantive workaround prose.
+- Code fixes are committed in 5256443e33487a4b128157b905aa579bb15703f5; D16 wording is committed in 4d51591228627e6ddef86bf12b5ca5989b41c14b. The evidence/status commit contains only excluded metadata. PR #12 is open for fresh hosted CI and GPT-6.1-Sol re-review. No PR review, merge, remote D1 operation, Cloudflare deployment, or publication was performed.
