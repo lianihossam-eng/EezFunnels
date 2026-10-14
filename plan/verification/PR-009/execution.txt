@@ -1,28 +1,29 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T07:29:18Z
+Evidence refreshed: 2026-10-14T07:42:52Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: 959349bb0f694ad541b5c142cec4d0835e1185d5
-Source fingerprint: 956721d287a7a89ab2dd39109c9b6c460b90240631ec41ec9dadcb57be0a3337 (110 source files)
-Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, Rust toolchain files (including rust-toolchain.toml), and .project-tools are excluded.
+Verified source commit: 7ba830a7abb52ceee4c4190da41551a3eba93101
+Source fingerprint: bc943c679cbc251c4f36834daf54bfacd472b4aee3cce7d0420d105db58c46df (110 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, Rust toolchain files, and .project-tools are excluded.
 
 Implementation and review fixes:
 - Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id through Session::execute. Five stable blueprints atomically create a funnel and immutable initial revision. D13 records the snapshot format and C-03 idempotency behavior.
-- D14 caps a workspace at 100 funnels and list results at 100. The create receipt, funnel, and initial revision are written in one atomic batch; a trigger rejects direct inserts over capacity. At capacity, create returns 409 without a funnel or receipt; delete frees a slot. C-01 and C-04 remain byte-identical to base.
-- C-03 follow-up: create and delete classify an active receipt before returning parse/semantic validation errors. Reusing a key with a different or invalid payload returns 409 mismatch. New and expired keys retain ordinary validation behavior. Invalid DELETE routes return 409 for active-key reuse and preserve the existing 404 for fresh/expired keys.
-- Dashboard create success closes/resets the dialog and clears pending state before the separate list refresh. The regression uses an unresolved refresh future and verifies the form is already enabled.
-- The dashboard uses a digest-keyed sessionStorage slot whose value is only a UUID; the list reducer rejects stale requests. Smoke cleanup tests cover process-group and fallback reparenting.
+- D14 caps a workspace at 100 funnels and list results at 100. Create receipt, funnel, and initial revision stay in one atomic batch; a trigger rejects direct over-cap inserts. At capacity, create returns 409 without a funnel or receipt; delete frees a slot. C-01 and C-04 remain byte-identical to base.
+- Create and delete classify active receipts before returning parse or semantic validation errors. Reusing a key with a different or invalid payload returns 409 mismatch. Fresh and expired keys retain normal validation behavior. Malformed DELETE routes preserve 404 for fresh/expired keys.
+- The API adapter now sends oversized or invalid-UTF-8 create bodies through receipt classification before returning validation errors. Active keys return 409 mismatch; fresh or expired keys remain 400 validation/invalid_json.
+- Dashboard create success closes/resets the dialog and clears pending state before the separate list refresh. Its regression uses an unresolved refresh future and verifies the form is already enabled.
+- Dashboard retry keys are UUIDs stored in a sessionStorage slot keyed by method, route, and canonical-payload digest. List generations reject stale responses. Wrangler shutdown tests cover group cleanup and fallback child reparenting.
 
 Focused regression evidence:
-- The transient pre-fix smoke observed an unknown-blueprint request reusing an active create key return 400 instead of 409; the old malformed-DELETE route guard returned 404 before classifying its active receipt. Those initial red outputs were not retained. Direct final smoke passes the fixed cases and verifies new/expired create validation remains 400 and fresh/expired malformed DELETE remains 404. Direct log SHA-256: 3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45.
-- The create-refresh regression previously observed the dialog still open and pending while list refresh was unresolved; no initial red log was retained. It passes in `cargo xtask check` and full CI.
+- Codex review on prior head `62ef95b` found the HTTP adapter returned 400 for oversized and invalid-UTF-8 POST bodies before active receipt classification. The transient pre-fix responses were not retained. The direct final smoke verifies active-key reuse returns 409 for both body cases, and fresh/expired keys return 400. Log SHA-256: 5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3.
+- The earlier command-level C-03 regression covers unknown-blueprint create replay and malformed DELETE route replay. The dashboard regression proves successful create releases pending state before an unresolved refresh.
+- Process cleanup red/green logs prove the harness escalates after the worker launcher exits and reaches a child reparented before TERM.
 
-Validation on source contents committed as 959349bb0f694ad541b5c142cec4d0835e1185d5:
-- `cargo +1.85.0 xtask check`: CHECK_EXIT=0; API 12, commands 7, dashboard presentation 14, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/eezfunnel-pr009-codex-p2-check-final.log` SHA-256 dd5e97e978ffd2a4e993e582c1fce2d0e7315482a0de4209418e2914ea4cd381.
-- Full `cargo +1.85.0 xtask ci`: CI_EXIT=0 using isolated target `/workspace/.eezfunnel-pr009-name-limit-ci` (existing cache). Workspace checks/tests, API and dashboard WASM, generated assets, cleanup regressions, CRUD/idempotency/capacity smoke, and audit passed. Audit scanned 345 dependencies against 1,310 advisories with zero findings. Log `/tmp/eezfunnel-pr009-codex-p2-ci-final.log` SHA-256 690d943238cac4fa255b88063356f9b1296f64fd56178eb9a5eb11c491970011.
-- Direct standalone Wrangler smoke: DIRECT_SMOKE_EXIT=0. It verifies five blueprints, replay and mismatch, invalid semantic payload receipt precedence, fresh/expired behavior, delete replay, capacity, list bound, and host denial. Log SHA-256 3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45; Wrangler log SHA-256 79fae9495023a3ee4acd1781d769348619e8f76fbf36aad511d6dc97ea8325ae. Port 8787 is closed and no live Wrangler/workerd process remains.
-- `git diff --check`, `git show --check`, `bash -n scripts/smoke-pr009.sh`, formatting, and no-comments/TODO/FIXME/lint-suppression review pass. No comments were added.
-- No headless browser ran, so browser hydration completion and native Escape interaction remain unverified. Wrangler used local bindings only; no remote migration or deployment ran.
+Validation on source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101:
+- `cargo +1.85.0 xtask check`: exit 0; API 12, commands 7, dashboard presentation 14, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/eezfunnel-pr009-codex-p3-check.log` SHA-256 3a87d490ef03caba11f7b0d42d9380841d02ff38a31d4831ae11433a727ad24c.
+- Full `cargo +1.85.0 xtask ci`: exit 0 using existing isolated target `/workspace/.eezfunnel-pr009-name-limit-ci`. Workspace checks/tests, API and dashboard WASM, generated assets, cleanup regressions, CRUD/idempotency/capacity smoke (including oversized and invalid-UTF-8 cases), and audit passed. Audit scanned 345 dependencies against 1,310 advisories with zero findings. Log `/tmp/eezfunnel-pr009-codex-p3-ci.log` SHA-256 1ba1c889c4cc07e47718adf6fa6eddac821c1f19f5aae41df9e36e547990603c.
+- Standalone local Wrangler smoke: exit 0. It verifies five blueprints, create/replay and mismatch, validation precedence for semantic and unreadable bodies, fresh/expired keys, delete replay, expired receipt cleanup, capacity 100, bounded list, direct insert rejection, and host denial. Log `/tmp/eezfunnel-pr009-codex-p3-smoke.log` SHA-256 5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3; Wrangler log `/tmp/eezfunnel-pr009-wrangler.log` SHA-256 65fe362e2c4aadf7e8b74b769cfb68d3797515cb3b27155d2809dbb83546d74f. Port 8787 is closed and no live Wrangler/workerd process remains.
+- `git diff --check`, `git show --check`, `bash -n scripts/smoke-pr009.sh`, formatting, and no-comments/TODO/FIXME/lint-suppression review pass.
 
-Hosted CI for the exact source/evidence head is pending. No new @codex review or Sol review was triggered; PR awaits parent inspection.
+Hosted CI for the exact source/evidence head is pending. A new Codex review is pending after hosted CI passes. No Sol review has been requested. Browser hydration completion and native Escape behavior remain unverified in a headless browser. Wrangler used local bindings only; no remote migration or deployment ran.

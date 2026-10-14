@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (source `959349b` adds C-03 receipt-precedence and nonblocking create refresh fixes; check, full CI, and direct smoke pass; evidence refreshed, hosted CI pending exact pushed head)
+- [ ] PR-009 Funnel list + creation (source `7ba830a` also routes oversized/invalid-UTF-8 POST bodies through receipt classification; check, full CI, and direct smoke pass; evidence refreshed, hosted CI and fresh Codex review pending)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -168,16 +168,23 @@ cap/error semantics in D14. Follow-up `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6`
 fallback cleanup regression: it records the child PPID at TERM, rejects a marker written before
 reparenting, and proves KILL ends the child that remains alive after TERM.
 
+Codex's review on exact head `62ef95b90a29596a4eb2e120106d372b6e02e8da` found that the HTTP
+adapter still returned 400 for oversized and invalid-UTF-8 create bodies before receipt lookup.
+Source commit `7ba830a7abb52ceee4c4190da41551a3eba93101` sends both unreadable-body paths through
+active-receipt classification; smoke asserts 409 for active keys and 400 for fresh or expired keys.
+
 Exact-source `cargo +1.85.0 xtask check`, full `cargo +1.85.0 xtask ci`, and independent local
-Wrangler smoke all pass on `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6` using `/workspace/.eezfunnel-pr009-name-limit-ci`.
+Wrangler smoke all pass on `7ba830a7abb52ceee4c4190da41551a3eba93101` using `/workspace/.eezfunnel-pr009-name-limit-ci`.
 The API suite has 12 tests; all other workspace counts are recorded in `results.json`. CI includes
 API/dashboard WASM, asset generation, both process cleanup regressions, CRUD/capacity smoke, and
-cargo-audit (345 dependencies, 1,310 advisories, zero findings). The standalone smoke passes all five
-blueprints, replay, validation, receipt cleanup, deletion, capacity 100, 100-item list bound, direct
-insert rejection, and host denial. It leaves port 8787 closed with no live Wrangler/workerd process.
-The refreshed source fingerprint is `4ebce0bcdd1a21b3926f73216b41c9f5907997b28f53e816af1aa7410308773d` across 110 source files. Browser hydration and
-native Escape behavior remain unverified in a headless browser; no remote migration or deployment ran.
-Hosted run `38523130659` is green on prior head `098d665`; CI for the final evidence head is pending.
+cargo-audit (345 dependencies, 1,310 advisories, zero findings). The standalone smoke additionally
+verifies oversized and invalid-UTF-8 create bodies return 409 for active keys and 400 for fresh or
+expired keys. It also passes all five blueprints, replay, validation, receipt cleanup, deletion,
+capacity 100, 100-item list bound, direct insert rejection, and host denial, then leaves port 8787
+closed with no live Wrangler/workerd process. The refreshed source fingerprint is
+`bc943c679cbc251c4f36834daf54bfacd472b4aee3cce7d0420d105db58c46df` across 110 source files.
+Browser hydration and native Escape behavior remain unverified in a headless browser; no remote
+migration or deployment ran. Hosted CI and fresh Codex review on the exact evidence head are pending.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding

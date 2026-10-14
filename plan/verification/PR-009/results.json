@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T07:29:18Z",
+  "evidence_refreshed_at_utc": "2026-10-14T07:42:52Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "959349bb0f694ad541b5c142cec4d0835e1185d5",
-  "source_commit_role": "PR-009 follow-up: C-03 active-receipt classification precedes create/delete payload validation, DELETE route validation preserves the existing 404 contract, and dashboard create success clears pending/closes before list refresh.",
+  "verified_source_commit": "7ba830a7abb52ceee4c4190da41551a3eba93101",
+  "source_commit_role": "PR-009 review follow-up: the API routes oversized and invalid-UTF-8 create bodies through active-receipt classification before returning validation errors; active keys return C-03 mismatch while fresh/expired keys preserve 400 validation.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "956721d287a7a89ab2dd39109c9b6c460b90240631ec41ec9dadcb57be0a3337",
+  "source_fingerprint_sha256": "bc943c679cbc251c4f36834daf54bfacd472b4aee3cce7d0420d105db58c46df",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -30,7 +30,7 @@
     "apps/api/Cargo.toml": "2cc930112db9a105b4e931f3326d3b04894445618997f2c47f1aa3808a293190",
     "apps/api/src/errors.rs": "2075d38966c07453ddfd09c0645ed78c2b30892300cb531c51501fce5c69ed68",
     "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
-    "apps/api/src/lib.rs": "9346aa8894185cfca993845f47262802e131c571cc6aa1d2c279625a494deff4",
+    "apps/api/src/lib.rs": "e4ae2dc521413b7ed2114ed5b76b9700b6b4dc5c0ca2947dec2e3cf4ca8d67fd",
     "apps/cli/Cargo.toml": "fdf35111e8406b0e3d9418a969eff6bebf510a922a7df519f2cfbfa8bf132a22",
     "apps/cli/src/main.rs": "f90c845d65c6729db5fa87e83ed4d0766a99594b63aedc1b7a5a4f5b65ef9ae7",
     "apps/dashboard/Cargo.toml": "c1f80286d887e68696442b263f0217c05d36b735906b3180bb6fa52fbf7153e4",
@@ -110,7 +110,7 @@
     "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
-    "scripts/smoke-pr009.sh": "70b179552f4459d56a412520e812f90f73bb80280ce942cf0614381b68c674e7",
+    "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
     "xtask/src/layers.rs": "04027ed0e20dbd047c555710b849b48e21d2d19c88f6d86494308f08b4c6bf30",
@@ -121,7 +121,7 @@
   },
   "first_red": {
     "observed": true,
-    "capture_status": "The final review regressions were first observed before fixes. The transient red outputs were not retained: invalid-blueprint replay returned HTTP 400 instead of the expected 409; malformed DELETE replay stopped at the route guard with 404 instead of receipt conflict; and the dashboard test observed the form still pending while refresh was unresolved. Focused green evidence is retained in the direct smoke and final check/CI logs.",
+    "capture_status": "The final review regressions were first observed before fixes. The transient red outputs were not retained: invalid-blueprint replay returned HTTP 400 instead of the expected 409; malformed DELETE replay stopped at the route guard with 404 instead of receipt conflict; and the dashboard test observed the form still pending while refresh was unresolved. Focused green evidence is retained in the direct smoke and final check/CI logs. The latest review also found that oversized and invalid-UTF-8 POST bodies were rejected by the HTTP adapter before receipt lookup; transient red responses were not retained.",
     "modal_cancel_regression": {
       "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
       "pre_fix_exit_code": 101,
@@ -206,24 +206,31 @@
       "create_pre_fix_observation": "Reusing an active successful create key with an unknown blueprint returned 400 validation/invalid_json instead of 409 conflict/idempotency_payload_mismatch; transient red output was not retained.",
       "delete_pre_fix_observation": "Malformed DELETE route validation returned 404 before active receipt classification; transient red output was not retained.",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p2-smoke-direct-final.log",
-      "post_fix_log_sha256": "3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45",
-      "diagnostic": "Smoke verifies active create and delete keys with different/invalid payloads return 409 mismatch; a new or expired key with invalid create data remains 400, while fresh or expired malformed DELETE routes preserve 404 not_found/funnel."
+      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
+      "post_fix_log_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
+      "diagnostic": "Smoke verifies active create and delete keys with different/invalid payloads return 409 mismatch; a new or expired key with invalid create data remains 400, while fresh or expired malformed DELETE routes preserve 404 not_found/funnel. Oversized bodies and invalid-UTF-8 bodies now also return 409 for an active create key and 400 for fresh or expired keys."
     },
     "successful_create_before_refresh": {
       "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
       "pre_fix_observation": "With list refresh unresolved, the create dialog remained open and mutation-pending remained true; transient red output was not retained.",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p2-check-final.log",
-      "post_fix_log_sha256": "dd5e97e978ffd2a4e993e582c1fce2d0e7315482a0de4209418e2914ea4cd381",
+      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-check.log",
+      "post_fix_log_sha256": "3a87d490ef03caba11f7b0d42d9380841d02ff38a31d4831ae11433a727ad24c",
       "diagnostic": "The regression polls the production transition with a never-resolving refresh future and verifies the dialog is closed and mutation-pending is false before refresh completion."
+    },
+    "unreadable_create_body_precedence": {
+      "pre_fix_observation": "The API adapter returned 400 validation/invalid_json for oversized and invalid-UTF-8 POST bodies before Session::execute could inspect an active receipt; transient red output was not retained.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
+      "post_fix_log_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
+      "diagnostic": "The smoke verifies both oversized and invalid-UTF-8 create bodies return 409 conflict/idempotency_payload_mismatch with the successful active key, and 400 validation/invalid_json with fresh or expired keys."
     }
   },
   "checks": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source contents committed as 959349bb0f694ad541b5c142cec4d0835e1185d5.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101.",
       "workspace_test_counts": {
         "api": 12,
         "commands": 7,
@@ -235,19 +242,19 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-codex-p2-check-final.log",
-      "log_sha256": "dd5e97e978ffd2a4e993e582c1fce2d0e7315482a0de4209418e2914ea4cd381",
+      "log": "/tmp/eezfunnel-pr009-codex-p3-check.log",
+      "log_sha256": "3a87d490ef03caba11f7b0d42d9380841d02ff38a31d4831ae11433a727ad24c",
       "exit_marker": "CHECK_EXIT=0 (captured command status; xtask log ends with task completed: Check)"
     },
     "final_ci": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask ci",
       "exit_code": 0,
-      "fresh_isolated_target": true,
+      "fresh_isolated_target": false,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Full cargo xtask ci passed on exact source contents committed as 959349bb0f694ad541b5c142cec4d0835e1185d5: workspace checks/tests, API and dashboard browser WASM, generated assets, process cleanup regressions, CRUD/idempotency/capacity smoke, and audit.",
-      "log": "/tmp/eezfunnel-pr009-codex-p2-ci-final.log",
-      "log_sha256": "690d943238cac4fa255b88063356f9b1296f64fd56178eb9a5eb11c491970011",
+      "outcome": "Full cargo xtask ci passed on exact source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101: workspace checks/tests, API and dashboard browser WASM, generated assets, process cleanup regressions, CRUD/idempotency/capacity smoke (including unreadable-body receipt precedence), and audit.",
+      "log": "/tmp/eezfunnel-pr009-codex-p3-ci.log",
+      "log_sha256": "1ba1c889c4cc07e47718adf6fa6eddac821c1f19f5aae41df9e36e547990603c",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -258,8 +265,8 @@
       "wasm_outputs": {
         "eez_api.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
-          "bytes": 59501946,
-          "sha256": "d21d5f79bdad8b2e2e21c22221725af371b90bbedb237186791f27387127a460"
+          "bytes": 59515763,
+          "sha256": "0ba874b0617a7f0a5ca57b47aa4322ae72b5f27ee097bf0bf92731ab13475c1d"
         },
         "eez_dashboard.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
@@ -337,12 +344,12 @@
       "exit_marker": "CI_EXIT=0 (captured command status; xtask log ends with task completed: Ci)"
     },
     "local_wrangler_smoke": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci bash scripts/smoke-pr009.sh",
+      "command": "source .project-tools/env.sh && bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-codex-p2-smoke-direct-final.log",
-      "smoke_stdout_sha256": "3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
+      "smoke_stdout_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "79fae9495023a3ee4acd1781d769348619e8f76fbf36aad511d6dc97ea8325ae",
+      "wrangler_log_sha256": "65fe362e2c4aadf7e8b74b769cfb68d3797515cb3b27155d2809dbb83546d74f",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -363,7 +370,11 @@
         "capacity_rejection_is_atomic": "At capacity, funnel count stayed at 100 and no receipt was stored for rejected key.",
         "database_limit_trigger": "Direct over-cap D1 insert was rejected by workspace limit trigger.",
         "bounded_list": "List returned 100 items at capacity and remained at 100 with a test-only local overflow row.",
-        "capacity_release": "Deleting a funnel released a slot; a subsequent API create succeeded."
+        "capacity_release": "Deleting a funnel released a slot; a subsequent API create succeeded.",
+        "oversized_create_active_key": "HTTP 409 conflict/idempotency_payload_mismatch.",
+        "oversized_create_new_or_expired_key": "HTTP 400 validation/invalid_json.",
+        "invalid_utf8_create_active_key": "HTTP 409 conflict/idempotency_payload_mismatch.",
+        "invalid_utf8_create_new_or_expired_key": "HTTP 400 validation/invalid_json."
       },
       "remote_bindings_used": false,
       "ci_smoke_integration": "The full CI invocation also passed this local CRUD/idempotency/capacity smoke before audit.",
@@ -379,8 +390,8 @@
         "live_wrangler_or_workerd_processes": 0,
         "observed_after": "The direct standalone smoke exited 0; port 8787 was closed and no live Wrangler/workerd process remained."
       },
-      "exit_marker": "DIRECT_SMOKE_EXIT=0",
-      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the final standalone local CRUD smoke; CI-integrated and standalone stdout logs are recorded separately.",
+      "exit_marker": "SMOKE_EXIT=0",
+      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the final standalone local CRUD smoke; the captured stdout log ends with SMOKE_EXIT=0.",
       "process_group_shutdown_escalation_regression": {
         "test": "test_worker_group_cleanup_regression",
         "pre_fix_exit_code": 1,
@@ -404,11 +415,11 @@
       "capture_note": "An earlier exec wrapper printed SMOKE_EXIT=0 while its returned session status was 1 and was excluded. The evidence here is the direct bash invocation with captured DIRECT_SMOKE_EXIT=0."
     },
     "source_format_and_comment_checks": {
-      "cargo_fmt_check": "passed as part of cargo xtask check on the source contents committed as 959349bb0f694ad541b5c142cec4d0835e1185d5",
+      "cargo_fmt_check": "passed as part of cargo xtask check on source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
       "no_comments_review": "The source diff adds no comments, TODO/FIXME markers, or lint suppressions.",
-      "source_commit_check": "git show --check passed for source commit 959349bb0f694ad541b5c142cec4d0835e1185d5",
+      "source_commit_check": "git show --check passed for source commit 7ba830a7abb52ceee4c4190da41551a3eba93101",
       "bash_n_check": "passed for scripts/smoke-pr009.sh"
     }
   },
@@ -440,7 +451,7 @@
     "After a successful create POST, the dashboard closes and resets the dialog and clears mutation-pending state before awaiting the independent funnel-list refresh."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Local validation is green on exact source 959349bb0f694ad541b5c142cec4d0835e1185d5; hosted CI for this pushed head is pending. Earlier hosted success on an older head does not verify this follow-up.",
+    "status_at_evidence_capture": "Local validation is green on exact source 7ba830a7abb52ceee4c4190da41551a3eba93101; hosted CI for the pushed evidence head is pending. The previous green run verifies only head 62ef95b, before this unreadable-body fix.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
@@ -465,8 +476,8 @@
     }
   },
   "reviews": {
-    "codex": "The two latest Codex P2 findings are addressed by receipt-before-validation handling and create-dialog completion before list refresh; no new review was triggered. Parent inspection/review is pending.",
-    "sol": "Not requested; reserve Sol for PR review and merge after parent/Codex review and hosted CI are clean on the same exact SHA."
+    "codex": "The latest P2 finding about oversized and invalid-UTF-8 create bodies is addressed in source commit 7ba830a. A new Codex review is pending on the exact pushed source/evidence head after hosted CI passes.",
+    "sol": "Not requested; reserve Sol for PR review and merge after fresh Codex review and hosted CI are clean on the same exact SHA."
   },
   "deployment": {
     "remote_deployment_run": false,
