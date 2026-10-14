@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (implementation and local verification complete; hosted review pending)
+- [ ] PR-009 Funnel list + creation (exact-source local gates and process-group regression pass; refreshed evidence pending push and hosted review)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -134,22 +134,25 @@ are reclaimed during ordinary writes. The list uses request generations so a del
 cannot replace the result of a newer post-create refresh.
 
 Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
-read the background launch process before `setsid` established the server's own group. The smoke
-harness now tracks the launcher separately, polls for the live child whose PID, PGID, and SID match,
-and uses only that verified group for shutdown; if isolation cannot be verified, cleanup stays within
-the launcher's owned process tree. Cleanup also fails if port 8787 remains open. A regression smoke
-with a 150 ms delay before `setsid` passed, as did the integrated and standalone CRUD smoke runs.
+read the background launch process before `setsid` established the server's own group. The startup
+poll now tracks the live child whose PID, PGID, and SID match. A second review found shutdown only
+watched the launcher after SIGINT; if that launcher exited while a group member remained, cleanup
+could miss it. Shutdown now polls the verified PGID after SIGINT and SIGTERM, escalating based on
+live group membership even after launcher exit. The regression first failed on that exact state, then
+passed with a live group member remaining after launcher exit. Cleanup still confines signals to the
+verified group or the launcher's owned process tree, and it fails if port 8787 stays open.
 
-Final source commit `92f4dd57d02ae89c9c1a82c9f2cf29223030abcb` passes `cargo +1.85.0 xtask check`
+Final source commit `10b77f909dcc9074b49086eff7681cf1d181f419` passes `cargo +1.85.0 xtask check`
 with API 11, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, and
-CLI tests 2 and 6. A full `cargo +1.85.0 xtask ci` invocation on the existing isolated target passes
-workspace checks/tests, API and dashboard browser WASM, asset generation, local CRUD smoke, and
-audit of 345 locked dependencies against 1,310 advisories with zero findings; this target was not
-empty at invocation start. The standalone local Wrangler smoke passes all five blueprints, create
-replay, payload-mismatch conflict, expired-receipt cleanup after create and delete, delete/replay,
-validation, unsupported method, not-found, and host-denial checks. It leaves no live Wrangler or
-workerd processes and closes port 8787. Fingerprinted evidence is in
-`plan/verification/PR-009/execution.txt` and `results.json`.
+CLI tests 2 and 6. A fresh `cargo +1.85.0 xtask ci` invocation on the existing isolated target passes
+workspace checks/tests, API and dashboard browser WASM, asset generation, the process-group regression,
+local CRUD smoke, and audit of 345 locked dependencies against 1,310 advisories with zero findings;
+the target was not empty at invocation start. The separate local Wrangler smoke passes all five
+blueprints, create/replay, payload-mismatch conflict, expired-receipt cleanup after create and delete,
+delete/replay, validation, unsupported method, not-found, and host-denial checks. The integrated and
+standalone runs leave no live Wrangler or workerd processes and close port 8787. Fingerprinted
+regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
+`results.json`.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding
@@ -206,5 +209,5 @@ was used, and no remote migration or deployment was run.
 ## Next action
 
 Push PR-009 and its refreshed evidence, verify hosted CI on the exact final head, then request one
-@codex review and Sol review on that same head. Merge only after both reviews and hosted CI are clean
-on the exact SHA. Do not deploy remotely.
+@codex review. Sol review and merge follow only after Codex is clean and hosted CI is green on that
+exact SHA. Do not deploy remotely.

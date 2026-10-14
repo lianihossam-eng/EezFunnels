@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T05:44:57Z",
+  "evidence_refreshed_at_utc": "2026-10-14T06:06:05Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "92f4dd57d02ae89c9c1a82c9f2cf29223030abcb",
-  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, CRUD smoke, review fixes, sessionStorage retry-key persistence, UTF-8 name limit, race-safe Wrangler cleanup, expired receipt reclamation, and stale funnel-list response protection.",
+  "verified_source_commit": "10b77f909dcc9074b49086eff7681cf1d181f419",
+  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, CRUD smoke, review fixes, sessionStorage retry-key persistence, UTF-8 name limit, process-group-based Wrangler shutdown escalation, expired receipt reclamation, and stale funnel-list response protection.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "63a16fd5e398f916c41b366c94a055faa74afc203ab0904dd2859bad9d536ce7",
+  "source_fingerprint_sha256": "3a575b1c3a353531cce20a6dea1cdda2f86f349cba8393038f0ab94677edabe5",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -108,7 +108,7 @@
     "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
-    "scripts/smoke-pr009.sh": "27f131f8b4f43a4affb1a0fcb662e1239a83ec24b35770315c0cdf56f3383f33",
+    "scripts/smoke-pr009.sh": "516ea51bfb03933d571a8787f124b1dd93e73ccb0514380df7391ed254424b3b",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
     "xtask/src/layers.rs": "04027ed0e20dbd047c555710b849b48e21d2d19c88f6d86494308f08b4c6bf30",
@@ -157,24 +157,34 @@
       "test": "smoke-pr009 expired receipt cleanup after fresh-key create and delete",
       "pre_fix_observation": "expired_count=1 after a new-key mutation; log not retained",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-reducer-ci.log",
-      "post_fix_log_sha256": "bcc76b2b5189ef429b902160e75e5f5d4207d0c00407a41839429cb3017de4ab",
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-ci-final.log",
+      "post_fix_log_sha256": "acce6408917833c921f3adf5c9044aab3a06329ec0e5e7808b055dcf6e87902e",
       "diagnostic": "Create and delete mutation batches now remove expired receipts before claiming the new key."
     },
     "stale_list_response_race": {
       "test": "stale_funnel_responses_do_not_replace_the_newer_list_state",
       "pre_fix_observation": "The test first failed to compile with unresolved FunnelListLoad; initial log not retained.",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-reducer-ci.log",
-      "post_fix_log_sha256": "bcc76b2b5189ef429b902160e75e5f5d4207d0c00407a41839429cb3017de4ab",
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-ci-final.log",
+      "post_fix_log_sha256": "acce6408917833c921f3adf5c9044aab3a06329ec0e5e7808b055dcf6e87902e",
       "diagnostic": "A generation-gated reducer rejects stale success and failure results after a newer refresh."
+    },
+    "process_group_cleanup": {
+      "test": "test_worker_group_cleanup_regression",
+      "pre_fix_exit_code": 1,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-red2.log",
+      "pre_fix_log_sha256": "4b12f8daf3401fa9045f49010d12001a8a1ae017425c82d02f4eff756299092f",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-green1.log",
+      "post_fix_log_sha256": "0cb26ebbb532271072a72f86819fe97dc216f1790fec8a406bff841c23cafdb2",
+      "diagnostic": "The fixture waits for the setsid --fork --wait launcher PID to become absent or zombie, then confirms a non-zombie process remains in its captured PGID before calling stop_worker. With the old launcher-only escalation, stop_worker returned while the member remained and the test failed. The final run prints launcher-exited pid=382389, group=382391, live member=382394; the group-aware cleanup then terminates that member and the test passes."
     }
   },
   "checks": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && export CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci && cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source commit 92f4dd57d02ae89c9c1a82c9f2cf29223030abcb.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source commit 10b77f909dcc9074b49086eff7681cf1d181f419.",
       "workspace_test_counts": {
         "api": 11,
         "commands": 7,
@@ -186,8 +196,8 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-reducer-check.log",
-      "log_sha256": "2e677fd66a593bc95692642a8a63d3b9f0a742dc5b15384f75717d7aabe70a6d",
+      "log": "/tmp/eezfunnel-pr009-group-cleanup-check-final.log",
+      "log_sha256": "61266c34f27882fb2109ba900eaea30e27dd504fb4f35548f9f1dcf2a0b94571",
       "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
@@ -196,9 +206,9 @@
       "fresh_isolated_target": true,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Fresh full cargo xtask ci invocation passed on source commit 92f4dd57d02ae89c9c1a82c9f2cf29223030abcb using the existing isolated target (the target was not empty). Workspace checks/tests, API and dashboard browser WASM, generated assets, local CRUD smoke, and cargo audit passed.",
-      "log": "/tmp/eezfunnel-pr009-reducer-ci.log",
-      "log_sha256": "bcc76b2b5189ef429b902160e75e5f5d4207d0c00407a41839429cb3017de4ab",
+      "outcome": "Fresh full cargo xtask ci invocation passed on exact source commit 10b77f909dcc9074b49086eff7681cf1d181f419 using the existing isolated target (target was not empty). Workspace checks/tests, API and dashboard browser WASM, generated assets, the local CRUD smoke including the process-group shutdown regression, and cargo audit passed.",
+      "log": "/tmp/eezfunnel-pr009-group-cleanup-ci-final.log",
+      "log_sha256": "acce6408917833c921f3adf5c9044aab3a06329ec0e5e7808b055dcf6e87902e",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -290,10 +300,10 @@
     "local_wrangler_smoke": {
       "command": "source .project-tools/env.sh && export CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci && bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-reducer-smoke.log",
-      "smoke_stdout_sha256": "36d3f38400c54f761b76e415d80d263a06c03dcfb48beb6fd0a5c488f287ded5",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-group-cleanup-smoke-final.log",
+      "smoke_stdout_sha256": "83201a51d7255e2ac88968817249a684a8b79663039ad03cb5f88bc8e0062d4e",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "0240e858a675c0f82d5289f4d92c1c4643df05a6a053d298b1bb31231e4ed3fd",
+      "wrangler_log_sha256": "ee8a3a013d31c6b2df7ac192be0a8c758d3d2876a83d6a189505e2840db95f67",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -308,7 +318,7 @@
         "host_denial": "HTTP 403 authorization/host_not_allowed."
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The same local CRUD smoke passed inside the full cargo xtask ci run before audit on this exact source commit.",
+      "ci_smoke_integration": "The same local CRUD smoke and process-group shutdown regression passed inside the full cargo xtask ci run on exact source commit 10b77f909dcc9074b49086eff7681cf1d181f419, before audit.",
       "process_group_race_regression": {
         "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
         "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
@@ -319,17 +329,27 @@
       "cleanup": {
         "port_8787_closed": true,
         "live_wrangler_or_workerd_processes": 0,
-        "observed_after": "Standalone smoke and full CI-integrated smoke on this source; checked no live cargo/Wrangler/workerd processes after CI."
+        "observed_after": "Standalone smoke and full CI-integrated smoke on exact source commit 10b77f909dcc9074b49086eff7681cf1d181f419; no live Wrangler/workerd processes remained and port 8787 was closed."
       },
       "exit_marker": "SMOKE_EXIT=0",
-      "wrangler_log_capture_scope": "The fixed Wrangler log path was overwritten by the exact-source integrated CI smoke; the separate standalone smoke stdout log is recorded above."
+      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the exact-source CI-integrated smoke; the standalone smoke stdout log is recorded above.",
+      "process_group_shutdown_escalation_regression": {
+        "test": "test_worker_group_cleanup_regression",
+        "pre_fix_exit_code": 1,
+        "pre_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-red2.log",
+        "pre_fix_log_sha256": "4b12f8daf3401fa9045f49010d12001a8a1ae017425c82d02f4eff756299092f",
+        "post_fix_exit_code": 0,
+        "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-green1.log",
+        "post_fix_log_sha256": "0cb26ebbb532271072a72f86819fe97dc216f1790fec8a406bff841c23cafdb2",
+        "diagnostic": "The fixture waits for the setsid --fork --wait launcher PID to become absent or zombie, then confirms a non-zombie process remains in its captured PGID before calling stop_worker. With the old launcher-only escalation, stop_worker returned while the member remained and the test failed. The final run prints launcher-exited pid=382389, group=382391, live member=382394; the group-aware cleanup then terminates that member and the test passes."
+      }
     },
     "source_format_and_comment_checks": {
       "cargo_fmt_check": "passed as part of cargo xtask check",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "Independent read-only Luna review of the full current diff, including the SSR cfg split, found no comments, TODO/FIXME markers, lint suppressions, or cleanup findings; the diff adds and removes zero comments.",
-      "source_commit_check": "git show --check passed for source commit 92f4dd57d02ae89c9c1a82c9f2cf29223030abcb",
+      "no_comments_review": "The final scripts/smoke-pr009.sh patch was checked for added comments, TODO/FIXME markers, and lint suppressions; none were added.",
+      "source_commit_check": "git show --check passed for source commit 10b77f909dcc9074b49086eff7681cf1d181f419",
       "bash_n_check": "passed for scripts/smoke-pr009.sh"
     }
   },
@@ -351,12 +371,12 @@
     "Create and delete D1 batches reclaim expired receipts before claiming a fresh idempotency key; smoke verifies zero expired rows after each operation.",
     "The dashboard list reducer applies only the newest request result, so a delayed initial response cannot replace a post-create refresh.",
     "Before create/delete dispatch, sessionStorage receives only a UUID as the slot value. Slot names scope by method and route and include a SHA-256 digest of the canonical request tuple; payload fields are absent. Ambiguous failures retain the key, successful responses clear the slot, and D13 documents cleanup after success and session end.",
-    "The local API smoke runs inside cargo xtask ci and separately; the process-group harness was also tested with a delayed setsid startup and confirms port 8787 closes.",
+    "The smoke harness polls the verified worker PGID itself, so it escalates from SIGINT to SIGTERM/SIGKILL based on live group members even after the setsid launcher exits. A red/green regression forces that state; standalone and CI-integrated local CRUD smokes pass and close port 8787.",
     "No headless browser ran, so browser hydration completion and native Escape interaction remain unverified.",
     "No remote bindings, production deployment, or remote migration were run."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "PR #10 was previously green on head faf2c07 (run 38515964140). Source commit 92f4dd57d02ae89c9c1a82c9f2cf29223030abcb and the refreshed evidence have not been pushed yet; hosted CI for the final evidence head is pending.",
+    "status_at_evidence_capture": "PR #10 was previously green on head faf2c07 (run 38515964140). Source commit 10b77f909dcc9074b49086eff7681cf1d181f419 and refreshed evidence are not pushed yet; hosted CI for the exact final evidence head is pending.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
