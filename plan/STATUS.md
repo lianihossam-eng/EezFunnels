@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (100-funnel cap and bounded-list review fix pass local gates on `cef8647`; evidence refreshed, push and hosted review pending)
+- [ ] PR-009 Funnel list + creation (source `6d1c21d` restores frozen C-01/C-04 and verifies reparented-child fallback cleanup; check, full CI, and local smoke pass; refreshed evidence pending push and hosted CI)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -135,19 +135,20 @@ cannot replace the result of a newer post-create refresh.
 
 D14 sets a 100-funnel workspace cap to bound the all-at-once list response and dashboard rendering.
 `funnel.list` applies `LIMIT 100`; create claims its idempotency receipt only below the cap within
-the same atomic batch as the funnel and initial revision. At capacity the API returns
+the same atomic batch as the funnel and initial revision. At capacity the API returns the decision-scoped
 `conflict/funnel_limit_reached` (HTTP 409) without storing a receipt or funnel. A D1 trigger rejects
 other over-cap insert paths. Local smoke verifies list truncation, idempotent replay for the 100th
-funnel, direct insert rejection, and that deleting a funnel frees a slot.
+funnel, direct insert rejection, and that deleting a funnel frees a slot. C-01 and C-04 are restored
+byte-for-byte to their frozen base content; the cap and error semantics live only in D14 and implementation.
 
 Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
 read the background launch process before `setsid` established the server's own group. The startup
 poll now tracks the live child whose PID, PGID, and SID match. A second review found shutdown only
 watched the launcher after SIGINT; if that launcher exited while a group member remained, cleanup
-could miss it. Shutdown now polls the verified PGID after SIGINT and SIGTERM, escalating based on
-live group membership even after launcher exit. The regression first failed on that exact state, then
-passed with a live group member remaining after launcher exit. Cleanup still confines signals to the
-verified group or the launcher's owned process tree, and it fails if port 8787 stays open.
+could miss it. Shutdown polls the verified PGID after SIGINT and SIGTERM. In fallback mode it snapshots owned
+PID+start-time identities and uses those retained identities during escalation, so a child reparented
+after launcher exit remains within cleanup scope. The red/green regression records a PPID change at
+TERM, keeps the child alive after TERM, and confirms KILL removes it. Cleanup fails if port 8787 stays open.
 
 Source commit `10b77f909dcc9074b49086eff7681cf1d181f419` adds the process-group shutdown fix and passes `cargo +1.85.0 xtask check`
 with API 11, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, and
@@ -161,17 +162,22 @@ standalone runs leave no live Wrangler or workerd processes and close port 8787.
 regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
 `results.json`.
 
-The capacity implementation is in `cef86473cb2b4a12da3bb7cbaa0f301a799eceaa`; final validated source
-`dbca0f012e2d2305c4d4219124e6901c3a567773` adds the portable smoke check. Its fresh `cargo +1.85.0 xtask check`,
-full `cargo +1.85.0 xtask ci`, and separate Wrangler smoke all pass. Hosted run
-`38522570022` then exposed that the Ubuntu runner did not include `rg`; source commit
-`dbca0f012e2d2305c4d4219124e6901c3a567773` replaces this smoke-only dependency with standard `grep`.
-The check, a new full CI, and separate Wrangler smoke all pass on that exact source. CI reuses
-`/workspace/.eezfunnel-pr009-name-limit-ci`, which was not empty at invocation. The smoke fills the
-100th slot through the API, checks idempotent replay and a 409 capacity error with no receipt or row,
-rejects a direct insert, bounds an over-cap test fixture to 100 list items, and verifies delete frees a
-slot. Evidence records the `bc1e145d84c8157b6c71ad951438ea4b265d08e8dc26687e1073f8505289ad20`
-fingerprint and exact-source log hashes. Hosted CI on the final pushed evidence head is pending.
+The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
+Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel
+cap/error semantics in D14. Follow-up `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6` strengthens the
+fallback cleanup regression: it records the child PPID at TERM, rejects a marker written before
+reparenting, and proves KILL ends the child that remains alive after TERM.
+
+Exact-source `cargo +1.85.0 xtask check`, full `cargo +1.85.0 xtask ci`, and independent local
+Wrangler smoke all pass on `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6` using `/workspace/.eezfunnel-pr009-name-limit-ci`.
+The API suite has 12 tests; all other workspace counts are recorded in `results.json`. CI includes
+API/dashboard WASM, asset generation, both process cleanup regressions, CRUD/capacity smoke, and
+cargo-audit (345 dependencies, 1,310 advisories, zero findings). The standalone smoke passes all five
+blueprints, replay, validation, receipt cleanup, deletion, capacity 100, 100-item list bound, direct
+insert rejection, and host denial. It leaves port 8787 closed with no live Wrangler/workerd process.
+The refreshed source fingerprint is `4ebce0bcdd1a21b3926f73216b41c9f5907997b28f53e816af1aa7410308773d` across 110 source files. Browser hydration and
+native Escape behavior remain unverified in a headless browser; no remote migration or deployment ran.
+Hosted run `38523130659` is green on prior head `098d665`; CI for the final evidence head is pending.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding

@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T06:35:29Z",
+  "evidence_refreshed_at_utc": "2026-10-14T06:59:56Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "dbca0f012e2d2305c4d4219124e6901c3a567773",
-  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, D14 bounded workspace funnel list, CRUD smoke, review fixes, sessionStorage retry-key persistence, UTF-8 name limit, process-group-based Wrangler shutdown escalation, expired receipt reclamation, stale funnel-list response protection, and portable grep in the smoke runner.",
+  "verified_source_commit": "6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6",
+  "source_commit_role": "PR-009 funnel CRUD and five blueprints; D13 immutable snapshots and C-03 idempotency; D14 100-funnel cap and bounded list; C-01/C-04 restored to frozen base content; dashboard retry/list fixes; portable smoke; Wrangler shutdown fallback retains PID+start-time identities and proves TERM/KILL after child reparenting.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "bc1e145d84c8157b6c71ad951438ea4b265d08e8dc26687e1073f8505289ad20",
+  "source_fingerprint_sha256": "4ebce0bcdd1a21b3926f73216b41c9f5907997b28f53e816af1aa7410308773d",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -28,7 +28,7 @@
     "README.md": "a7e31f09ca40fdbb956c39d1e5c8bc57141e717efaa1cbc81b902bb7a494c2fb",
     "SECURITY.md": "7cb62a5846089308bcaa128e33ddc9d056173be0c7bcd34a5d27fe0bfc7e5300",
     "apps/api/Cargo.toml": "2cc930112db9a105b4e931f3326d3b04894445618997f2c47f1aa3808a293190",
-    "apps/api/src/errors.rs": "f2edc49e10d98f2c1d80751308faf2efa72c39f31eb1e5f49497f73b30ca3135",
+    "apps/api/src/errors.rs": "2075d38966c07453ddfd09c0645ed78c2b30892300cb531c51501fce5c69ed68",
     "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
     "apps/api/src/lib.rs": "9bf630a8b964c3cd593da6c07fa4817d0ffdb28a6a843af11b90551cd62ab1a0",
     "apps/cli/Cargo.toml": "fdf35111e8406b0e3d9418a969eff6bebf510a922a7df519f2cfbfa8bf132a22",
@@ -83,16 +83,16 @@
     "package-lock.json": "889bd8ebc89e4560c747b4eb9aaacb35cc2509fcd5a2340fd2d4250dca55cd87",
     "package.json": "37e94b0c7bc7dc44e902397662ed802d8433e3bf2e53b802fbd36daa356a2e0d",
     "plan/architecture.md": "b6f165a23b7691caa92e19c45dc1d58903eb3c3e09b81f148c2dc68d70bef099",
-    "plan/contracts/C-01_config.md": "325f453c102911305cc9b087956ddffc0637a4f980ad74ff2f14b68f33008ff9",
+    "plan/contracts/C-01_config.md": "192698dd1c94e287b70c87fabe9df56f8762132efcc61b5bad5a02d1316f8e98",
     "plan/contracts/C-01_funnel.md": "92741a0777b92b28474e00e1dd7c67cb16a90bd63fd8a9f802e6b6865c7d330f",
     "plan/contracts/C-03_security.md": "11a2dec6bb9b9e12527b32ede73b24fd8797da612c7193a6fc385a8a4f009f3f",
-    "plan/contracts/C-04_errors.md": "a65b264e079636c28e2501a82c1b4ccd125000bc99a71152256286f252831111",
+    "plan/contracts/C-04_errors.md": "239f8bb7e53880e388e3499085ba2c20ff507b530375cb215a3167a74b44eec3",
     "plan/coverage.md": "8b58dac8c47227d141c640ac59a7930f8fa0588a78baab9ef5c2426098920bbe",
     "plan/decisions/D10_render_section_content.md": "c8c63e9b37d14c1b5bbd9e8851dcec736130c0dd6f17defb91090c1629492696",
     "plan/decisions/D11_theme_presets.md": "181399d45c91b76265edb1789cce97f53c36a63bd8d271dd88c87e2ed0ba924a",
     "plan/decisions/D12_dashboard_rendering.md": "e5c09492d9f932dbe94e74f87238312a8555bcbc340ca3595eca42a8f881204a",
     "plan/decisions/D13_funnel_creation.md": "74f25ca884b6784eac59062dcb7e7b3c4f019f67c00b23f7dafbb5882674da0e",
-    "plan/decisions/D14_workspace_funnel_limit.md": "00887aa8ae5836687164e2ff0047f3b7d6e5f87c3e65bdf84ce2eee4b1374ce7",
+    "plan/decisions/D14_workspace_funnel_limit.md": "36e7cc5c2b6cc7aa1af3264d56c8d7aa2104a417669d01e49e0bb5cf63a92207",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -110,7 +110,7 @@
     "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
-    "scripts/smoke-pr009.sh": "fbc1d2d2fc67a64d8e1682b98c195e8f2b72e9b483f3847629b4f624ee3d2c90",
+    "scripts/smoke-pr009.sh": "46be6e9cd0364923c19ac6a469d65c0d2a19575f06b1e0f9bd75847ea22988cf",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
     "xtask/src/layers.rs": "04027ed0e20dbd047c555710b849b48e21d2d19c88f6d86494308f08b4c6bf30",
@@ -121,7 +121,7 @@
   },
   "first_red": {
     "observed": true,
-    "capture_status": "Test-first regressions are recorded for the existing PR-009 fixes and the final unbounded-list review finding. The funnel-cap red test seeded 100 rows, then observed the old implementation accept a 101st create with HTTP 201; the exact-source final smoke now passes the cap, idempotency, list-bound, database-trigger, and slot-release checks.",
+    "capture_status": "Test-first regressions cover the PR-009 funnel cap, process-group shutdown, and launcher-fallback reparenting findings. The capacity red seeded 100 rows and observed an extra HTTP 201; the fallback red used the legacy launcher-tree rescans and observed a still-live reparented child with no TERM marker. The final cap and cleanup regressions pass.",
     "modal_cancel_regression": {
       "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
       "pre_fix_exit_code": 101,
@@ -189,16 +189,27 @@
       "post_fix_exit_code": 0,
       "post_fix_log": "/tmp/eezfunnel-pr009-funnel-cap-smoke-final.log",
       "post_fix_log_sha256": "105a45f2221acd04fc7dc7a4bb7de2bfd9b9da251ffad3726994e6d7bdddb634",
-      "diagnostic": "Before the cap, the smoke seeded 100 funnels and the API accepted the next create with HTTP 201 instead of conflict/funnel_limit_reached. After the fix, 99 seeded rows plus API create/replay fill slot 100; a distinct create returns 409 without a funnel or receipt, a direct 101st D1 insert is rejected, an isolated overflow row still yields a 100-item list, and deleting a funnel releases a slot."
+      "diagnostic": "Before the cap, the smoke seeded 100 funnels and the API accepted the next create with HTTP 201. After the fix, 99 seeded rows plus API create/replay fill slot 100; a distinct create returns 409 without a funnel or receipt, a direct 101st D1 insert is rejected, an isolated overflow row still yields a 100-item list, and deleting a funnel releases a slot. The cap and error are D14 policy only; C-01 and C-04 remain unchanged."
+    },
+    "process_reparent_fallback_cleanup": {
+      "test": "test_worker_fallback_reparent_cleanup_regression",
+      "pre_fix_exit_code": 1,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-red-final.log",
+      "pre_fix_log_sha256": "f01ab630870895c57830b5e8a62d686a8073cf00c67ef0c85b64485652c40312",
+      "pre_fix_implementation": "Temporary smoke copy with the pre-fix launcher-tree-only fallback cleanup.",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-green-final.log",
+      "post_fix_log_sha256": "bad497aec70e3d297218df62a9bca5b178720d5d1ee85590972f09d03a48a5da",
+      "diagnostic": "The red test left child PID 419226 live after launcher 419222 and leader 419224 exited; no TERM marker was written. The final fixture records child PID and PPID in its TERM handler, asserts that PPID no longer equals the exited leader, and keeps running after TERM. The fixed fallback sends TERM and then KILL using retained PID+start-time identities; the test verifies the child is no longer live."
     }
   },
   "checks": {
     "cargo_xtask_check": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask check",
+      "command": "source .project-tools/env.sh && export CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci && cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6.",
       "workspace_test_counts": {
-        "api": 11,
+        "api": 12,
         "commands": 7,
         "dashboard_presentation": 13,
         "domain": 13,
@@ -208,19 +219,19 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-runner-portability-check.log",
-      "log_sha256": "05e0023a4d98331bcf2ed37c6abf42b32121b6ca8980cd9abdd5c4fbfaf9bd17",
+      "log": "/tmp/eezfunnel-pr009-frozen-contract-fallback-check-final.log",
+      "log_sha256": "5f517318ccf3b029168876c0e257ed7d92d327368385db60d5efa86c2ddfee10",
       "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask ci",
+      "command": "source .project-tools/env.sh && export CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci && cargo +1.85.0 xtask ci",
       "exit_code": 0,
       "fresh_isolated_target": true,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Fresh full cargo xtask ci invocation passed on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773 using the existing isolated target (target was not empty). Workspace checks/tests, API and dashboard browser WASM, generated assets, the process-group regression, the 100-funnel cap/list-bound CRUD smoke, and cargo audit passed. The smoke runner uses standard grep available on the hosted Ubuntu runner.",
-      "log": "/tmp/eezfunnel-pr009-runner-portability-ci.log",
-      "log_sha256": "83d54dc42356cbebf60b2c8c89024c8e51c558bc5b1089e4b0d79a499934ef94",
+      "outcome": "Fresh full cargo xtask ci invocation passed on exact source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6 using the existing isolated target (not empty at invocation). Workspace checks/tests, API and dashboard browser WASM, generated assets, process-group cleanup, explicit child-reparenting TERM/KILL regression, 100-funnel CRUD/list-bound smoke, and cargo audit passed.",
+      "log": "/tmp/eezfunnel-pr009-frozen-contract-fallback-ci-final.log",
+      "log_sha256": "0e8576314690784a365f07dbc95a556d32a9cb683f53f97215fe65406b4ea379",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -310,12 +321,12 @@
       "exit_marker": "CI_EXIT=0"
     },
     "local_wrangler_smoke": {
-      "command": "source .project-tools/env.sh && bash scripts/smoke-pr009.sh",
+      "command": "source .project-tools/env.sh && export CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci && scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-runner-portability-smoke.log",
-      "smoke_stdout_sha256": "331aaf6766a50b15eb51be598599b78434be55f08ffa01d673224a7886fadc3a",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-frozen-contract-fallback-smoke-final.log",
+      "smoke_stdout_sha256": "1c6ca2990f0ca6986bd480338453112329d045d16db3c8beac65330701ae9926",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "00c8bd64ffa8a6497534af27e4b0d3262d0320063902b1d14aef61a36ccfbb6d",
+      "wrangler_log_sha256": "be3de0bd500b86ea0846ceae43e978692f982a973631562e98c30d6d8789c8c5",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -328,14 +339,14 @@
         "missing_funnel": "HTTP 404 not_found/funnel.",
         "unsupported_method": "HTTP 405 and Allow: GET,POST.",
         "host_denial": "HTTP 403 authorization/host_not_allowed.",
-        "workspace_capacity": "99 local rows plus API create/replay filled slot 100; a distinct create returned HTTP 409 conflict/funnel_limit_reached.",
+        "workspace_capacity": "99 seeded rows plus API create/replay filled slot 100; a distinct create returned HTTP 409 conflict/funnel_limit_reached.",
         "capacity_rejection_is_atomic": "At capacity, the funnel count stayed at 100 and no receipt was stored for the rejected idempotency key.",
         "database_limit_trigger": "A direct over-cap D1 insert was rejected by the workspace limit trigger.",
         "bounded_list": "The list returned 100 items at capacity and remained at 100 with a test-only local overflow row.",
         "capacity_release": "Deleting a funnel released a slot; a subsequent API create succeeded and was deleted during cleanup."
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The same local CRUD smoke, 100-funnel capacity assertions, and process-group shutdown regression passed inside the full cargo xtask ci run on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773, before audit.",
+      "ci_smoke_integration": "The local CRUD smoke, capacity assertions, group cleanup regression, and launcher-fallback reparenting regression passed inside cargo xtask ci on exact source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6, before audit.",
       "process_group_race_regression": {
         "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
         "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
@@ -346,10 +357,10 @@
       "cleanup": {
         "port_8787_closed": true,
         "live_wrangler_or_workerd_processes": 0,
-        "observed_after": "Standalone smoke and full CI-integrated smoke on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773; no live Wrangler/workerd processes remained and port 8787 was closed."
+        "observed_after": "Standalone smoke and full CI-integrated smoke on 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6; port 8787 closed and no live Wrangler/workerd processes remained."
       },
       "exit_marker": "SMOKE_EXIT=0",
-      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the standalone local CRUD smoke; the CI-integrated and standalone smoke stdout logs are recorded separately.",
+      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the final standalone local CRUD smoke; CI-integrated and standalone stdout logs are recorded separately.",
       "process_group_shutdown_escalation_regression": {
         "test": "test_worker_group_cleanup_regression",
         "pre_fix_exit_code": 1,
@@ -359,15 +370,25 @@
         "post_fix_log": "/tmp/eezfunnel-pr009-group-cleanup-green1.log",
         "post_fix_log_sha256": "0cb26ebbb532271072a72f86819fe97dc216f1790fec8a406bff841c23cafdb2",
         "diagnostic": "The fixture waits for the setsid --fork --wait launcher PID to become absent or zombie, then confirms a non-zombie process remains in its captured PGID before calling stop_worker. With the old launcher-only escalation, stop_worker returned while the member remained and the test failed. The final run prints launcher-exited pid=382389, group=382391, live member=382394; the group-aware cleanup then terminates that member and the test passes."
+      },
+      "process_reparent_fallback_cleanup_regression": {
+        "test": "test_worker_fallback_reparent_cleanup_regression",
+        "pre_fix_exit_code": 1,
+        "pre_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-red-final.log",
+        "pre_fix_log_sha256": "f01ab630870895c57830b5e8a62d686a8073cf00c67ef0c85b64485652c40312",
+        "post_fix_exit_code": 0,
+        "post_fix_log": "/tmp/eezfunnel-pr009-fallback-reparent-green-final.log",
+        "post_fix_log_sha256": "bad497aec70e3d297218df62a9bca5b178720d5d1ee85590972f09d03a48a5da",
+        "assertions": "At TERM, child PID matches the fixture and its PPID differs from the exited leader; the fixture ignores TERM after recording the marker, so it remains live until KILL. stop_worker retains initial PID+start-time identities and cleanup confirms the child is no longer live."
       }
     },
     "source_format_and_comment_checks": {
-      "cargo_fmt_check": "passed as part of cargo xtask check on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773",
+      "cargo_fmt_check": "passed as part of cargo xtask check on exact source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "Reviewed the exact source commit diff for comments, TODO/FIXME markers, and lint suppressions; none were added. The hosted-runner compatibility fix replaces rg with standard grep.",
-      "source_commit_check": "git show --check passed for source commit dbca0f012e2d2305c4d4219124e6901c3a567773",
-      "bash_n_check": "passed for scripts/smoke-pr009.sh on exact source commit dbca0f012e2d2305c4d4219124e6901c3a567773"
+      "no_comments_review": "The added regression contains no comments, TODO/FIXME markers, or lint suppressions.",
+      "source_commit_check": "git show --check passed for source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6",
+      "bash_n_check": "passed for scripts/smoke-pr009.sh on exact source commit 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6"
     }
   },
   "tool_versions": {
@@ -388,13 +409,14 @@
     "Create and delete D1 batches reclaim expired receipts before claiming a fresh idempotency key; smoke verifies zero expired rows after each operation.",
     "The dashboard list reducer applies only the newest request result, so a delayed initial response cannot replace a post-create refresh.",
     "Before create/delete dispatch, sessionStorage receives only a UUID as the slot value. Slot names scope by method and route and include a SHA-256 digest of the canonical request tuple; payload fields are absent. Ambiguous failures retain the key, successful responses clear the slot, and D13 documents cleanup after success and session end.",
-    "The smoke harness polls the verified worker PGID itself, so it escalates from SIGINT to SIGTERM/SIGKILL based on live group members even after the setsid launcher exits. A red/green regression forces that state; standalone and CI-integrated local CRUD smokes pass and close port 8787.",
+    "The smoke harness uses verified process groups when available and retains owned PID+start-time identities for fallback escalation. A red/green fixture proves a child is reparented before TERM, records TERM while remaining alive, and is then removed by KILL.",
     "No headless browser ran, so browser hydration completion and native Escape interaction remain unverified.",
     "No remote bindings, production deployment, or remote migration were run.",
-    "D14 caps the workspace at 100 funnels, bounds funnel.list to 100 rows, and returns conflict/funnel_limit_reached (HTTP 409) without persisting an idempotency receipt or funnel when full; deletion frees a slot."
+    "D14 caps the workspace at 100 funnels, bounds funnel.list to 100 rows, and returns conflict/funnel_limit_reached (HTTP 409) without persisting an idempotency receipt or funnel when full; deletion frees a slot.",
+    "Frozen contracts C-01 and C-04 are byte-identical to base commit 13472d2; the 100-funnel cap and decision-scoped conflict/funnel_limit_reached (HTTP 409) exist only in D14 and implementation/evidence."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Hosted run 38520311552 passed on prior head 28423231f44112df058b623b8a6713d7f5523ba0 before D14. Run 38522570022 failed on evidence head a14d60e4896b3bc29a4c28699695985ed5b2693f because the hosted Ubuntu runner does not provide rg; the smoke now uses standard grep. Source commit dbca0f012e2d2305c4d4219124e6901c3a567773 and refreshed evidence are not yet pushed; hosted CI on the exact final evidence head is pending.",
+    "status_at_evidence_capture": "Hosted run 38523130659 passed on exact prior head 098d66540ec25056ec5987ac48c77db21b2ab55b. The frozen-contract restoration and reparenting regression are now in source 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6; updated evidence is pending push, so hosted CI for the final evidence head is pending.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
@@ -410,11 +432,17 @@
       "run_id": "38522570022",
       "head": "a14d60e4896b3bc29a4c28699695985ed5b2693f",
       "failure": "CI reached the PR-009 CRUD/capacity smoke after migrations, then scripts/smoke-pr009.sh failed at line 584 with rg: command not found (exit 127). Replaced the rg dependency with standard grep in source commit dbca0f012e2d2305c4d4219124e6901c3a567773; exact-source local check, full CI, and standalone smoke pass."
+    },
+    "latest_successful_run": {
+      "run_id": "38523130659",
+      "head": "098d66540ec25056ec5987ac48c77db21b2ab55b",
+      "status": "success",
+      "scope": "Prior pushed head before frozen-contract restoration and the explicit reparenting fallback regression."
     }
   },
   "reviews": {
-    "codex": "Pending fresh exact-head review; the prior capacity finding #5513781116 is addressed by the cap and bounded-list changes. The hosted-runner missing-rg failure was fixed in source commit dbca0f012e2d2305c4d4219124e6901c3a567773. Request once after hosted CI is green on the final evidence head.",
-    "sol": "Pending; request only after a clean fresh Codex review and hosted CI green on the exact same final head."
+    "codex": "Pending parent inspection and fresh exact-head review. Review 5514015460 findings #4267584690 and #4267584697 are addressed by restoring C-01/C-04 and adding retained PID+start-time fallback cleanup with a TERM-time PPID regression. Request a fresh review only after hosted CI is green on the final evidence head.",
+    "sol": "Not requested; reserve Sol for PR review and merge after a clean Codex review and hosted CI green on the exact same SHA."
   },
   "deployment": {
     "remote_deployment_run": false,
