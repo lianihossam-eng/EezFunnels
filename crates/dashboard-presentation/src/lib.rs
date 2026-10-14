@@ -89,6 +89,12 @@ mod tests {
         assert!(html.contains("id=\"main\""));
         assert!(html.contains("Your funnels"));
         assert!(html.contains("Dashboard"));
+        for blueprint in ["tripwire", "vsl", "webinar", "launch", "lead_gen"] {
+            assert!(
+                html.contains(&format!("data-blueprint=\"{blueprint}\"")),
+                "SSR funnel modal omits {blueprint} blueprint"
+            );
+        }
     }
 
     #[test]

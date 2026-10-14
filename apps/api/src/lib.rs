@@ -1,11 +1,14 @@
 #![forbid(unsafe_code)]
 
+use axum::body::to_bytes;
 use axum::extract::Json;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use eez_commands::Session;
 use serde::Serialize;
+use serde_json::Value;
 use tower_service::Service;
 use worker::{event, Context, Env, HttpRequest};
 
@@ -87,6 +90,10 @@ pub async fn fetch(
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
+    } else if request_path == "/api/funnels" {
+        funnel_collection_response(&env, request, correlation_id.clone()).await
+    } else if let Some(funnel_id) = request_path.strip_prefix("/api/funnels/") {
+        funnel_item_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
         local_probe(&env, request.headers(), correlation_id.clone()).await
     } else if request_path == "/__local/product-probe" && request.method() == Method::POST {
@@ -159,6 +166,187 @@ fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
         .unwrap_or_default();
 
     HostAllowlist::parse(&configured_hosts).allows(request_host)
+}
+
+const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
+
+async fn funnel_collection_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    match *request.method() {
+        Method::GET => match execute_funnel_command(env, "funnel.list", "{}", None).await {
+            Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+            Err(error) => funnel_command_error_response(error, &correlation_id),
+        },
+        Method::POST => {
+            let idempotency_key = match request_idempotency_key(request.headers()) {
+                Ok(key) => key,
+                Err(code) => {
+                    let error = ApiError::from_code(code);
+                    log_api_error(&error, &correlation_id, error.code());
+                    return error_response(&error, correlation_id);
+                }
+            };
+            let body = match to_bytes(
+                axum::body::Body::new(request.into_body()),
+                MAX_CREATE_REQUEST_BYTES,
+            )
+            .await
+            {
+                Ok(body) => body,
+                Err(_) => {
+                    let error = ApiError::from_code("validation/invalid_json");
+                    log_api_error(&error, &correlation_id, error.code());
+                    return error_response(&error, correlation_id);
+                }
+            };
+            let parameters = match std::str::from_utf8(&body) {
+                Ok(parameters) => parameters,
+                Err(_) => {
+                    let error = ApiError::from_code("validation/invalid_json");
+                    log_api_error(&error, &correlation_id, error.code());
+                    return error_response(&error, correlation_id);
+                }
+            };
+            match execute_funnel_command(env, "funnel.create", parameters, Some(&idempotency_key))
+                .await
+            {
+                Ok(result) => {
+                    let location = result
+                        .get("funnel")
+                        .and_then(|funnel| funnel.get("id"))
+                        .and_then(Value::as_str)
+                        .map(|id| format!("/funnels/{id}"));
+                    json_success_response(result, StatusCode::CREATED, &correlation_id, location)
+                }
+                Err(error) => funnel_command_error_response(error, &correlation_id),
+            }
+        }
+        _ => method_not_allowed_for(&correlation_id, "GET,POST"),
+    }
+}
+
+async fn funnel_item_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::DELETE {
+        return method_not_allowed_for(&correlation_id, "DELETE");
+    }
+    if !valid_funnel_route_id(funnel_id) {
+        let error = ApiError::from_code("not_found/funnel");
+        log_api_error(&error, &correlation_id, error.code());
+        return error_response(&error, correlation_id);
+    }
+    let idempotency_key = match request_idempotency_key(request.headers()) {
+        Ok(key) => key,
+        Err(code) => {
+            let error = ApiError::from_code(code);
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
+    };
+    let parameters = match serde_json::to_string(&serde_json::json!({ "funnel_id": funnel_id })) {
+        Ok(parameters) => parameters,
+        Err(_) => {
+            let error = ApiError::from_code("internal/unexpected");
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
+    };
+    match execute_funnel_command(env, "funnel.delete", &parameters, Some(&idempotency_key)).await {
+        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Err(error) => funnel_command_error_response(error, &correlation_id),
+    }
+}
+
+async fn execute_funnel_command(
+    env: &Env,
+    command_id: &str,
+    parameters: &str,
+    idempotency_key: Option<&str>,
+) -> Result<Value, ApiError> {
+    let bindings = eez_storage::Bindings::from_env(env)
+        .map_err(|_| ApiError::from_code("external/unavailable"))?;
+    let repository = bindings.repository();
+    Session::new(&repository)
+        .execute(command_id, parameters, idempotency_key)
+        .await
+        .map_err(|error| ApiError::from_code(error.code()))
+}
+
+fn request_idempotency_key(headers: &HeaderMap<HeaderValue>) -> Result<String, &'static str> {
+    let mut values = headers.get_all("idempotency-key").iter();
+    let value = values.next().ok_or("validation/missing_field")?;
+    if values.next().is_some() {
+        return Err("validation/invalid_json");
+    }
+    let value = value.to_str().map_err(|_| "validation/invalid_json")?;
+    if !(1..=128).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err("validation/invalid_json");
+    }
+    Ok(value.to_owned())
+}
+
+fn valid_funnel_route_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn funnel_command_error_response(
+    error: ApiError,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
+}
+
+fn json_success_response(
+    mut result: Value,
+    status: StatusCode,
+    correlation_id: &str,
+    location: Option<String>,
+) -> Response<axum::body::Body> {
+    let Some(object) = result.as_object_mut() else {
+        let error = ApiError::from_code("internal/unexpected");
+        log_api_error(&error, correlation_id, error.code());
+        return error_response(&error, correlation_id.to_owned());
+    };
+    object.insert(
+        "correlation_id".to_owned(),
+        Value::String(correlation_id.to_owned()),
+    );
+    let mut response = Json(result).into_response();
+    *response.status_mut() = status;
+    if let Ok(value) = HeaderValue::from_str(correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    if let Some(location) = location {
+        if let Ok(value) = HeaderValue::from_str(&location) {
+            response.headers_mut().insert("location", value);
+        }
+    }
+    response
+}
+
+fn method_not_allowed_for(correlation_id: &str, allow: &'static str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("validation/operation_not_supported");
+    log_api_error(&error, correlation_id, error.code());
+    let mut response = error_response(&error, correlation_id.to_owned());
+    response
+        .headers_mut()
+        .insert(axum::http::header::ALLOW, HeaderValue::from_static(allow));
+    response
 }
 
 async fn route_not_found(headers: HeaderMap<HeaderValue>) -> Response<axum::body::Body> {
@@ -439,8 +627,12 @@ fn normalize_correlation_id(headers: &mut HeaderMap<HeaderValue>) -> String {
 
 fn error_response(error: &ApiError, correlation_id: String) -> Response<axum::body::Body> {
     let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let correlation_header = HeaderValue::from_str(&correlation_id).ok();
     let mut response = Json(error.response(correlation_id)).into_response();
     *response.status_mut() = status;
+    if let Some(value) = correlation_header {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
     response
 }
 

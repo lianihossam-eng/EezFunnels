@@ -6,6 +6,14 @@ use eez_domain::{DomainError, Revision, RevisionId, ThemePreset};
 use eez_render::{RenderError, ThemeTokens, RENDERER_VERSION};
 use serde::{Deserialize, Serialize};
 
+mod funnel;
+
+pub use eez_domain::FunnelBlueprint;
+pub use funnel::{
+    FunnelCommandError, FunnelCreateCommand, FunnelDeleteCommand, FunnelListCommand,
+    InitialRevisionSummary, PreparedFunnel, Session,
+};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeSetCommand {
@@ -81,3 +89,6 @@ impl From<RenderError> for ThemeSetError {
 
 #[cfg(test)]
 mod theme_set_tests;
+
+#[cfg(test)]
+mod funnel_create_tests;

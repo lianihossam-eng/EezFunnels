@@ -294,6 +294,273 @@ h1 {
   line-height: 1.65;
 }
 
+.funnel-list-heading {
+  align-items: center;
+  margin-top: 0;
+}
+
+.primary-button,
+.secondary-button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.primary-button {
+  color: #fff;
+  background: #5366d8;
+  box-shadow: 0 4px 10px rgb(83 102 216 / 18%);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #4356c6;
+  transform: translateY(-1px);
+}
+
+.secondary-button {
+  border-color: #dce1eb;
+  color: #46536d;
+  background: #fff;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #bdc7dc;
+  background: #f8f9fd;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.text-button:focus-visible,
+.funnel-dialog input:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 2px;
+}
+
+.success-message,
+.error-message {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.success-message {
+  color: #23724f;
+}
+
+.error-message {
+  color: #a43442;
+}
+
+.funnel-list {
+  display: grid;
+  gap: 12px;
+}
+
+.funnel-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 20px;
+  align-items: center;
+  padding: 20px 22px;
+  border: 1px solid #e5e9f1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(24 34 57 / 3%);
+}
+
+.funnel-card h3 {
+  margin: 0;
+  color: #25304a;
+  font-size: 14px;
+}
+
+.funnel-slug {
+  margin: 6px 0 0;
+  color: #818ba0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.funnel-card-meta {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  color: #818ba0;
+  font-size: 10px;
+}
+
+.status-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.status-badge.draft {
+  color: #725f2b;
+  background: #fff5d8;
+}
+
+.status-badge.published {
+  color: #23724f;
+  background: #e3f5ec;
+}
+
+.text-button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.danger-button {
+  color: #a43442;
+}
+
+.text-button.danger-button {
+  background: #fff2f2;
+}
+
+.text-button.danger-button:hover:not(:disabled) {
+  background: #ffe4e6;
+}
+
+.funnel-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  width: min(100% - 32px, 560px);
+  max-height: min(90vh, 760px);
+  margin: auto;
+  padding: 28px;
+  overflow: auto;
+  border: 1px solid #e3e7f0;
+  border-radius: 16px;
+  color: #25304a;
+  background: #fff;
+  box-shadow: 0 0 0 100vmax rgb(24 34 57 / 44%), 0 20px 60px rgb(24 34 57 / 24%);
+}
+
+.dialog-heading {
+  margin-bottom: 22px;
+}
+
+.dialog-heading h2,
+.confirmation-dialog h2 {
+  margin: 0;
+  color: #202a42;
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.dialog-heading > p:last-child,
+.confirmation-dialog > p {
+  margin: 9px 0 0;
+  color: #69758d;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.funnel-dialog form > label {
+  display: grid;
+  gap: 8px;
+  color: #46536d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.funnel-dialog input[type="text"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid #dce1eb;
+  border-radius: 8px;
+  color: #25304a;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.blueprint-options {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0 18px;
+  padding: 0;
+  border: 0;
+}
+
+.blueprint-options legend {
+  margin-bottom: 9px;
+  color: #46536d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.blueprint-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #e5e9f1;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.blueprint-option:has(input:checked) {
+  border-color: #8290ed;
+  background: #f5f6ff;
+}
+
+.blueprint-option input {
+  margin: 3px 0 0;
+  accent-color: #5366d8;
+}
+
+.blueprint-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.blueprint-copy strong {
+  color: #29344e;
+  font-size: 11px;
+}
+
+.blueprint-copy span {
+  color: #778198;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.confirmation-dialog {
+  width: min(100% - 32px, 440px);
+}
+
 .detail-panel {
   max-width: 640px;
   padding: 25px;
@@ -368,6 +635,27 @@ h1 {
 
   .page-content {
     padding-top: 32px;
+  }
+}
+
+@media (max-width: 680px) {
+  .funnel-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 13px;
+  }
+
+  .funnel-card-meta {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .funnel-card > .text-button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .funnel-dialog {
+    padding: 22px;
   }
 }
 
