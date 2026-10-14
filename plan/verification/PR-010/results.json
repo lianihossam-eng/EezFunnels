@@ -1,10 +1,10 @@
 {
   "task": "PR-010",
-  "evidence_refreshed_at_utc": "2026-10-14T14:14:27Z",
+  "evidence_refreshed_at_utc": "2026-10-14T14:17:15Z",
   "branch": "feat/010_editor",
   "base_commit": "cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc",
-  "verified_source_commit": null,
-  "source_commit_role": "Checks ran on the working tree anchored at 44a62f1a4089b9ea289c225cb696d68e7d102a1a; source content is identified by the fingerprint below. The resulting code commit SHA will be recorded in the follow-up evidence commit.",
+  "verified_source_commit": "762669153260927858d015f9e3f7f94cd861e678",
+  "source_commit_role": "PR-010 source commit containing the live-region fix, browser regression, and rustls lockfile patch; source fingerprint excludes the verification/status documents.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.",
   "source_fingerprint_sha256": "72887af28e76c0d5f3ca42ff85eb55b60db91b74cbc36bc8ba5a8c8753770da1",
   "source_file_count": 116,

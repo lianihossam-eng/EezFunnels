@@ -1,8 +1,8 @@
 PR-010 visual editor verification
-Evidence refreshed: 2026-10-14T14:14:27Z
+Evidence refreshed: 2026-10-14T14:17:15Z
 Branch: feat/010_editor
 Base commit: cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc
-Verified working tree: based on 44a62f1a4089b9ea289c225cb696d68e7d102a1a; exact source content is identified by the fingerprint below. The generated code commit SHA will be recorded in the follow-up evidence commit.
+Verified source commit: 762669153260927858d015f9e3f7f94cd861e678
 Source fingerprint: 72887af28e76c0d5f3ca42ff85eb55b60db91b74cbc36bc8ba5a8c8753770da1 (116 source files)
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
 
