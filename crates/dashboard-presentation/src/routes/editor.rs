@@ -215,6 +215,7 @@ struct EditorState {
     keyboard_original_order: Option<Vec<String>>,
     history: EditorHistory,
     announcement: String,
+    announcement_revision: u64,
     saving: bool,
     retryable: bool,
     stale: bool,
@@ -298,12 +299,12 @@ impl EditorState {
             document.order.insert(to, item);
             (moved_section_id, to.saturating_add(1), document.order.len())
         };
-        self.announcement = format!(
+        self.announce(format!(
             "Moved {} to position {} of {}.",
             self.section_name(&moved_section_id),
             position,
             section_count
-        );
+        ));
         if let Some(before) = before {
             self.record_history_from(before, Some(moved_section_id));
         }
@@ -395,12 +396,12 @@ impl EditorState {
         }
         self.keyboard_original_order = Some(document.order.clone());
         self.keyboard_section = Some(section_id.to_owned());
-        self.announcement = format!(
+        self.announce(format!(
             "Picked up {} at position {} of {}. Use the arrow keys to move, Space to drop, or Escape to cancel.",
             self.section_name(section_id),
             document.order.iter().position(|id| id == section_id).unwrap_or(0) + 1,
             document.order.len()
-        );
+        ));
         true
     }
 
@@ -408,19 +409,22 @@ impl EditorState {
         let original_order = self.keyboard_original_order.take();
         let moved_section_id = self.keyboard_section.take();
         if let Some(section_id) = moved_section_id.as_deref() {
-            if let Some(document) = self.document.as_ref() {
+            let announcement = self.document.as_ref().map(|document| {
                 let position = document
                     .order
                     .iter()
                     .position(|id| id == section_id)
                     .unwrap_or(0)
                     + 1;
-                self.announcement = format!(
+                format!(
                     "Dropped {} at position {} of {}.",
                     self.section_name(section_id),
                     position,
                     document.order.len()
-                );
+                )
+            });
+            if let Some(announcement) = announcement {
+                self.announce(announcement);
             }
         }
         if let (Some(original_order), Some(mut before)) = (original_order, self.history_snapshot())
@@ -443,8 +447,13 @@ impl EditorState {
         if let Some(document) = self.document.as_mut() {
             document.order = original;
         }
-        self.announcement = "Reorder canceled. The original order was restored.".to_owned();
+        self.announce("Reorder canceled. The original order was restored.".to_owned());
         changed.then(|| self.begin_preview())
+    }
+
+    fn announce(&mut self, message: String) {
+        self.announcement = message;
+        self.announcement_revision = self.announcement_revision.wrapping_add(1);
     }
 
     fn can_save(&self) -> bool {
@@ -691,7 +700,7 @@ impl EditorState {
                 }
             }
         }
-        self.announcement = format!("{} {}.", action, changes.join(" and "));
+        self.announce(format!("{} {}.", action, changes.join(" and ")));
     }
 
     fn apply_history_snapshot(&mut self, snapshot: EditorDraftSnapshot) -> bool {
@@ -984,7 +993,16 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                         "Focus a section and press Space. Use the arrow keys to reorder it, Space to drop, or Escape to cancel. Undo with Ctrl+Z. Redo with Ctrl+Y."
                     }
                     p { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true",
-                        "{view.announcement}"
+                        span {
+                            if view.announcement_revision % 2 == 0 {
+                                "{view.announcement}"
+                            }
+                        }
+                        span {
+                            if view.announcement_revision % 2 != 0 {
+                                "{view.announcement}"
+                            }
+                        }
                     }
                 }
                 EditorInspector { state }
