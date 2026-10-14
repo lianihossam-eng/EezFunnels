@@ -35,7 +35,6 @@ Stable, transport-independent error taxonomy.
 | not_found/route                         | not_found     | 404  |
 | conflict/publish_stale_revision         | conflict      | 409  |
 | conflict/idempotency_payload_mismatch   | conflict      | 409  |
-| conflict/funnel_limit_reached           | conflict      | 409  |
 | rate_limit/exceeded                     | rate_limit    | 429  |
 | external/timeout                        | external      | 504  |
 | external/unavailable                    | external      | 503  |

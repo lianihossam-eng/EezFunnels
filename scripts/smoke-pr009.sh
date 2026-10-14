@@ -19,6 +19,7 @@ worker_pid=""
 worker_pgid=""
 worker_sid=""
 worker_launcher_pid=""
+worker_owned_processes=()
 
 worker_tree_pids() {
   local pending=("$1")
@@ -48,6 +49,83 @@ process_group_has_live_members() {
     '$1 == group_id && $2 !~ /^Z/ { found = 1 } END { exit !found }'
 }
 
+process_start_time() {
+  local pid="$1"
+  [ -r "/proc/$pid/stat" ] || return 1
+  awk '{
+    delimiter = 0
+    for (i = 1; i <= length($0); i++) {
+      if (substr($0, i, 1) == ")") delimiter = i
+    }
+    if (delimiter == 0) exit 1
+    count = split(substr($0, delimiter + 2), fields, /[[:space:]]+/)
+    if (count < 20) exit 1
+    print fields[20]
+  }' "/proc/$pid/stat" 2>/dev/null
+}
+
+worker_record_process() {
+  local pid="$1"
+  local identity start_time
+  for identity in "${worker_owned_processes[@]}"; do
+    [ "${identity%%:*}" = "$pid" ] && return 0
+  done
+  start_time="$(process_start_time "$pid" || true)"
+  [ -n "$start_time" ] && worker_owned_processes+=("$pid:$start_time")
+}
+
+worker_record_tree() {
+  local root="$1"
+  local pid process_ids
+  process_ids="$(worker_tree_pids "$root")"
+  while IFS= read -r pid; do
+    [ -n "$pid" ] && worker_record_process "$pid"
+  done <<< "$process_ids"
+}
+
+worker_capture_owned_processes() {
+  local identity
+  local snapshot=("${worker_owned_processes[@]}")
+  if [ -n "$worker_launcher_pid" ]; then
+    worker_record_tree "$worker_launcher_pid"
+  fi
+  for identity in "${snapshot[@]}"; do
+    worker_record_tree "${identity%%:*}"
+  done
+}
+
+worker_process_is_live() {
+  local identity="$1"
+  local pid="${identity%%:*}"
+  local expected_start_time="${identity#*:}"
+  local current_start_time state
+  current_start_time="$(process_start_time "$pid" || true)"
+  [ -n "$current_start_time" ] && [ "$current_start_time" = "$expected_start_time" ] || return 1
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -n "$state" ] && [[ "$state" != Z* ]]
+}
+
+worker_has_live_owned_processes() {
+  local identity
+  for identity in "${worker_owned_processes[@]}"; do
+    if worker_process_is_live "$identity"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+worker_signal_owned_processes() {
+  local signal="$1"
+  local identity pid
+  for identity in "${worker_owned_processes[@]}"; do
+    if worker_process_is_live "$identity"; then
+      pid="${identity%%:*}"
+      kill -"$signal" "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 stop_worker() {
   if [ -z "$worker_launcher_pid" ] && [ -z "$worker_pid" ]; then
     return
@@ -75,31 +153,39 @@ stop_worker() {
       kill -KILL -- "-$worker_pgid" 2>/dev/null || true
     fi
   else
+    worker_owned_processes=()
     if [ -n "$worker_launcher_pid" ]; then
-      worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
-      if [ -n "$worker_pids" ]; then
-        while IFS= read -r pid; do
-          kill -INT "$pid" 2>/dev/null || true
-        done <<< "$worker_pids"
-      fi
+      worker_record_tree "$worker_launcher_pid"
     elif [ -n "$worker_pid" ]; then
-      kill -INT "$worker_pid" 2>/dev/null || true
+      worker_record_tree "$worker_pid"
     fi
-    sleep 2
-    if [ -n "$worker_launcher_pid" ]; then
-      worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
-      if [ -n "$worker_pids" ]; then
-        while IFS= read -r pid; do
-          kill -TERM "$pid" 2>/dev/null || true
-        done <<< "$worker_pids"
-        sleep 1
-        worker_pids="$(worker_tree_pids "$worker_launcher_pid")"
-        if [ -n "$worker_pids" ]; then
-          while IFS= read -r pid; do
-            kill -KILL "$pid" 2>/dev/null || true
-          done <<< "$worker_pids"
-        fi
+    worker_signal_owned_processes INT
+    for attempt in $(seq 1 20); do
+      worker_capture_owned_processes
+      if ! worker_has_live_owned_processes; then
+        break
       fi
+      sleep 0.1
+    done
+    if worker_has_live_owned_processes; then
+      worker_signal_owned_processes TERM
+      for attempt in $(seq 1 10); do
+        worker_capture_owned_processes
+        if ! worker_has_live_owned_processes; then
+          break
+        fi
+        sleep 0.1
+      done
+    fi
+    if worker_has_live_owned_processes; then
+      worker_signal_owned_processes KILL
+      for attempt in $(seq 1 10); do
+        worker_capture_owned_processes
+        if ! worker_has_live_owned_processes; then
+          break
+        fi
+        sleep 0.1
+      done
     fi
   fi
 
@@ -108,10 +194,15 @@ stop_worker() {
   elif [ -n "$worker_pid" ]; then
     wait "$worker_pid" 2>/dev/null || true
   fi
+  if [ "${#worker_owned_processes[@]}" -gt 0 ] && worker_has_live_owned_processes; then
+    printf 'Fallback shutdown left an owned process alive\n' >&2
+    return 1
+  fi
   worker_pid=""
   worker_pgid=""
   worker_sid=""
   worker_launcher_pid=""
+  worker_owned_processes=()
 }
 
 cleanup() {
@@ -221,9 +312,88 @@ FIXTURE
   printf 'worker-group-cleanup=verified-launcher-exits-before-member\n'
 }
 
+test_worker_fallback_reparent_cleanup_regression() {
+  local fixture_file="$state_dir/worker-fallback-fixture.py"
+  local ready_file="$state_dir/worker-fallback-ready"
+  local leader_file="$state_dir/worker-fallback-leader"
+  local term_file="$state_dir/worker-fallback-term"
+  local test_group test_launcher test_leader test_child test_child_start leader_state child_state
+
+  cat > "$fixture_file" <<'FIXTURE'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+ready_file, leader_file, term_file = sys.argv[1:]
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+child_code = "import signal,sys,time\ndef on_term(signum, frame):\n with open(sys.argv[1], 'w', encoding='utf-8') as f: f.write('term')\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nsignal.signal(signal.SIGTERM, on_term)\nwhile True: time.sleep(1)"
+child = subprocess.Popen([sys.executable, "-c", child_code, term_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+with open(leader_file, "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+with open(ready_file, "w", encoding="utf-8") as handle:
+    handle.write(str(child.pid))
+while True:
+    time.sleep(1)
+FIXTURE
+
+  setsid --fork --wait python3 "$fixture_file" "$ready_file" "$leader_file" "$term_file" \
+    > "$state_dir/worker-fallback-fixture.log" 2>&1 &
+  worker_launcher_pid=$!
+  for attempt in $(seq 1 100); do
+    if [ -s "$leader_file" ] && [ -s "$ready_file" ]; then
+      worker_pid="$(cat "$leader_file")"
+      test_child="$(cat "$ready_file")"
+      test_child_start="$(process_start_time "$test_child" || true)"
+      worker_pgid="$(ps -o pgid= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      worker_sid="$(ps -o sid= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [ -n "$test_child_start" ] && [ "$worker_pgid" = "$worker_pid" ] && \
+        [ "$worker_sid" = "$worker_pid" ]; then
+        break
+      fi
+    fi
+    sleep 0.02
+  done
+
+  if [ -z "${worker_pid:-}" ] || [ -z "${test_child:-}" ] || [ -z "${test_child_start:-}" ] || \
+    [ "$worker_pgid" != "$worker_pid" ] || [ "$worker_sid" != "$worker_pid" ]; then
+    printf 'Could not start the isolated fallback cleanup fixture\n' >&2
+    stop_worker
+    return 1
+  fi
+
+  test_group="$worker_pgid"
+  test_launcher="$worker_launcher_pid"
+  test_leader="$worker_pid"
+  worker_sid=""
+  stop_worker
+
+  leader_state="$(ps -o stat= -p "$test_leader" 2>/dev/null | tr -d '[:space:]' || true)"
+  child_state="$(ps -o stat= -p "$test_child" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ ! -s "$term_file" ] || worker_process_is_live "$test_child:$test_child_start" || \
+    { [ -n "$leader_state" ] && [[ "$leader_state" != Z* ]]; }; then
+    printf 'Fallback cleanup missed a reparented child after launcher exit (launcher=%s child=%s child_state=%s term=%s)\n' \
+      "$test_launcher" "$test_child" "${child_state:-absent}" "$([ -s "$term_file" ] && printf received || printf missing)" >&2
+    kill -TERM -- "-$test_group" 2>/dev/null || true
+    sleep 0.1
+    kill -KILL -- "-$test_group" 2>/dev/null || true
+    wait "$test_launcher" 2>/dev/null || true
+    return 1
+  fi
+
+  printf 'worker-fallback-cleanup=launcher-exited-child-reparented term=received kill=verified\n'
+}
+
 trap cleanup EXIT
 
+if [ "${1:-}" = "--test-worker-fallback-cleanup" ]; then
+  test_worker_fallback_reparent_cleanup_regression
+  exit 0
+fi
+
 test_worker_group_cleanup_regression
+test_worker_fallback_reparent_cleanup_regression
 if [ "${1:-}" = "--test-worker-group-cleanup" ]; then
   exit 0
 fi

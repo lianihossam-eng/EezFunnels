@@ -3,7 +3,6 @@
 funnel:
   max_size_bytes: 1048576
   max_sections: 100
-  max_funnels: 100
   max_nesting_depth: 8
   max_revisions_retained: 100
   max_blocks_per_section: 50
