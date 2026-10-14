@@ -1,0 +1,3 @@
+PR-012 no-comments audit: PASS
+
+Fresh audit of the complete diff found no introduced/modified comments, actionable TODO/FIXME markers, lint suppressions, or substantive workaround prose. The audit found zero comment deletions/restorations and no open constraints.

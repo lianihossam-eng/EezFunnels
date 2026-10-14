@@ -1,0 +1,26 @@
+PR-012 editor undo/redo verification
+Evidence refreshed: 2026-10-14T16:23:37Z
+Branch: feat/012_history
+Base commit: d783e3f3a9e43ff7c74cb245250852cf74073600 (exact origin/main SHA)
+Verified source commit: 2ec9db155a5767503663e344ab06f41d9f0017f6
+Source fingerprint: e552c94336b0ed0b7ca15e04e62f6bb6f052d40cb9a6e3a92bbac7ab47a198d7 (121 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.
+
+Implementation and compatibility:
+- D17 records presentation-only JSON-diff history for section order and sparse typed settings changes, capped at 100 edits. New edits discard the redo tail; a mismatched patch resets history.
+- Undo/redo reuse the preview generation path. Order changes announce action, section, and resulting position; setting changes announce the schema label.
+- Keyboard reorders create one history entry on drop; Escape restores the order and records none. Successful save and route load reset history; pending, retryable, stale, and keyboard-drag states lock undo/redo.
+- No API, persistence, idempotency, retry, CAS, contract, migration, dependency, or lockfile changes.
+
+Validation:
+- `source .project-tools/env.sh && cargo xtask check`: PASS; workspace formatting, Clippy with warnings denied, tests, and layer checks. Log `logs/xtask-check.log`; SHA-256 `34cc1f73977abeae1adbf4fa5a45d20452c6d541844ac332a1288ee91fbcf944`.
+- `source .project-tools/env.sh && cargo xtask ci`: PASS; workspace checks/tests, WASM builds, asset generation, local D1 smoke, and audit (1,314 advisories; 346 dependencies; zero vulnerability findings). Log `logs/xtask-ci.log`; SHA-256 `c05519a97d10b56819c95bb80712e1bd545c54d3bb17d5cfbd5e9f2e0389590b`.
+- Presentation tests: PASS, 34 tests including 100 edits / undo 50 / redo 50, nullable/missing values, redo branching, reorder grouping, save reset/locks, and live-region announcements. Log `logs/presentation-tests.log`; SHA-256 `12e24c0b0301204f26518c27ebea87ee87f18a3a4a69f6ee88ee0d82cfe38155`.
+- `npm run test:pr012:browser`: PASS; shortcuts, preview requests, dirty/save state, order undo/redo announcements, existing editor and save/CAS interactions; axe critical findings: 0. Log `logs/browser.log`; SHA-256 `a07dba6b33855ebdc2d898d4c8b4f25a59e9039a020ca7f5dfbcf44b399ec2b8`.
+- `npm run test:pr010:migration`: PASS; migration preflight/backfill harness. Log `logs/migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- Browser syntax, `git diff --check origin/main -- . ':(exclude)plan/verification/PR-012/logs/**'` and frozen-surface checks: PASS; captured terminal logs are excluded from whitespace checks and remain verbatim. Logs and hashes are listed in results.json.
+- Fresh interrogate: zero remaining findings after the live-region fix. No-comments audit: zero findings. Reports and hashes are listed in results.json.
+
+Delivery:
+- PR #13 creation is pending; hosted CI state will be updated after opening. GPT-6.1-Sol owns PR review and merge.
+- No remote D1 operation, Cloudflare deployment, publication, or merge was run.

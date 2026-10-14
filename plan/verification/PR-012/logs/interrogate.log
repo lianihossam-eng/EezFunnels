@@ -1,0 +1,14 @@
+PR-012 local interrogate record
+
+First pass:
+- Reviewer A found a P2: order undo/redo restored the draft without updating the polite live-region message.
+- Reviewer B found no findings.
+
+Fix and regression:
+- Added failing-first assertions for undo/redo order messages and setting-only messages.
+- Updated order history metadata to retain the moved section ID and announce action/position; setting diffs announce the schema field label.
+- The first focused test failed with the stale dropped-position message before the fix; the same tests pass after the fix.
+
+Fresh pass on the complete diff:
+- Reviewer A: no findings.
+- Reviewer B: no findings.

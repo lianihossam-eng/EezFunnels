@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-011 Inspector (`feat/011_inspector`; PR #12 open; latest review fixes and local gates pass; fresh hosted CI and Sol re-review pending)
+Current phase: PR-012 Undo/redo (`feat/012_history`; implementation and local gates pass; PR #13 creation pending)
 Last updated: 2026-10-14
 
 ## Phases
@@ -16,8 +16,8 @@ Last updated: 2026-10-14
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
 - [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
-- [ ] PR-011 Inspector
-- [ ] PR-012 Undo/redo
+- [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
+- [ ] PR-012 Undo/redo (`feat/012_history`; local implementation and integration checks pass; awaiting PR creation, hosted CI, and Sol re-review)
 - [ ] PR-013 Responsive preview
 - [ ] PR-014 Publication /f/:slug
 - [ ] PR-015 Command registry
@@ -34,9 +34,13 @@ PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merg
 inspector for text, color, select, toggle, and image controls, including preview and V2 persistence
 for validated theme overrides. It preserves V1 decoding and order-only requests, strict duplicate
 key rejection, C-01/C-04 idempotency/CAS behavior, and the existing 16 KiB API request cap; no
-frozen contract, manifest dependency, or migration changed. Fresh `cargo xtask ci`, aggregate-budget
-and request-contract regressions, migration preflight, and five-control browser coverage pass.
-The duplicate-key HTTP parser and preview-only renderer fixes address both Sol findings from the prior PR head. Fresh interrogate and no-comments audits are clean; `cargo xtask check`, `cargo xtask ci`, focused API/command/render suites, migration preflight, and the five-control browser suite pass. Fingerprinted evidence is in `plan/verification/PR-011`. PR #12 is open and awaiting fresh hosted CI and Sol re-review on the pushed fix head. No remote migration, Cloudflare deployment, or merge was run for PR-011.
+frozen contract, manifest dependency, or migration changed. The duplicate-key HTTP parser and
+preview-only renderer fixes address both Sol findings. `cargo xtask check`, `cargo xtask ci`, focused
+API/command/render suites, migration preflight, and the five-control browser suite pass. Fresh
+interrogate and no-comments audits are clean. PR #12 merged at
+`d783e3f3a9e43ff7c74cb245250852cf74073600`. Fingerprinted evidence is in
+`plan/verification/PR-011/`. No remote migration, Cloudflare deployment, or merge operation was
+performed as part of the PR-011 work.
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
 implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository
@@ -170,6 +174,14 @@ delete/replay, validation, unsupported method, not-found, and host-denial checks
 standalone runs leave no live Wrangler or workerd processes and close port 8787. Fingerprinted
 regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
 `results.json`.
+
+PR-012 adds bounded JSON-diff undo/redo to the local editor draft, with Ctrl+Z/Ctrl+Y shortcuts.
+History applies only to section order and sparse typed settings changes; preview requests, save
+captures, idempotency, editor-head CAS, and frozen contracts are unchanged. The latest 100 accepted
+edits are retained; successful saves and route loads establish a new history boundary. Decision D17
+records these semantics. `cargo xtask check`, `cargo xtask ci`, the local migration harness, and the
+hydrated Worker/browser suite pass, including the 100 edits / undo 50 / redo 50 regression and
+shortcut preview checks. Detailed logs and hashes are in `plan/verification/PR-012/`.
 
 The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
 Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel
