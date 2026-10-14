@@ -187,6 +187,27 @@ request() {
     -H "Host: localhost:$port" "$@" "$base_url$path"
 }
 
+seed_expired_receipt() {
+  local key="$1"
+  ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+    --command "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) VALUES ('$key', 'funnel.create', '{}', '{}', 0);" >/dev/null
+}
+
+assert_no_expired_receipts() {
+  local output_file="$state_dir/expired-receipts.json"
+  ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+    --command "SELECT COUNT(*) AS expired_count FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER);" > "$output_file"
+  python3 - "$output_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as result_file:
+    result = json.load(result_file)
+expired_count = result[-1]["results"][0]["expired_count"]
+assert expired_count == 0, result
+PY
+}
+
 list_status="$(request GET /api/funnels "$state_dir/initial-list.json" "$state_dir/initial-list.headers")"
 test "$list_status" = 200
 python3 - "$state_dir/initial-list.json" <<'PY'
@@ -313,10 +334,22 @@ assert len(listed) == 5, listed
 assert created_id in [item["id"] for item in listed], listed
 PY
 
+seed_expired_receipt pr009-expired-before-create
+cleanup_create_status="$(request POST /api/funnels "$state_dir/receipt-cleanup-create.json" \
+  "$state_dir/receipt-cleanup-create.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-after-expiry' \
+  --data '{"name":"Receipt cleanup create","blueprint":"tripwire"}')"
+test "$cleanup_create_status" = 201
+assert_no_expired_receipts
+python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["id"])' \
+  "$state_dir/receipt-cleanup-create.json" >> "$funnel_ids_file"
+
 funnel_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["id"])' "$state_dir/create.json")"
+seed_expired_receipt pr009-expired-before-delete
 delete_status="$(request DELETE "/api/funnels/$funnel_id" "$state_dir/delete.json" "$state_dir/delete.headers" \
   -H 'Idempotency-Key: pr009-delete-1')"
 test "$delete_status" = 200
+assert_no_expired_receipts
 replay_delete_status="$(request DELETE "/api/funnels/$funnel_id" "$state_dir/delete-replay.json" "$state_dir/delete-replay.headers" \
   -H 'Idempotency-Key: pr009-delete-1')"
 test "$replay_delete_status" = 200
@@ -394,4 +427,4 @@ assert sys.argv[2] == "403", (sys.argv[2], response)
 assert response["code"] == "authorization/host_not_allowed", response
 PY
 
-printf 'list=200 five-blueprints=created replay=201 payload-mismatch=409 delete=200 replay-delete=200 host-denial=403\n'
+printf 'list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 host-denial=403\n'

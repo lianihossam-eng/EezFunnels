@@ -32,6 +32,8 @@ the mutation. Receipt claim and the funnel/revision write or delete share one D1
 replay returns the stored result; a key used by another command or parameter set returns
 `conflict/idempotency_payload_mismatch`. The API adds the current request correlation ID after the
 stored result is read, so retries retain their own request correlation without repeating effects.
+Each new create or delete mutation batch removes expired receipts before claiming its key, so normal
+write traffic reclaims records outside the idempotency window without a separate cleanup worker.
 
 The browser prepares a UUID idempotency key synchronously before dispatching each create or delete
 request and stores it in `sessionStorage`. The slot names the HTTP method and API route, followed by

@@ -178,6 +178,9 @@ impl<'a> Repository<'a> {
         let command = D1Type::Text(command_id);
         let payload = D1Type::Text(payload_json);
         let result = D1Type::Text(result_json);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
         let insert_receipt = self
             .database
             .prepare(
@@ -228,7 +231,12 @@ impl<'a> Repository<'a> {
 
         if let Err(error) = self
             .database
-            .batch(vec![insert_receipt, insert_funnel, insert_revision])
+            .batch(vec![
+                delete_expired_receipts,
+                insert_receipt,
+                insert_funnel,
+                insert_revision,
+            ])
             .await
         {
             if let Some(receipt) = self.active_receipt(idempotency_key).await? {
@@ -266,6 +274,9 @@ impl<'a> Repository<'a> {
         let payload = D1Type::Text(payload_json);
         let result = D1Type::Text(result_json);
         let funnel_id_value = D1Type::Text(funnel_id);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
         let insert_receipt = self
             .database
             .prepare(
@@ -281,7 +292,7 @@ impl<'a> Repository<'a> {
 
         if let Err(error) = self
             .database
-            .batch(vec![insert_receipt, delete_funnel])
+            .batch(vec![delete_expired_receipts, insert_receipt, delete_funnel])
             .await
         {
             if let Some(receipt) = self.active_receipt(idempotency_key).await? {
