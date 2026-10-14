@@ -112,6 +112,31 @@ async function apiCreate(baseURL, name) {
   return JSON.parse(body);
 }
 
+async function apiEditorState(baseURL, funnelId) {
+  const response = await fetch(`${baseURL}/api/funnels/${funnelId}`);
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  return JSON.parse(body);
+}
+
+function duplicateSettingsSchemaVersion(payload) {
+  const body = JSON.stringify(payload);
+  const duplicate = body.replace('"schema_version":1', '"schema_version":999,"schema_version":1');
+  assert.notEqual(duplicate, body, "Settings payload has a schema version to duplicate");
+  return duplicate;
+}
+
+function duplicateTextSettingValue(payload) {
+  const change = payload.settings.changes.find(({ id }) => id === "section.hero.title");
+  assert(change?.value?.kind === "text", "Save payload contains the hero title text setting");
+  const body = JSON.stringify(payload);
+  const encodedValue = JSON.stringify(change.value);
+  const duplicatedValue = `{"kind":"text","value":"discarded","value":${JSON.stringify(change.value.value)}}`;
+  const duplicate = body.replace(encodedValue, duplicatedValue);
+  assert.notEqual(duplicate, body, "Hero title value object is present to duplicate");
+  return duplicate;
+}
+
 async function sectionOrder(page) {
   return page.locator("[data-editor-section]").evaluateAll((rows) =>
     rows.map((row) => row.getAttribute("data-editor-section")),
@@ -504,6 +529,71 @@ try {
   assert.equal(replay.status, 200, replayText);
   assert.equal(JSON.parse(replayText).revision_id, firstSaveResult.revision_id);
 
+  const duplicateBaseRevisionId = (await apiEditorState(origin, primaryId)).base_revision_id;
+  assert.equal(duplicateBaseRevisionId, firstSaveResult.revision_id);
+  const duplicatePayload = { ...firstSavePayload, base_revision_id: duplicateBaseRevisionId };
+  const duplicateBodies = [
+    duplicateSettingsSchemaVersion(duplicatePayload),
+    duplicateTextSettingValue(duplicatePayload),
+  ];
+  for (const body of duplicateBodies) {
+    const response = await fetch(`${origin}/api/funnels/${primaryId}/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(response.status, 400, await response.text());
+  }
+  assert.equal(
+    (await apiEditorState(origin, primaryId)).base_revision_id,
+    duplicateBaseRevisionId,
+    "Duplicate preview keys do not write a revision",
+  );
+
+  for (const body of [
+    duplicateSettingsSchemaVersion(firstSavePayload),
+    duplicateTextSettingValue(firstSavePayload),
+  ]) {
+    const response = await fetch(`${origin}/api/funnels/${primaryId}/revisions`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": firstSaveKey },
+      body,
+    });
+    assert.equal(response.status, 400, await response.text());
+  }
+  assert.equal(
+    (await apiEditorState(origin, primaryId)).base_revision_id,
+    duplicateBaseRevisionId,
+    "Duplicate save keys cannot replay or advance the active revision",
+  );
+
+  const freshIdempotencyKey = `pr011-duplicate-${crypto.randomUUID()}`;
+  for (const body of duplicateBodies) {
+    const response = await fetch(`${origin}/api/funnels/${primaryId}/revisions`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": freshIdempotencyKey },
+      body,
+    });
+    assert.equal(response.status, 400, await response.text());
+  }
+  assert.equal(
+    (await apiEditorState(origin, primaryId)).base_revision_id,
+    duplicateBaseRevisionId,
+    "Duplicate saves with a fresh key do not write a revision",
+  );
+  const freshSave = await fetch(`${origin}/api/funnels/${primaryId}/revisions`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": freshIdempotencyKey },
+    body: JSON.stringify(duplicatePayload),
+  });
+  const freshSaveText = await freshSave.text();
+  assert.equal(freshSave.status, 200, freshSaveText);
+  assert.notEqual(
+    JSON.parse(freshSaveText).revision_id,
+    duplicateBaseRevisionId,
+    "The fresh key remains available after duplicate-key errors",
+  );
+
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "PR-010 browser editor" }).waitFor();
   await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
@@ -624,7 +714,7 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010/011 browser: navigation, keyboard, pointer, five inspector controls, live preview, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  console.log(`PR-010/011 browser: navigation, keyboard, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,

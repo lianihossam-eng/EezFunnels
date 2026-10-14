@@ -7,7 +7,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use eez_commands::Session;
-use serde::Serialize;
+use std::cell::Cell;
+use std::collections::HashSet;
+
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{Deserializer, Serialize};
 use serde_json::Value;
 use tower_service::Service;
 use worker::{event, Context, Env, HttpRequest};
@@ -280,7 +284,7 @@ async fn funnel_editor_preview_response(
     };
     let parameters = match editor_command_parameters(funnel_id, body) {
         Ok(parameters) => parameters,
-        Err(code) => return editor_payload_error_response(&correlation_id, code),
+        Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
     };
     match execute_funnel_command(env, "funnel.editor.preview", &parameters, None).await {
         Ok(result) => {
@@ -333,9 +337,17 @@ async fn funnel_editor_save_response(
     };
     let parameters = match editor_command_parameters(funnel_id, body) {
         Ok(parameters) => parameters,
-        Err(code) => {
-            return execute_unreadable_editor_payload(env, &idempotency_key, code, &correlation_id)
-                .await
+        Err(EditorCommandParametersError::DuplicateObjectKey) => {
+            return editor_payload_error_response(&correlation_id, "validation/invalid_json")
+        }
+        Err(EditorCommandParametersError::InvalidJson) => {
+            return execute_unreadable_editor_payload(
+                env,
+                &idempotency_key,
+                "validation/invalid_json",
+                &correlation_id,
+            )
+            .await
         }
     };
     match execute_funnel_command(
@@ -377,17 +389,122 @@ async fn execute_unreadable_editor_payload(
     }
 }
 
-fn editor_command_parameters(funnel_id: &str, body: &str) -> Result<String, &'static str> {
-    let mut value: Value = serde_json::from_str(body).map_err(|_| "validation/invalid_json")?;
-    let object = value.as_object_mut().ok_or("validation/invalid_json")?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EditorCommandParametersError {
+    InvalidJson,
+    DuplicateObjectKey,
+}
+
+struct UniqueJsonValue<'a>(&'a Cell<bool>);
+
+impl<'de> DeserializeSeed<'de> for UniqueJsonValue<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueJsonVisitor(self.0))
+    }
+}
+
+struct UniqueJsonVisitor<'a>(&'a Cell<bool>);
+
+impl<'de> Visitor<'de> for UniqueJsonVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence
+            .next_element_seed(UniqueJsonValue(self.0))?
+            .is_some()
+        {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = HashSet::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if !keys.insert(key) {
+                self.0.set(true);
+                return Err(de::Error::custom("duplicate JSON object key"));
+            }
+            object.next_value_seed(UniqueJsonValue(self.0))?;
+        }
+        Ok(())
+    }
+}
+
+fn editor_command_parameters(
+    funnel_id: &str,
+    body: &str,
+) -> Result<String, EditorCommandParametersError> {
+    let duplicate_object_key = Cell::new(false);
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    if UniqueJsonValue(&duplicate_object_key)
+        .deserialize(&mut deserializer)
+        .is_err()
+    {
+        return Err(if duplicate_object_key.get() {
+            EditorCommandParametersError::DuplicateObjectKey
+        } else {
+            EditorCommandParametersError::InvalidJson
+        });
+    }
+    deserializer
+        .end()
+        .map_err(|_| EditorCommandParametersError::InvalidJson)?;
+
+    let mut value: Value =
+        serde_json::from_str(body).map_err(|_| EditorCommandParametersError::InvalidJson)?;
+    let object = value
+        .as_object_mut()
+        .ok_or(EditorCommandParametersError::InvalidJson)?;
     if object
         .keys()
         .any(|key| key != "base_revision_id" && key != "section_ids" && key != "settings")
     {
-        return Err("validation/invalid_json");
+        return Err(EditorCommandParametersError::InvalidJson);
     }
     object.insert("funnel_id".to_owned(), Value::String(funnel_id.to_owned()));
-    serde_json::to_string(&value).map_err(|_| "internal/unexpected")
+    serde_json::to_string(&value).map_err(|_| EditorCommandParametersError::InvalidJson)
 }
 
 fn editor_payload_error_response(
