@@ -55,6 +55,14 @@ impl FunnelListLoad {
             self.response = Some(response);
         }
     }
+
+    #[cfg(any(feature = "browser", test))]
+    fn delete_succeeded(&mut self, funnel_id: &str) {
+        self.latest = self.latest.next();
+        if let Some(Ok(items)) = self.response.as_mut() {
+            items.retain(|item| item.id != funnel_id);
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Routable)]
@@ -478,10 +486,10 @@ fn Funnels() -> Element {
                                             let _ = clear_idempotency_storage(&prepared_key);
                                             let mut current_list = load_state;
                                             current_list.with_mut(|state| {
-                                                if let Some(Ok(items)) = state.response.as_mut() {
-                                                    items.retain(|item| item.id != response_funnel_id);
-                                                }
+                                                state.delete_succeeded(&response_funnel_id);
                                             });
+                                            let refreshed_list = load_state;
+                                            spawn(async move { refresh_funnel_list(refreshed_list).await; });
                                             delete_target.set(None);
                                             delete_error.set(None);
                                             delete_idempotency_key.set(None);
@@ -874,6 +882,35 @@ mod tests {
         list_state.complete(initial_load, Err(()));
 
         assert_eq!(list_state.response, Some(Ok(vec![created_funnel])));
+    }
+
+    #[test]
+    fn a_list_response_started_before_delete_cannot_restore_the_deleted_funnel() {
+        let mut list_state = FunnelListLoad::default();
+        let pre_delete_refresh = list_state.begin();
+        let deleted_funnel = FunnelCard {
+            id: "deleted".to_owned(),
+            name: "Deleted funnel".to_owned(),
+            slug: "deleted-funnel".to_owned(),
+            published_revision_id: None,
+            created_at: "2026-10-14T00:00:00Z".to_owned(),
+            updated_at: "2026-10-14T00:00:00Z".to_owned(),
+        };
+        let retained_funnel = FunnelCard {
+            id: "retained".to_owned(),
+            name: "Retained funnel".to_owned(),
+            slug: "retained-funnel".to_owned(),
+            published_revision_id: None,
+            created_at: "2026-10-14T00:00:00Z".to_owned(),
+            updated_at: "2026-10-14T00:00:00Z".to_owned(),
+        };
+        let stale_snapshot = vec![deleted_funnel.clone(), retained_funnel.clone()];
+
+        list_state.response = Some(Ok(stale_snapshot.clone()));
+        list_state.delete_succeeded(&deleted_funnel.id);
+        list_state.complete(pre_delete_refresh, Ok(stale_snapshot));
+
+        assert_eq!(list_state.response, Some(Ok(vec![retained_funnel])));
     }
 
     #[test]
