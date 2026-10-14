@@ -88,28 +88,35 @@ addresses Sol's review finding that `.footer-links` matched no emitted footer el
 the existing `.section-footer nav ul` and anchor markup without changing renderer-v1 bytes.
 
 PR-008 adds a Dioxus 0.7.10 shell with Worker-time SSR and same-tree browser hydration for exactly
-`/`, `/funnels`, and validated `/funnels/:id` paths. SSR emits an outer `#main` hydration container
-with the Dioxus app tree as its child, matching `dioxus-web`'s `rootname("main")`; page content
-keeps its semantic `main` landmark. D12 records the presentation-layer boundary, hydration payload
-format, pinned CLI, Rust 1.85/1.88 build split, and the mount-root relationship. Unknown API, health,
-MCP, probe, and unmatched funnel paths remain with the existing Worker router. `ASSETS` serves the
-generated browser bundle through Worker-first routing after the host allowlist; the shell contains
-honest empty states until funnel APIs arrive. Six dashboard regressions cover routes, invalid and
-unowned paths, hydration payload/bootstrap globals, and the mount-container parent relation.
-`cargo +1.85.0 test -p eez-dashboard --locked` passes 6 tests, `cargo xtask check` passes, and a
-fresh-target `cargo xtask ci` passes workspace checks/tests, API/browser wasm builds, asset bundle
-generation, and audit (344 locked dependencies, 1,310 advisories, zero findings). The local Wrangler
-smoke verifies SSR routes, hydration payload, assets, fallback behavior, and host denial. No
-headless browser verified hydration completion, so browser hydration E2E remains unverified.
+`/`, `/funnels`, and validated `/funnels/:id` paths. The shared route tree and SSR renderer live in
+the L1 `eez-dashboard-presentation` crate; the `eez-dashboard` WASM browser entry stays in L4, and
+the L4 API depends on the L1 presentation crate. A layer regression rejects a direct API-to-dashboard
+edge. SSR emits an outer `#main` hydration container with the Dioxus app tree as its child, matching
+`dioxus-web`'s `rootname("main")`; page content keeps its semantic `main` landmark. D12 records this
+boundary, the hydration payload format, pinned CLI, Rust 1.85/1.88 build split, and the mount-root
+relationship. Unknown API, health, MCP, probe, and unmatched funnel paths remain with the existing
+Worker router. `ASSETS` serves the generated browser bundle through Worker-first routing after the
+host allowlist; the shell contains honest empty states until funnel APIs arrive. Six presentation
+regressions cover routes, invalid and unowned paths, hydration payload/bootstrap globals, and the
+mount-container parent relation.
+
+`cargo +1.85.0 test -p eez-dashboard-presentation --locked` passes 6 tests; `cargo xtask check`
+passes with API 11, commands 2, presentation 6, domain 13, render 33, storage 5, xtask 26, and CLI
+tests 2 and 5. A new empty-target `cargo xtask ci` passes workspace checks/tests, API/browser WASM
+builds, asset bundle generation, and audit (345 locked dependencies, 1,310 advisories, zero
+findings). The local Wrangler smoke after the final feature split verifies SSR routes, hydration
+payload, assets, fallback behavior, and host denial. No headless browser verified hydration
+completion, so browser hydration E2E remains unverified.
 
 Codex's first review on pushed head `c5d440c` identified that the app root and hydration mount
 container shared `id="main"`. The regression failed before the fix and passes with the outer wrapper
-in implementation commit `9e0086371c0b8b15963b47784fb28a6f71b445f7`. Fingerprinted evidence is in
-`plan/verification/PR-008/execution.txt` and `results.json`. This executor's PID 1 may retain adopted
-defunct `workerd` entries after local smoke; no live Worker process remains, as documented in D7.
-The correction is committed locally; refreshed evidence is being finalized before push. Hosted CI
-and fresh Codex/Sol reviews remain required on the exact pushed PR head; no remote deployment was
-run.
+in implementation commit `9e0086371c0b8b15963b47784fb28a6f71b445f7`. A later architecture review on
+head `1755fd8` found that classifying the dashboard app in L3 conflicted with the frozen L4 app
+boundary. A new layer test failed before correction by accepting an API-to-dashboard edge; commit
+`cf05024e0130185648cb83fadf9fdabd70754d63` moved the shared tree/SSR/assets into L1 and restored the
+browser app to L4. `AGENTS.md` and `plan/production.md` remain unchanged. Fingerprinted evidence is
+in `plan/verification/PR-008/execution.txt` and `results.json`. Final hosted CI and Codex/Sol review
+are required on the pushed evidence head before merge; no remote deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
