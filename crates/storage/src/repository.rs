@@ -869,14 +869,6 @@ impl<'a> Repository<'a> {
         self.validate_json(mutation.payload_json).await?;
         self.validate_json(mutation.result_json).await?;
 
-        if let Some(receipt) = self.active_receipt(mutation.idempotency_key).await? {
-            return Ok(classify_receipt(
-                receipt,
-                mutation.command_id,
-                mutation.payload_json,
-            ));
-        }
-
         let funnel = D1Type::Text(mutation.funnel_id);
         let target = mutation
             .published_revision_id
@@ -915,7 +907,7 @@ impl<'a> Repository<'a> {
         let update_funnel = self
             .database
             .prepare(
-                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))",
+                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND changes() = 1",
             )
             .bind_refs([
                 &target,

@@ -52,6 +52,7 @@ struct ProductProbeResponse {
     current_revision_noop_accepted: bool,
     publication_baseline_cas_successes: usize,
     distinct_candidate_cas_successes: usize,
+    publication_replay_interleavings_safe: bool,
     publication_race_funnel_id: &'static str,
     publication_race_revision_ids: Vec<String>,
     correlation_id: String,
@@ -223,10 +224,9 @@ async fn funnel_publication_mutation_response(
     if request.method() != Method::POST {
         return method_not_allowed_for(&correlation_id, "POST");
     }
-    if !valid_funnel_route_id(funnel_id) {
-        return funnel_route_not_found_response(&correlation_id);
-    }
+    let valid_route_id = valid_funnel_route_id(funnel_id);
     let idempotency_key = match request_idempotency_key(request.headers()) {
+        Err(_) if !valid_route_id => return funnel_route_not_found_response(&correlation_id),
         Ok(key) => key,
         Err(code) => {
             let error = ApiError::from_code(code);
@@ -248,6 +248,7 @@ async fn funnel_publication_mutation_response(
                 &idempotency_key,
                 &correlation_id,
                 "validation/invalid_json",
+                valid_route_id,
             )
             .await
         }
@@ -261,6 +262,7 @@ async fn funnel_publication_mutation_response(
                 &idempotency_key,
                 &correlation_id,
                 "validation/invalid_json",
+                valid_route_id,
             )
             .await
         }
@@ -277,12 +279,25 @@ async fn funnel_publication_mutation_response(
                 &idempotency_key,
                 &correlation_id,
                 "validation/invalid_json",
+                valid_route_id,
             )
             .await
         }
     };
     match execute_funnel_command(env, command_id, &parameters, Some(&idempotency_key)).await {
-        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Ok(result) if valid_route_id => {
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
+        Ok(_) => funnel_route_not_found_response(&correlation_id),
+        Err(error)
+            if !valid_route_id
+                && matches!(
+                    error.code(),
+                    "validation/invalid_json" | "validation/missing_field"
+                ) =>
+        {
+            funnel_route_not_found_response(&correlation_id)
+        }
         Err(error) => funnel_command_error_response(error, &correlation_id),
     }
 }
@@ -293,8 +308,18 @@ async fn unreadable_mutation_payload_response(
     idempotency_key: &str,
     correlation_id: &str,
     fresh_error_code: &'static str,
+    valid_route_id: bool,
 ) -> Response<axum::body::Body> {
     match execute_funnel_command(env, command_id, "null", Some(idempotency_key)).await {
+        Err(error)
+            if !valid_route_id
+                && matches!(
+                    error.code(),
+                    "validation/invalid_json" | "validation/missing_field"
+                ) =>
+        {
+            funnel_route_not_found_response(correlation_id)
+        }
         Err(error) => funnel_command_error_response(error, correlation_id),
         Ok(_) => editor_payload_error_response(correlation_id, fresh_error_code),
     }
@@ -1014,6 +1039,8 @@ async fn local_product_probe(
                     .publication_baseline_cas_successes,
                 distinct_candidate_cas_successes: publication_regressions
                     .distinct_candidate_cas_successes,
+                publication_replay_interleavings_safe: publication_regressions
+                    .publication_replay_interleavings_safe,
                 publication_race_funnel_id: "pr003-race-funnel",
                 publication_race_revision_ids,
                 correlation_id,
