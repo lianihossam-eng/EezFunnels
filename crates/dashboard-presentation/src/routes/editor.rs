@@ -823,6 +823,75 @@ row?.focus();
     let _ = request.send(section_id);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewViewport {
+    Mobile,
+    Tablet,
+    Desktop,
+}
+
+impl PreviewViewport {
+    const ALL: [Self; 3] = [Self::Mobile, Self::Tablet, Self::Desktop];
+
+    const fn width_px(self) -> u16 {
+        match self {
+            Self::Mobile => 375,
+            Self::Tablet => 768,
+            Self::Desktop => 1280,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Mobile => "Mobile",
+            Self::Tablet => "Tablet",
+            Self::Desktop => "Desktop",
+        }
+    }
+}
+
+#[component]
+fn ResponsivePreview(title: String, srcdoc: String) -> Element {
+    let mut viewport = use_signal(|| PreviewViewport::Desktop);
+    let selected = viewport();
+
+    rsx! {
+        div { class: "editor-preview-panel",
+            div { class: "section-heading",
+                h2 { "Preview" }
+                span { "Sandboxed" }
+            }
+            div {
+                class: "editor-preview-switcher",
+                role: "group",
+                "aria-label": "Preview viewport",
+                for option in PreviewViewport::ALL {
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        "aria-pressed": "{selected == option}",
+                        onclick: move |_| viewport.set(option),
+                        "{option.label()} ({option.width_px()} px)"
+                    }
+                }
+            }
+            div {
+                class: "editor-preview-canvas",
+                role: "region",
+                tabindex: "0",
+                "aria-label": "Preview canvas, {selected.width_px()} pixels wide",
+                iframe {
+                    class: "editor-preview-frame",
+                    title: "{title}",
+                    width: "{selected.width_px()}",
+                    "sandbox": "",
+                    srcdoc: "{srcdoc}",
+                }
+            }
+        }
+    }
+}
+
 #[component]
 pub(super) fn FunnelDetail(id: String) -> Element {
     #[cfg(feature = "browser")]
@@ -1005,17 +1074,9 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                     }
                 }
                 EditorInspector { state }
-                div { class: "editor-preview-panel",
-                    div { class: "section-heading",
-                        h2 { "Preview" }
-                        span { "Sandboxed" }
-                    }
-                    iframe {
-                        class: "editor-preview-frame",
-                        title: "Preview of {document.funnel.name}",
-                        "sandbox": "",
-                        srcdoc: "{document.preview_html}",
-                    }
+                ResponsivePreview {
+                    title: format!("Preview of {}", document.funnel.name),
+                    srcdoc: document.preview_html,
                 }
             }
         }

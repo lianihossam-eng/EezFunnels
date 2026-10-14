@@ -894,12 +894,40 @@ h1 {
   line-height: 1.55;
 }
 
-.editor-preview-frame {
-  display: block;
-  width: 100%;
-  min-height: 500px;
+.editor-preview-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.editor-preview-switcher .secondary-button[aria-pressed="true"] {
+  border-color: #aab6ff;
+  color: #30418f;
+  background: #eef0ff;
+}
+
+.editor-preview-canvas {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
   border: 1px solid #e5e9f1;
   border-radius: 8px;
+  background: #fff;
+}
+
+.editor-preview-canvas:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 2px;
+}
+
+.editor-preview-frame {
+  display: block;
+  min-height: 500px;
+  max-width: none;
+  margin-inline: auto;
+  border: 0;
   background: #fff;
 }
 
