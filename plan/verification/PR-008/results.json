@@ -1,6 +1,6 @@
 {
   "task": "PR-008",
-  "evidence_refreshed_at_utc": "2026-10-14T00:53:46Z",
+  "evidence_refreshed_at_utc": "2026-10-14T00:54:36Z",
   "branch": "feat/008_dashboard",
   "base_commit": "7ade40e9ed3cb917d380d762beeb5a01916f1e83",
   "verified_source_commit": "1d0b741e48c0b637ab33b917d85dfb561b604b2f",
@@ -76,7 +76,8 @@
         "pr001_cli": 5
       },
       "log": "/tmp/eezfunnel-pr008-check-final3.log",
-      "log_sha256": "a71362506c5d0eea325ada1f34b8cfa6e84a744c1b53d0e366bf9a36e7397ca8"
+      "log_sha256": "a71362506c5d0eea325ada1f34b8cfa6e84a744c1b53d0e366bf9a36e7397ca8",
+      "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-ci-final3 cargo +1.85.0 xtask ci",
@@ -103,7 +104,8 @@
         "locked_crate_dependencies_scanned": 344,
         "findings": 0,
         "exit_code": 0
-      }
+      },
+      "exit_marker": "CI_EXIT=0"
     },
     "local_wrangler_smoke": {
       "command": "bash scripts/smoke-pr008.sh",

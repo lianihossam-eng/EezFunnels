@@ -1,6 +1,6 @@
 PR-008 Dashboard shell verification
 
-Evidence refreshed: 2026-10-14T00:53:46Z
+Evidence refreshed: 2026-10-14T00:54:36Z
 Branch: feat/008_dashboard
 Base commit: 7ade40e9ed3cb917d380d762beeb5a01916f1e83
 Verified source commit: 1d0b741e48c0b637ab33b917d85dfb561b604b2f (PR-008 implementation, D12, STATUS, and CI/tooling changes)
@@ -24,8 +24,8 @@ CLI/toolchain:
 
 Checks:
 - `source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked`: exit 0; 5 tests passed.
-- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0; fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, dashboard 5, domain 13, render 33, storage 5, xtask 25, bootstrap CLI 2, PR-001 CLI 5.
-- `source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-ci-final3 cargo +1.85.0 xtask ci`: exit 0 on an empty isolated target. The final3 log SHA-256 is `993455ff41e8557f39c56339d683d03a762ce1e68cf1a253c8eed63e97b51442`. This included the API wasm build, browser wasm asset bundle, and audit.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0 (`CHECK_EXIT=0`); fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, dashboard 5, domain 13, render 33, storage 5, xtask 25, bootstrap CLI 2, PR-001 CLI 5.
+- `source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-ci-final3 cargo +1.85.0 xtask ci`: exit 0 (`CI_EXIT=0`) on an empty isolated target. The final3 log SHA-256 is `993455ff41e8557f39c56339d683d03a762ce1e68cf1a253c8eed63e97b51442`. This included the API wasm build, browser wasm asset bundle, and audit.
 - RustSec audit 0.22.2 loaded 1,310 advisories, scanned 344 locked dependencies, and exited 0 with zero findings.
 - `git diff --check`, shell syntax checks, and final source comment/TODO/FIXME/lint-suppression scan passed.
 

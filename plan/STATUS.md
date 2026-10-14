@@ -104,9 +104,10 @@ hydration end to end. Fingerprinted evidence is in
 `plan/verification/PR-008/execution.txt` and `results.json`. The first test-first run failed because
 `render_document` was not yet implemented; that exact failure is recorded in the execution log.
 The final local smoke left no live Wrangler or Worker process; this executor may retain adopted
-defunct `workerd` entries because PID 1 does not reap children, as documented in D7. No commit,
-push, hosted CI, review request, or remote deployment was made. Hosted CI and @codex/Sol reviews
-remain required on the final pushed PR head.
+defunct `workerd` entries because PID 1 does not reap children, as documented in D7. The implementation
+is committed at `1d0b741e48c0b637ab33b917d85dfb561b604b2f`; fingerprinted verification evidence is
+finalized in a follow-up documentation commit. The branch is ready to push. Hosted CI and @codex/Sol
+reviews remain required on the exact pushed PR head; no remote deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
