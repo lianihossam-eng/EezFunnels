@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (source `6d1c21d` restores frozen C-01/C-04 and verifies reparented-child fallback cleanup; check, full CI, and local smoke pass; refreshed evidence pending push and hosted CI)
+- [ ] PR-009 Funnel list + creation (source `959349b` adds C-03 receipt-precedence and nonblocking create refresh fixes; check, full CI, and direct smoke pass; evidence refreshed, hosted CI pending exact pushed head)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo

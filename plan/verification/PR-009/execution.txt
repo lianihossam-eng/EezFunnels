@@ -1,27 +1,28 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T06:59:56Z
+Evidence refreshed: 2026-10-14T07:29:18Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: 6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6
-Source fingerprint: 4ebce0bcdd1a21b3926f73216b41c9f5907997b28f53e816af1aa7410308773d (110 source files)
-Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, Rust toolchain files, and .project-tools are excluded.
+Verified source commit: 959349bb0f694ad541b5c142cec4d0835e1185d5
+Source fingerprint: 956721d287a7a89ab2dd39109c9b6c460b90240631ec41ec9dadcb57be0a3337 (110 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, Rust toolchain files (including rust-toolchain.toml), and .project-tools are excluded.
 
-Implementation and contract boundary:
-- Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id through Session::execute. Five stable blueprints atomically create a funnel and immutable initial revision. D13 records the snapshot and C-03 idempotency behavior.
-- D14 bounds the workspace to 100 funnels and list results to 100. Create receipt, funnel, and initial revision stay in one atomic batch; the database trigger rejects direct over-cap inserts. At capacity, create returns decision-scoped conflict/funnel_limit_reached (409) without a funnel or receipt; replay still works and delete frees a slot.
-- C-01 and C-04 are byte-identical to base commit 13472d2. The workspace cap and its error semantics exist only in D14 and implementation/evidence. The API error test verifies the D14 409 mapping without adding the code to the frozen C-04 registry.
-- Dashboard create validation follows the 120-byte UTF-8 limit. The list reducer accepts only the newest request. sessionStorage stores only a UUID in a slot keyed by method, route, and canonical payload SHA-256; successful requests clear the key, while ambiguous failures retain it.
+Implementation and review fixes:
+- Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id through Session::execute. Five stable blueprints atomically create a funnel and immutable initial revision. D13 records the snapshot format and C-03 idempotency behavior.
+- D14 caps a workspace at 100 funnels and list results at 100. The create receipt, funnel, and initial revision are written in one atomic batch; a trigger rejects direct inserts over capacity. At capacity, create returns 409 without a funnel or receipt; delete frees a slot. C-01 and C-04 remain byte-identical to base.
+- C-03 follow-up: create and delete classify an active receipt before returning parse/semantic validation errors. Reusing a key with a different or invalid payload returns 409 mismatch. New and expired keys retain ordinary validation behavior. Invalid DELETE routes return 409 for active-key reuse and preserve the existing 404 for fresh/expired keys.
+- Dashboard create success closes/resets the dialog and clears pending state before the separate list refresh. The regression uses an unresolved refresh future and verifies the form is already enabled.
+- The dashboard uses a digest-keyed sessionStorage slot whose value is only a UUID; the list reducer rejects stale requests. Smoke cleanup tests cover process-group and fallback reparenting.
 
-Regression evidence:
-- Capacity red test: old API accepted a 101st create with HTTP 201 after seeding 100 rows; final smoke fills slot 100 through API create/replay, rejects a distinct create atomically with 409, rejects direct insert 101, keeps overflow list at 100, and proves delete frees a slot. See results.json first_red.funnel_capacity.
-- Process-group regression confirms group cleanup works after the setsid launcher exits while a member remains.
-- Reparent-fallback red log `/tmp/eezfunnel-pr009-fallback-reparent-red-final.log` (SHA-256 f01ab630870895c57830b5e8a62d686a8073cf00c67ef0c85b64485652c40312; exit 1) reproduces the legacy launcher-tree-only fallback. Child remained live after leader/launcher exit with no TERM marker. Green log `/tmp/eezfunnel-pr009-fallback-reparent-green-final.log` (SHA-256 bad497aec70e3d297218df62a9bca5b178720d5d1ee85590972f09d03a48a5da; exit 0) asserts the TERM-time PPID differs from the exited leader, the child remains alive after TERM, and cleanup removes it with KILL using retained PID+start-time identities.
+Focused regression evidence:
+- The transient pre-fix smoke observed an unknown-blueprint request reusing an active create key return 400 instead of 409; the old malformed-DELETE route guard returned 404 before classifying its active receipt. Those initial red outputs were not retained. Direct final smoke passes the fixed cases and verifies new/expired create validation remains 400 and fresh/expired malformed DELETE remains 404. Direct log SHA-256: 3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45.
+- The create-refresh regression previously observed the dialog still open and pending while list refresh was unresolved; no initial red log was retained. It passes in `cargo xtask check` and full CI.
 
-Validation on exact source contents:
-- `cargo +1.85.0 xtask check`: CHECK_EXIT=0; API 12, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/eezfunnel-pr009-frozen-contract-fallback-check-final.log` (SHA-256 5f517318ccf3b029168876c0e257ed7d92d327368385db60d5efa86c2ddfee10).
-- Full `cargo +1.85.0 xtask ci`: CI_EXIT=0 with isolated target `/workspace/.eezfunnel-pr009-name-limit-ci` (not empty at start). Workspace tests/checks, API and dashboard WASM, generated assets, group/fallback cleanup regressions, CRUD/capacity smoke, and audit passed. Audit scanned 345 dependencies against 1,310 advisories with zero findings. Log `/tmp/eezfunnel-pr009-frozen-contract-fallback-ci-final.log` (SHA-256 0e8576314690784a365f07dbc95a556d32a9cb683f53f97215fe65406b4ea379).
-- Independent Wrangler smoke: SMOKE_EXIT=0 with the same isolated Cargo target. It passed five blueprints, create/replay, payload mismatch, expired receipt cleanup, delete/replay, validation, method/host errors, capacity and list assertions. Log `/tmp/eezfunnel-pr009-frozen-contract-fallback-smoke-final.log` (SHA-256 1c6ca2990f0ca6986bd480338453112329d045d16db3c8beac65330701ae9926); Wrangler log `/tmp/eezfunnel-pr009-wrangler.log` (SHA-256 be3de0bd500b86ea0846ceae43e978692f982a973631562e98c30d6d8789c8c5). Port 8787 is closed and no live Wrangler/workerd processes remain.
-- Generated WASM and bundle hashes/sizes are recorded in results.json. `git show --check`, `git diff --check`, `bash -n scripts/smoke-pr009.sh`, formatting, and no-comments/TODO/FIXME/lint-suppression review pass.
+Validation on source contents committed as 959349bb0f694ad541b5c142cec4d0835e1185d5:
+- `cargo +1.85.0 xtask check`: CHECK_EXIT=0; API 12, commands 7, dashboard presentation 14, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log `/tmp/eezfunnel-pr009-codex-p2-check-final.log` SHA-256 dd5e97e978ffd2a4e993e582c1fce2d0e7315482a0de4209418e2914ea4cd381.
+- Full `cargo +1.85.0 xtask ci`: CI_EXIT=0 using isolated target `/workspace/.eezfunnel-pr009-name-limit-ci` (existing cache). Workspace checks/tests, API and dashboard WASM, generated assets, cleanup regressions, CRUD/idempotency/capacity smoke, and audit passed. Audit scanned 345 dependencies against 1,310 advisories with zero findings. Log `/tmp/eezfunnel-pr009-codex-p2-ci-final.log` SHA-256 690d943238cac4fa255b88063356f9b1296f64fd56178eb9a5eb11c491970011.
+- Direct standalone Wrangler smoke: DIRECT_SMOKE_EXIT=0. It verifies five blueprints, replay and mismatch, invalid semantic payload receipt precedence, fresh/expired behavior, delete replay, capacity, list bound, and host denial. Log SHA-256 3566bccf8775a8ae29641684a9c628ad147523aed38605cb76694765f1921e45; Wrangler log SHA-256 79fae9495023a3ee4acd1781d769348619e8f76fbf36aad511d6dc97ea8325ae. Port 8787 is closed and no live Wrangler/workerd process remains.
+- `git diff --check`, `git show --check`, `bash -n scripts/smoke-pr009.sh`, formatting, and no-comments/TODO/FIXME/lint-suppression review pass. No comments were added.
+- No headless browser ran, so browser hydration completion and native Escape interaction remain unverified. Wrangler used local bindings only; no remote migration or deployment ran.
 
-Hosted CI run `38523130659` passed on the prior head `098d66540ec25056ec5987ac48c77db21b2ab55b`. Source `6d1c21dd213de3c8efedfd83f487f4c9b19fa5c6` and refreshed evidence are pending push; hosted CI on the final evidence head is pending. Parent will inspect before any new @codex review. No Sol review has been requested. No headless browser ran, so hydration completion and native Escape behavior remain unverified. Wrangler used local bindings only; no remote migration or deployment ran.
+Hosted CI for the exact source/evidence head is pending. No new @codex review or Sol review was triggered; PR awaits parent inspection.
