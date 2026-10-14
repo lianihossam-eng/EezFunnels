@@ -126,11 +126,12 @@ same-payload replay and reject key reuse with different command parameters. The 
 create fields during pending requests and uses native modal dialogs that cannot be dismissed with
 Escape while a mutation is pending. Before create/delete dispatch, it stores only a UUID idempotency
 key in `sessionStorage`, in a method/route slot keyed by a SHA-256 digest of the canonical request
-tuple. Ambiguous failures retain the key for replay; successful responses clear the slot. D13
-records this lifecycle.
+tuple. The slot value is only the UUID; user-entered form fields are absent. Ambiguous failures
+retain the key for replay; successful responses clear the slot. D13 records this lifecycle. The create
+dialog uses the same 120-byte UTF-8 name limit as commands and blocks oversized multibyte names.
 
-Final source commit `01ca9d44c56b4959c4dee6918d56c2cf2b79f819` passes `cargo +1.85.0 xtask check`
-with API 11, commands 7, dashboard presentation 10, domain 13, render 33, storage 5, xtask 26, and
+Final source commit `fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c` passes `cargo +1.85.0 xtask check`
+with API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, and
 CLI tests 2 and 6. Fresh-target `cargo +1.85.0 xtask ci` passes workspace checks/tests, API and
 dashboard browser WASM, asset generation, local CRUD smoke, and audit of 345 locked dependencies
 against 1,310 advisories with zero findings. A separate local-only Wrangler smoke also passes the

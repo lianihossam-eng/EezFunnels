@@ -1,28 +1,30 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T03:44:40Z
+Evidence refreshed: 2026-10-14T04:04:26Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: 01ca9d44c56b4959c4dee6918d56c2cf2b79f819
-Source fingerprint: 8a6edc1b3c996066e2a70afcf9792a3e70d3f997332796309234e911b992d057
+Verified source commit: fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c
+Source fingerprint: 909df84fd4e837b4656f92443a91de622cbfb7197d3e6e335f79978c17178829
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, and toolchain files excluded.
 
 Implementation:
 - Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id; commands remain in Session::execute.
-- The five stable blueprints create an atomic funnel plus immutable initial revision and versioned snapshot/manifest; D13 defines this format.
+- Five stable blueprints create an atomic funnel plus immutable initial revision and versioned snapshot/manifest; D13 defines the format.
 - C-03 create/delete receipts return matching 24-hour retries and reject key reuse with changed payloads.
-- Before create/delete dispatch, the browser prepares and stores a UUID key synchronously. Each sessionStorage slot is scoped by method and route and uses a SHA-256 digest of the canonical request tuple; only the UUID is stored as the value, with user body fields absent from the slot name.
-- Ambiguous evaluator/network failures and non-success responses retain the key; a successful 201/200 response clears that slot. D13 documents the lifecycle. The dashboard also locks create inputs during requests and uses native modal dialogs that prevent Escape dismissal while mutations are pending.
-- xtask CI runs the local CRUD smoke after dashboard asset generation and before cargo audit; GitHub CI pins Node 24.19.0 for the smoke.
+- The dashboard create form trims names and enforces the same 120 UTF-8 byte limit as the command layer. The submit button stays disabled for oversized names and the form announces the limit for multibyte input.
+- Before create/delete dispatch, the browser prepares and stores a UUID synchronously. The sessionStorage slot name includes the HTTP method, API route, and SHA-256 digest of the canonical request tuple (method, route, canonical JSON body or null); only the UUID is the stored value and user body fields do not appear in the slot name.
+- Ambiguous transport/evaluator failures and non-success responses retain the key; successful create (201) and delete (200) responses clear that slot. D13 records the method/route scope and cleanup lifecycle, including browser session end.
+- Create inputs lock while requests are pending. Native modal dialogs prevent Escape dismissal while mutations are pending.
 
 Checks:
-- `cargo +1.85.0 xtask check`: exit 0; formatting, warning-denied Clippy, tests and strict layer checks passed. Counts: API 11, commands 7, dashboard presentation 10, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: 466a01284af23d676fa5ad8b174e4e2ec52cbabe6815a62ca13c0c335e497f29.
-- Fresh-target `cargo +1.85.0 xtask ci` at `/workspace/.eezfunnel-pr009-sessionstorage-ci`: exit 0, with `CARGO_INCREMENTAL=0` to fit the isolated build in available disk. Workspace checks/tests, API and dashboard browser WASM builds, asset generation, local CRUD smoke, and cargo audit all passed. RustSec scanned 345 locked dependencies against 1,310 advisories with zero findings. Log SHA-256: 42ccf4da4e58f80afa9c53e244503bf74b767e91351fc5e397a28ad7e29eb487.
-- CI artifacts: API WASM 55,626,223 bytes (SHA-256 8e67d342f96e5f0ab58388a1236735d08e4a80528ab66cc1cac7eed3c983c346); raw dashboard WASM 1,695,657 bytes (SHA-256 372fbc18a57400659c83b6ef8b151d279d9e7fa724656740c47e7585d6f7cdba); transformed `apps/dashboard/dist/assets/eezfunnel_bg.wasm` 784,416 bytes (SHA-256 9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39). Generated bundle hashes are listed in results.json.
-- Separate local-only Wrangler smoke: exit 0; all five blueprints, create replay, payload mismatch, delete/replay, validation, unsupported method, not-found and host-denial assertions passed. Smoke log SHA-256: 3411f800c05c6b6a855730c10857067f5163f40bdfb180963cf0ef2f9b219261; Wrangler log SHA-256: 152d24637b39621305edfe72d7335cec9f6f6d5f683a8b84469d6d4a8b7d44bb.
-- The idempotency-slot regression first failed before the slot helper existed (exit 101, unresolved function; log SHA-256 b65e95de2d132d25359442978b5108b93fd263378c911a1426b827c96af765e5). It passes after implementation (exit 0; log SHA-256 09bc72698ba830cb8453c2056eaed21fb09305d860a788748bb90e52e7894621), checking canonical property order, changed payload, method/route scope and absence of cleartext user fields.
-- The dialog-cancel regression first failed before the shared policy existed (exit 101; log SHA-256 a39f9d21a8beddbe3c74acdeac9bf2c666507a58effed3b194c84dedf2f14ab3) and passed afterward (exit 0; log SHA-256 6cbe7bfd5b1fa2d6d2fb0cd247611975c13da7e36b6c0b2c2d212581e0c186ad).
-- `git show --check` passed for source commit 01ca9d44c56b4959c4dee6918d56c2cf2b79f819. The read-only internal no-comments and Luna reviews found no outstanding findings.
-- No headless browser ran, so hydration completion and native Escape interaction remain unverified. The smoke validates local API behavior and does not execute browser JavaScript. Wrangler used local bindings only; no remote deployment or migration ran.
+- `cargo +1.85.0 xtask check`: exit 0; formatting, warning-denied Clippy, workspace tests, and strict layer checks passed. Counts: API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: 116a110b7033e13a5a59cb92695b63cde7d59045fc5152c4df7dcb7ff1e93a40.
+- Fresh-target `cargo +1.85.0 xtask ci` at `/workspace/.eezfunnel-pr009-name-limit-ci`: exit 0; tests/checks, API and dashboard browser WASM builds, generated assets, integrated local CRUD smoke, and cargo audit passed. RustSec scanned 345 locked dependencies against 1,310 advisories with zero findings. Log SHA-256: 7881d2133da1215b56d1ee986fe944e906b6623d0163ad58aa14c0b3f44cae2a.
+- CI artifacts: raw API WASM 55,641,435 bytes (SHA-256 9ec4fe54a99537a41ad3f069f897c79e0233c14a9d69b08a7d1c8f071cf9ed3f); raw dashboard WASM 1,696,002 bytes (SHA-256 cfb5101841d0ed600243d68a825f927364f5bc31964787acbb2c545aab2f84d0); transformed `apps/dashboard/dist/assets/eezfunnel_bg.wasm` 784,717 bytes (SHA-256 64064c2cd05a1b2393b455bbbab5c5d8b3f50a7e6916717a4978cdb71099bb0b). All generated bundle hashes are in results.json.
+- Separate local-only Wrangler smoke: exit 0; all five blueprints, create replay, payload-mismatch conflict, delete/replay, validation, unsupported method, not-found, and host-denial assertions passed. Output log SHA-256: 845da30cc2a0a74165582b483386d94471aa8b4abe7af7b94ccfe24c5bdc4629; Wrangler log SHA-256: 232f78bed76d8a3da8322e307ee3e03fda6050d10d754782bace2fa809a35ff0.
+- The UTF-8 limit regression first failed before the shared predicate existed (exit 101, unresolved `can_create_funnel`; log SHA-256 4541c48ff8d5db1186bd28f0799a96569315d2e963167c265231459012746391). It passes after implementation (exit 0; log SHA-256 7978c5b37481ef8c8dc6723b79c77baaf3e3a688c84b8c5c4262fc00c684db19) for 120/121 ASCII bytes and 30/31 four-byte emoji. The rendered error regression also passes (log SHA-256 7db19804fcaa2086413960eac602bff8a647d2e9a32919cc74a6143365d48aa0).
+- The idempotency-slot regression covers canonical property ordering, changed payload, method/route scope, and absence of cleartext user fields. Only the validated UUID is stored as the sessionStorage value; D13 documents success cleanup and session-end cleanup.
+- Existing create/delete tests verify each blueprint's initial revision and idempotent replay. The separate smoke confirms create replay and delete replay semantics.
+- `git show --check` passed for source commit fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c. Fresh internal Luna review found no P1/P2; the fresh no-comments review found no comments, TODO/FIXME markers, suppressions, or cleanup findings (0 deleted, 0 restored).
+- No headless browser ran, so hydration completion and native Escape interaction remain unverified. Wrangler used local bindings only; no remote deployment or migration ran.
 
-Hosted CI and @codex/Sol reviews are pending on the exact pushed evidence head.
+Hosted CI and the once-only @codex review are pending on the exact pushed evidence head.

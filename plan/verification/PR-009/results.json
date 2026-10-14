@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T03:44:40Z",
+  "evidence_refreshed_at_utc": "2026-10-14T04:04:26Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "01ca9d44c56b4959c4dee6918d56c2cf2b79f819",
-  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, CRUD smoke, review fixes, and sessionStorage retry-key persistence before mutation dispatch.",
+  "verified_source_commit": "fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c",
+  "source_commit_role": "PR-009 implementation, D13 snapshot/idempotency decision, CRUD smoke, review fixes, sessionStorage retry-key persistence before mutation dispatch, and UTF-8 name-limit correction.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, and toolchain files are excluded.",
-  "source_fingerprint_sha256": "8a6edc1b3c996066e2a70afcf9792a3e70d3f997332796309234e911b992d057",
+  "source_fingerprint_sha256": "909df84fd4e837b4656f92443a91de622cbfb7197d3e6e335f79978c17178829",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -46,7 +46,7 @@
     "crates/dashboard-presentation/assets/dashboard.css": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b",
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "bf13826b697575d8f57e6479187d10ca3bb843243cbf86c1f43e623bad5374d7",
-    "crates/dashboard-presentation/src/routes.rs": "be2a90743eb52fab522ba464649cd44c3aa399b28b663e357d3bdc598b751b1d",
+    "crates/dashboard-presentation/src/routes.rs": "ba7cdc8ca3e3c7bb947cd52b319631eba8eba74767081b157ff9fcb8ab65b827",
     "crates/dashboard-presentation/src/ssr.rs": "adc4e1eb07f0aac7b6e3edffd79887945fc3ee54d19c17acac1152b7980b9495",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
     "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
@@ -120,7 +120,7 @@
   },
   "first_red": {
     "observed": true,
-    "capture_status": "Test-first regressions were observed before implementation; the original transient diagnostic was not retained. The final review fix also has a captured red: its targeted test failed to compile while the shared dialog-cancel policy was absent, then passed after the helper and handlers were added.",
+    "capture_status": "Test-first regressions were observed before implementation; the original initial diagnostic was not retained. The dialog-cancel, idempotency-slot, and UTF-8 name-limit fixes have captured red and green logs.",
     "modal_cancel_regression": {
       "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
       "pre_fix_exit_code": 101,
@@ -140,17 +140,30 @@
       "post_fix_log": "/tmp/eezfunnel-pr009-sessionstorage-test.log",
       "post_fix_log_sha256": "09bc72698ba830cb8453c2056eaed21fb09305d860a788748bb90e52e7894621",
       "diagnostic": "Before the slot helper existed, the test failed to compile with unresolved idempotency_storage_slot. After implementation, it passed canonical-property-order, changed-payload, method/route-scope, and no-cleartext-field assertions."
+    },
+    "name_limit": {
+      "test": "create_name_limit_matches_the_command_utf8_byte_limit",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-name-limit-red.log",
+      "pre_fix_log_sha256": "4541c48ff8d5db1186bd28f0799a96569315d2e963167c265231459012746391",
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-name-limit-green.log",
+      "post_fix_log_sha256": "7978c5b37481ef8c8dc6723b79c77baaf3e3a688c84b8c5c4262fc00c684db19",
+      "error_feedback_test": "create_fields_explain_when_multibyte_name_exceeds_command_byte_limit",
+      "error_feedback_log": "/tmp/eezfunnel-pr009-name-message-green.log",
+      "error_feedback_log_sha256": "7db19804fcaa2086413960eac602bff8a647d2e9a32919cc74a6143365d48aa0",
+      "diagnostic": "Before the shared predicate existed, the boundary regression failed to compile because can_create_funnel was unresolved. After implementation, 120 ASCII bytes and 30 four-byte emoji are accepted; 121 ASCII bytes and 31 four-byte emoji are rejected, and the rendered form announces the UTF-8 byte limit."
     }
   },
   "checks": {
     "cargo_xtask_check": {
-      "command": "source .project-tools/env.sh && cargo +1.85.0 xtask check",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci CARGO_INCREMENTAL=0 cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on the corrected source.",
       "workspace_test_counts": {
         "api": 11,
         "commands": 7,
-        "dashboard_presentation": 10,
+        "dashboard_presentation": 12,
         "domain": 13,
         "render": 33,
         "storage": 5,
@@ -158,18 +171,18 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-key-fix-check.log",
-      "log_sha256": "466a01284af23d676fa5ad8b174e4e2ec52cbabe6815a62ca13c0c335e497f29"
+      "log": "/tmp/eezfunnel-pr009-name-limit-check-final.log",
+      "log_sha256": "116a110b7033e13a5a59cb92695b63cde7d59045fc5152c4df7dcb7ff1e93a40"
     },
     "final_ci": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-sessionstorage-ci CARGO_INCREMENTAL=0 cargo +1.85.0 xtask ci",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci CARGO_INCREMENTAL=0 cargo +1.85.0 xtask ci",
       "exit_code": 0,
       "fresh_isolated_target": true,
       "target_was_empty_at_start": true,
-      "target_dir": "/workspace/.eezfunnel-pr009-sessionstorage-ci",
-      "outcome": "Fresh-target workspace checks/tests, API and dashboard browser WASM, generated dashboard assets, local CRUD smoke integrated into xtask, and cargo audit passed.",
-      "log": "/tmp/eezfunnel-pr009-sessionstorage-ci.log",
-      "log_sha256": "42ccf4da4e58f80afa9c53e244503bf74b767e91351fc5e397a28ad7e29eb487",
+      "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
+      "outcome": "Fresh-target workspace checks/tests, API and dashboard browser WASM, generated dashboard assets, local CRUD smoke, and cargo audit passed.",
+      "log": "/tmp/eezfunnel-pr009-name-limit-ci-workspace.log",
+      "log_sha256": "7881d2133da1215b56d1ee986fe944e906b6623d0163ad58aa14c0b3f44cae2a",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -179,19 +192,19 @@
       },
       "wasm_outputs": {
         "eez_api.wasm": {
-          "path": "/workspace/.eezfunnel-pr009-final5-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
-          "bytes": 59513685,
-          "sha256": "a830bbec7e3211500627a31df38c41208b8306f286e24c8e44d44144849ee520"
+          "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
+          "bytes": 55641435,
+          "sha256": "9ec4fe54a99537a41ad3f069f897c79e0233c14a9d69b08a7d1c8f071cf9ed3f"
         },
         "eez_dashboard.wasm": {
-          "path": "/workspace/.eezfunnel-pr009-final5-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
-          "bytes": 1668828,
-          "sha256": "cbbb5ec5857254b5d50cda6bb0c0f1265a77edb271d9c96054857c5b0e713cff"
+          "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
+          "bytes": 1696002,
+          "sha256": "cfb5101841d0ed600243d68a825f927364f5bc31964787acbb2c545aab2f84d0"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
           "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 784416,
-          "sha256": "9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39"
+          "bytes": 784717,
+          "sha256": "64064c2cd05a1b2393b455bbbab5c5d8b3f50a7e6916717a4978cdb71099bb0b"
         }
       },
       "generated_bundle_sha256": {
@@ -208,12 +221,12 @@
         "apps/dashboard/dist/assets/eezfunnel.js": {
           "path": "apps/dashboard/dist/assets/eezfunnel.js",
           "bytes": 74916,
-          "sha256": "9faa2d972d1a71e2f0b1d37a30c71d585a38e9d070aefac251da721d2f9f5664"
+          "sha256": "4920bc5514d7e94345da06e471af14ce04d907f5bf2b8f6b8c6257ce056a43ff"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
           "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 784416,
-          "sha256": "9dfb8d2a232b995b98e8ee711d3e4162ea972f2c75669b9a75c815e67926af39"
+          "bytes": 784717,
+          "sha256": "64064c2cd05a1b2393b455bbbab5c5d8b3f50a7e6916717a4978cdb71099bb0b"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
           "path": "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
@@ -258,12 +271,12 @@
       }
     },
     "local_wrangler_smoke": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-sessionstorage-ci bash scripts/smoke-pr009.sh",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci CARGO_INCREMENTAL=0 bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-sessionstorage-smoke.log",
-      "smoke_stdout_sha256": "3411f800c05c6b6a855730c10857067f5163f40bdfb180963cf0ef2f9b219261",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-name-limit-smoke.log",
+      "smoke_stdout_sha256": "845da30cc2a0a74165582b483386d94471aa8b4abe7af7b94ccfe24c5bdc4629",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "152d24637b39621305edfe72d7335cec9f6f6d5f683a8b84469d6d4a8b7d44bb",
+      "wrangler_log_sha256": "232f78bed76d8a3da8322e307ee3e03fda6050d10d754782bace2fa809a35ff0",
       "assertions": {
         "initial_and_final_list": "empty and final list responses returned HTTP 200",
         "create": "all 5 blueprints produced the expected ordered section types and unique initial section IDs",
@@ -283,8 +296,8 @@
       "cargo_fmt_check": "passed as part of cargo xtask check",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "The internal read-only no-comments review found no source comments, TODO/FIXME markers, lint suppressions, or outstanding cleanup findings in this delta.",
-      "source_commit_check": "git show --check passed for source commit 01ca9d44c56b4959c4dee6918d56c2cf2b79f819"
+      "no_comments_review": "Fresh read-only no-comments review found no comments, TODO/FIXME markers, lint suppressions, or cleanup findings in the name-limit delta; 0 comments deleted and 0 restored.",
+      "source_commit_check": "git show --check passed for source commit fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c"
     }
   },
   "tool_versions": {
@@ -302,7 +315,8 @@
     "funnel.list, funnel.create, and funnel.delete are routed through Session::execute; HTTP handlers remain an adapter.",
     "Five closed blueprints use stable IDs and each create atomically stores a funnel plus an immutable initial revision with a versioned snapshot and render manifest.",
     "D13 records the snapshot format and C-03 24-hour create/delete idempotency behavior; matching replays return their stored result and a key reused with different command parameters conflicts.",
-    "The dashboard list loads from the same-origin API, supports create/delete, locks create fields during pending requests, and stores only a validated UUID per sessionStorage slot. Each slot is scoped by method/route and a canonical JSON SHA-256 digest, written before dispatch, retained after ambiguous failures, and cleared after a successful response.",
+    "The dashboard list loads from the same-origin API, supports create/delete, locks create fields during pending requests, and enforces the command layer\u2019s 120 UTF-8 byte name limit before submission with an accessible error for oversized multibyte input.",
+    "Before create/delete dispatch, sessionStorage receives only a UUID as the slot value. Slot names scope by method and route and include a SHA-256 digest of the canonical request tuple; payload fields are absent. Ambiguous failures retain the key, successful responses clear the slot, and D13 documents cleanup after success and session end.",
     "The local API smoke runs inside cargo xtask ci before audit and was also run separately; no headless browser ran, so browser hydration completion and native Escape interaction remain unverified.",
     "No remote bindings, production deployment, or remote migration were run."
   ],
@@ -310,8 +324,8 @@
     "status_at_evidence_capture": "Pending; verify a hosted run on the exact pushed evidence head."
   },
   "reviews": {
-    "codex": "Pending; request once after hosted CI is green on the exact head.",
-    "sol": "Pending; request only after a clean Codex review and green hosted CI on the exact head."
+    "codex": "Pending; request once after hosted CI is green on the exact final evidence head.",
+    "sol": "Pending; request only after a clean Codex review and green hosted CI on the exact final evidence head."
   },
   "deployment": {
     "remote_deployment_run": false,
