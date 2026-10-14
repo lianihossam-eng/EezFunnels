@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use eez_domain::{
@@ -150,6 +150,65 @@ impl FunnelListCommand {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelEditorReadCommand {
+    funnel_id: String,
+}
+
+impl FunnelEditorReadCommand {
+    const ID: &'static str = "funnel.editor.read";
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if object.get("funnel_id").is_none() {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelEditorOrderCommand {
+    funnel_id: String,
+    base_revision_id: String,
+    section_ids: Vec<String>,
+}
+
+impl FunnelEditorOrderCommand {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if ["funnel_id", "base_revision_id", "section_ids"]
+            .iter()
+            .any(|field| object.get(*field).is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        if command.section_ids.iter().any(|id| {
+            id.is_empty()
+                || id.len() > 64
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        }) {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
 #[derive(Serialize)]
 struct FunnelListResult {
     command_id: &'static str,
@@ -195,6 +254,12 @@ impl<'repo, 'database> Session<'repo, 'database> {
     ) -> Result<Value, FunnelCommandError> {
         match command_id {
             FunnelListCommand::ID => self.execute_list(parameters).await,
+            FunnelEditorReadCommand::ID => self.execute_editor_read(parameters).await,
+            "funnel.editor.preview" => self.execute_editor_preview(parameters).await,
+            "funnel.revision.save" => {
+                self.execute_editor_save(parameters, required_idempotency_key(idempotency_key)?)
+                    .await
+            }
             FunnelCreateCommand::ID => {
                 self.execute_create(parameters, required_idempotency_key(idempotency_key)?)
                     .await
@@ -214,6 +279,168 @@ impl<'repo, 'database> Session<'repo, 'database> {
             items: self.repository.list_funnels().await?,
         };
         serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_editor_read(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
+        let command = FunnelEditorReadCommand::from_json(parameters)?;
+        let record = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let validated = decode_snapshot(&record.revision, &record.funnel_id)?;
+        let preview_html = Renderer::new().render_preview(
+            &validated.revision,
+            &validated.theme,
+            &validated.contents,
+        )?;
+        let sections = validated
+            .revision
+            .sections()
+            .iter()
+            .map(|section| {
+                serde_json::json!({
+                    "id": section.id().as_str(),
+                    "type": section.section_type().as_str(),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "command_id": FunnelEditorReadCommand::ID,
+            "funnel": {
+                "id": record.funnel_id,
+                "name": record.name,
+                "slug": record.slug,
+                "updated_at": record.updated_at,
+            },
+            "base_revision_id": record.head_revision_id,
+            "sections": sections,
+            "preview_html": preview_html,
+        }))
+    }
+
+    async fn execute_editor_preview(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
+        let command = FunnelEditorOrderCommand::from_json(parameters)?;
+        let record = self
+            .repository
+            .get_owned_revision(&command.funnel_id, &command.base_revision_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let validated = decode_snapshot(&record, &command.funnel_id)?;
+        let ordered = reorder_snapshot(&validated, &command.section_ids)?;
+        let html =
+            Renderer::new().render_preview(&ordered.revision, &ordered.theme, &ordered.contents)?;
+        Ok(serde_json::json!({
+            "command_id": "funnel.editor.preview",
+            "base_revision_id": command.base_revision_id,
+            "section_ids": command.section_ids,
+            "preview_html": html,
+        }))
+    }
+
+    async fn execute_editor_save(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelEditorOrderCommand::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, "funnel.revision.save", None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                "funnel.revision.save",
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let record = self
+            .repository
+            .get_owned_revision(&command.funnel_id, &command.base_revision_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let validated = decode_snapshot(&record, &command.funnel_id)?;
+        let mut ordered = reorder_snapshot(&validated, &command.section_ids)?;
+        let new_revision_id = uuid::Uuid::new_v4().to_string();
+        let revision_id = RevisionId::new(new_revision_id.clone())?;
+        let manifest = RenderManifest::new(
+            revision_id.clone(),
+            ordered.revision.render_manifest().theme_version(),
+            ordered.revision.render_manifest().renderer_version(),
+            ordered.revision.render_manifest().assets_manifest_hash(),
+            ordered.revision.render_manifest().config_hash(),
+        )?;
+        let sections = ordered
+            .revision
+            .sections()
+            .iter()
+            .map(|section| {
+                Section::new(
+                    Some(section.id().as_str().to_owned()),
+                    section.section_type().as_str(),
+                    section.order(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let revision = Revision::new(
+            revision_id,
+            FunnelId::new(command.funnel_id.clone())?,
+            Some(i64::from(ordered.revision.schema_version().value())),
+            sections,
+            manifest.clone(),
+        )?;
+        Renderer::new().render(&revision, &ordered.theme, &ordered.contents)?;
+        ordered.snapshot.sections = revision
+            .sections()
+            .iter()
+            .map(SectionSnapshotV1::from)
+            .collect();
+        let data_json =
+            serde_json::to_string(&ordered.snapshot).map_err(|_| FunnelCommandError::Internal)?;
+        let render_manifest_json = serde_json::to_string(&RenderManifestV1::from(&manifest))
+            .map_err(|_| FunnelCommandError::Internal)?;
+        let new_revision = NewRevision {
+            id: new_revision_id.clone(),
+            funnel_id: command.funnel_id.clone(),
+            schema_version: i64::from(revision.schema_version().value()),
+            data_json,
+            render_manifest_json,
+        };
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": "funnel.revision.save",
+            "funnel_id": command.funnel_id,
+            "revision_id": new_revision_id,
+            "section_ids": command.section_ids,
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = self
+            .repository
+            .save_editor_revision(
+                &command.funnel_id,
+                &command.base_revision_id,
+                &new_revision,
+                idempotency_key,
+                &canonical_parameters,
+                &result_json,
+            )
+            .await?;
+        mutation_result_to_value(result)
     }
 
     async fn execute_create(
@@ -400,9 +627,9 @@ impl InitialRevisionSummary {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FunnelSnapshotV1 {
+pub(super) struct FunnelSnapshotV1 {
     format_version: u16,
     schema_version: u32,
     blueprint: FunnelBlueprint,
@@ -428,7 +655,7 @@ impl FunnelSnapshotV1 {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SectionSnapshotV1 {
     id: String,
@@ -469,6 +696,127 @@ impl From<&RenderManifest> for RenderManifestV1 {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct ValidatedSnapshot {
+    pub(super) snapshot: FunnelSnapshotV1,
+    pub(super) revision: Revision,
+    pub(super) theme: ThemeTokens,
+    pub(super) contents: BTreeMap<String, SectionContent>,
+}
+
+pub(super) fn decode_snapshot(
+    record: &eez_storage::repository::RevisionRecord,
+    expected_funnel_id: &str,
+) -> Result<ValidatedSnapshot, FunnelCommandError> {
+    if record.data_json.len() > MAX_SNAPSHOT_BYTES || record.funnel_id != expected_funnel_id {
+        return Err(FunnelCommandError::Internal);
+    }
+    let snapshot: FunnelSnapshotV1 =
+        serde_json::from_str(&record.data_json).map_err(|_| FunnelCommandError::Internal)?;
+    if snapshot.format_version != 1
+        || snapshot.schema_version != 1
+        || i64::from(snapshot.schema_version) != record.schema_version
+    {
+        return Err(FunnelCommandError::Internal);
+    }
+    let manifest: RenderManifestV1 = serde_json::from_str(&record.render_manifest_json)
+        .map_err(|_| FunnelCommandError::Internal)?;
+    if manifest.revision_id != record.id || manifest.assets_manifest_hash != EMPTY_ASSETS_HASH {
+        return Err(FunnelCommandError::Internal);
+    }
+    let revision_id =
+        RevisionId::new(record.id.clone()).map_err(|_| FunnelCommandError::Internal)?;
+    let funnel_id =
+        FunnelId::new(expected_funnel_id.to_owned()).map_err(|_| FunnelCommandError::Internal)?;
+    let theme =
+        ThemeTokens::from_preset(snapshot.theme_id).map_err(|_| FunnelCommandError::Internal)?;
+    if manifest.theme_version != theme.version() {
+        return Err(FunnelCommandError::Internal);
+    }
+    let render_manifest = RenderManifest::new(
+        revision_id.clone(),
+        manifest.theme_version,
+        manifest.renderer_version,
+        manifest.assets_manifest_hash,
+        manifest.config_hash,
+    )
+    .map_err(|_| FunnelCommandError::Internal)?;
+    let sections = snapshot
+        .sections
+        .iter()
+        .map(|section| {
+            Section::new(
+                Some(section.id.clone()),
+                &section.section_type,
+                section.order,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| FunnelCommandError::Internal)?;
+    let revision = Revision::new(
+        revision_id,
+        funnel_id,
+        Some(record.schema_version),
+        sections,
+        render_manifest,
+    )
+    .map_err(|_| FunnelCommandError::Internal)?;
+    let contents = snapshot.contents.clone();
+    Renderer::new()
+        .render(&revision, &theme, &contents)
+        .map_err(|_| FunnelCommandError::Internal)?;
+    Ok(ValidatedSnapshot {
+        snapshot,
+        revision,
+        theme,
+        contents,
+    })
+}
+
+pub(super) fn reorder_snapshot(
+    source: &ValidatedSnapshot,
+    section_ids: &[String],
+) -> Result<ValidatedSnapshot, FunnelCommandError> {
+    if section_ids.len() != source.revision.sections().len() {
+        return Err(FunnelCommandError::InvalidParameters);
+    }
+    let mut seen = HashSet::with_capacity(section_ids.len());
+    let mut sections = Vec::with_capacity(section_ids.len());
+    for (order, id) in section_ids.iter().enumerate() {
+        if !seen.insert(id.as_str()) {
+            return Err(FunnelCommandError::DuplicateSectionOrder);
+        }
+        let Some(existing) = source
+            .revision
+            .sections()
+            .iter()
+            .find(|section| section.id().as_str() == id)
+        else {
+            return Err(FunnelCommandError::InvalidParameters);
+        };
+        sections.push(
+            Section::new(Some(id.clone()), existing.section_type().as_str(), order)
+                .map_err(|_| FunnelCommandError::InvalidParameters)?,
+        );
+    }
+    let revision = Revision::new(
+        source.revision.id().clone(),
+        source.revision.funnel_id().clone(),
+        Some(i64::from(source.revision.schema_version().value())),
+        sections,
+        source.revision.render_manifest().clone(),
+    )
+    .map_err(|_| FunnelCommandError::InvalidParameters)?;
+    let mut reordered = source.clone();
+    reordered.snapshot.sections = revision
+        .sections()
+        .iter()
+        .map(SectionSnapshotV1::from)
+        .collect();
+    reordered.revision = revision;
+    Ok(reordered)
+}
+
 #[derive(Debug)]
 pub enum FunnelCommandError {
     InvalidParameters,
@@ -476,6 +824,9 @@ pub enum FunnelCommandError {
     MissingIdempotencyKey,
     InvalidIdempotencyKey,
     IdempotencyPayloadMismatch,
+    DuplicateSectionOrder,
+    StaleEditorRevision,
+    EditorRevisionLimitReached,
     FunnelNotFound,
     UnknownCommand,
     Domain(DomainError),
@@ -491,8 +842,15 @@ impl FunnelCommandError {
             Self::MissingField | Self::MissingIdempotencyKey => "validation/missing_field",
             Self::Domain(_) | Self::Render(_) => "internal/unexpected",
             Self::IdempotencyPayloadMismatch => "conflict/idempotency_payload_mismatch",
+            Self::DuplicateSectionOrder => "validation/order_duplicate",
+            Self::StaleEditorRevision => "conflict/edit_stale_revision",
+            Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
             Self::FunnelNotFound => "not_found/funnel",
             Self::Storage(RepositoryError::FunnelLimitReached) => "conflict/funnel_limit_reached",
+            Self::Storage(RepositoryError::StaleEditorRevision) => "conflict/edit_stale_revision",
+            Self::Storage(RepositoryError::EditorRevisionLimitReached) => {
+                "conflict/revision_limit_reached"
+            }
             Self::UnknownCommand => "validation/operation_not_supported",
             Self::Storage(RepositoryError::FunnelNotFound) => "not_found/funnel",
             Self::Storage(RepositoryError::InvalidJson | RepositoryError::InvalidField(_)) => {

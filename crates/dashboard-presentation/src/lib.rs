@@ -80,6 +80,14 @@ mod tests {
 
         assert!(html.contains("<body><div id=\"main\"><div class=\"app-shell\""));
         assert_eq!(html.matches("id=\"main\"").count(), 1);
+        let streaming_init = html
+            .find("window.hydrate_queue=[]")
+            .expect("Dioxus streaming initializer");
+        let app_root = html.find("<div id=\"main\">").expect("app root");
+        assert!(
+            streaming_init < app_root,
+            "streaming must initialize before SSR chunks"
+        );
     }
 
     #[test]
@@ -123,7 +131,8 @@ mod tests {
     fn funnel_detail_route_renders_the_validated_identifier() {
         let html = render_document("/funnels/demo-1").expect("funnel detail route");
 
-        assert!(html.contains("Funnel overview"));
+        assert!(html.contains("Funnel editor"));
+        assert!(html.contains("Funnel ID:"));
         assert!(html.contains("demo-1"));
         assert!(html.contains("id=\"main\""));
     }

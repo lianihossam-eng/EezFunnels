@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-009 Funnel list + creation (`feat/009_funnel_list`)
+Current phase: PR-010 Visual editor (`feat/010_editor`; local gates pass, accessibility and RustSec fixes await Sol re-review and hosted CI on the updated head)
 Last updated: 2026-10-14
 
 ## Phases
@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (source `ca4cead` invalidates pre-delete list loads and starts a fresh GET; check, full CI, and direct smoke pass; hosted CI pending exact source/evidence head)
+- [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -28,6 +28,14 @@ Last updated: 2026-10-14
 - [ ] PR-020 Release v0.1.0
 
 ## Verified locally
+
+PR-010's reviewed head `44a62f1a4089b9ea289c225cb696d68e7d102a1a` had a live-region gap during
+keyboard reorder; the current working-tree fix announces the moved section and its 1-based position.
+The locked Rustls dependency was updated from 0.23.45 to 0.23.46, resolving four RustSec advisories
+without adding a manifest dependency or changing contracts. Fresh `cargo xtask check`, `cargo xtask
+ci`, migration, focused state, and browser checks pass. The updated source fingerprint and logs are
+recorded in `plan/verification/PR-010`. PR-010 remains open pending Sol re-review and hosted CI on
+the pushed head. No remote migration, deployment, or merge occurred.
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
 implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository
@@ -179,9 +187,14 @@ Exact-source `cargo xtask check`, full `cargo xtask ci`, and independent local W
 
 Codex follow-up comment `4268403530` on head `654cd3f` found that a list GET begun before successful DELETE could restore the removed funnel. Source commit `ca4ceada2dd090a423bb85ac12b4f13abfc0d118` adds a delete reducer transition that advances the list generation and removes the card, then starts an authoritative GET. The regression `a_list_response_started_before_delete_cannot_restore_the_deleted_funnel` failed before the reducer fix when the stale response restored the item (exit 101) and passes afterward. On the exact source, `cargo xtask check`, full `cargo xtask ci`, and standalone local Wrangler smoke all pass; the dashboard-presentation suite has 16 tests, CI audits 345 dependencies against 1,310 advisories with zero findings, and smoke leaves port 8787 closed with no live Wrangler/workerd process. Fingerprint and logs are in `plan/verification/PR-009/execution.txt` and `results.json`. No merge or remote deployment occurred.
 
-The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
-completion and native Escape behavior remain unverified in a headless browser. No remote binding
-was used, and no remote migration or deployment was run.
+Closure update (2026-10-14; supersedes the older pending-CI and no-merge notes above): final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042` passed hosted CI run `38535569606`; Sol and @codex reviews were clean and all 12 review threads were resolved. PR #10 merged at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`. No remote migration or deployment was run.
+
+PR-010 adds the visual editor, strict stored-snapshot decoding, inert server-rendered previews, and receipt-backed immutable revision saves guarded by an independent editor head. `cargo xtask check` and `cargo xtask ci` pass locally; the dashboard presentation suite has 22 tests. The migration harness proves fail-closed backfill for zero or multiple revisions. The hydrated browser suite verifies pointer and keyboard reorder, preview isolation, save replay, stale-save conflict, a shared-idempotency-key race across funnels, and route changes during a delayed save; axe reports zero critical findings. Review fixes ensure receipt ownership gates every save write and keyboard cancellation cannot invalidate a locked save. Local implementation and integration proof is recorded in `plan/verification/PR-010/execution.txt` and `results.json`. Hosted CI and PR review remain pending. No remote migration or deployment ran.
+
+PR-009's local CRUD smoke validates API behavior and does not execute browser JavaScript. Its
+separate browser hydration and native create-dialog Escape checks remained unverified at closure.
+PR-010's browser suite now verifies editor hydration and keyboard interaction. No remote binding,
+migration, or deployment was used for these local checks.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -233,6 +246,4 @@ was used, and no remote migration or deployment was run.
 
 ## Next action
 
-Push PR-009 and its refreshed evidence, verify hosted CI on the exact final head, then request one
-@codex review. Sol review and merge follow only after Codex is clean and hosted CI is green on that
-exact SHA. Do not deploy remotely.
+Review PR-010, resolve hosted CI and review findings, then merge only after those gates pass. Do not apply remote migrations or deploy as part of this PR. Tag @codex on PRs when requesting reviews, edits, or questions.

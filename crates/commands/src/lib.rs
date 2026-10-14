@@ -92,3 +92,6 @@ mod theme_set_tests;
 
 #[cfg(test)]
 mod funnel_create_tests;
+
+#[cfg(test)]
+mod editor_tests;

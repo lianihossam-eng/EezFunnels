@@ -1,0 +1,25 @@
+PR-010 visual editor verification
+Evidence refreshed: 2026-10-14T14:17:15Z
+Branch: feat/010_editor
+Base commit: cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc
+Verified source commit: 762669153260927858d015f9e3f7f94cd861e678
+Source fingerprint: 72887af28e76c0d5f3ca42ff85eb55b60db91b74cbc36bc8ba5a8c8753770da1 (116 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
+
+Validation:
+- `cargo xtask check`: exit 0. Formatting, Clippy with warnings denied, all workspace tests, and layer validation passed. Test counts: API 12, commands 10, dashboard presentation 22, domain 13, render 34, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log: `/tmp/eezfunnel-pr010-check-luna-final.log`; SHA-256: `2676706591162601852b050bd4000e93a2396148edf25b7b17d511759c53463f`.
+- `cargo xtask ci`: exit 0. The WASM build, dashboard asset generation, and local PR-009 CRUD smoke passed; cargo audit loaded 1,314 advisories and scanned 346 locked dependencies with zero findings. No yanked-status timeout recurred. Log: `/tmp/eezfunnel-pr010-ci-luna-after.log`; SHA-256: `285091caa87721847bf5b4044ccc2dd122a344d0290ef535e232573c9604fc28`.
+- `npm run test:pr010:migration`: exit 0. Zero- and multi-revision fixtures failed atomically; valid one-revision head backfill passed. Log: `/tmp/eezfunnel-pr010-migration-luna-final.log`; SHA-256: `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `cargo test -p eez-dashboard-presentation --locked editor_pointer_and_keyboard_reordering_share_the_exact_order_transition`: exit 0. The regression asserts `Moved Features to position 2 of 3.`. Before the fix, the state and browser repros retained the pickup announcement; after the fix both pass. Log: `/tmp/eezfunnel-pr010-accessibility-luna-final.log`; SHA-256: `054d7da35a8572d3fb75a86b19449ff189889a5b1d8548a2b73f3b1d5dbadf90`.
+- `npm run test:pr010:browser`: exit 0. Navigation, pointer and keyboard reorder, the exact polite live-region movement announcement, save replay, stale CAS, delayed route change, preview sandbox/CSP/network checks, and race checks passed. Axe critical findings: 0. Log: `/tmp/eezfunnel-pr010-browser-luna-final.log`; SHA-256: `15f655407383005a67acd8957eb86b66fb5ebda6eaa0c0ec853cb75dc30fc837`.
+- `node --check scripts/test-pr010-browser.mjs` and `git diff --check`: passed.
+
+Dependency audit:
+- Cargo.lock updates only `rustls` from 0.23.45 to 0.23.46, the minimum patched version for RUSTSEC-2026-0346, -0347, -0348, and -0349. The resolved native dependency path is `eez-dashboard-presentation -> dioxus -> dioxus-fullstack -> reqwest -> rustls`. No manifest dependency, API, or contract changed.
+- The initial audit reported those four advisories and four crates.io yanked-status lookup timeouts. Those were timeouts, not a confirmed HTTP 403 or evidence that a crate was yanked. The fresh required CI audit after the lockfile update exited 0 with no findings or timeout errors.
+
+Review and delivery:
+- Sol's PR review found the keyboard movement announcement gap described above. The state and browser regressions now cover it; Sol's re-review is pending the updated push.
+- The project-local no-comments scan and independent Comment Sicko scan reported no new source/test comments, TODO/FIXME markers, lint suppressions, workaround prose, comment deletions, or restorations.
+- Prior hosted CI run `38548733352` passed on `44a62f1a4089b9ea289c225cb696d68e7d102a1a`. Hosted CI on the updated source is pending push.
+- No remote D1 migration, Cloudflare deployment, publish, or merge occurred.

@@ -21,6 +21,8 @@ pub enum RepositoryError {
     FunnelNotFound,
     FunnelLimitReached,
     RevisionLimitReached,
+    StaleEditorRevision,
+    EditorRevisionLimitReached,
 }
 
 impl Display for RepositoryError {
@@ -39,6 +41,10 @@ impl Display for RepositoryError {
             Self::FunnelNotFound => formatter.write_str("not_found/funnel"),
             Self::FunnelLimitReached => formatter.write_str("conflict/funnel_limit_reached"),
             Self::RevisionLimitReached => formatter.write_str("validation/revision_limit_reached"),
+            Self::StaleEditorRevision => formatter.write_str("conflict/edit_stale_revision"),
+            Self::EditorRevisionLimitReached => {
+                formatter.write_str("conflict/revision_limit_reached")
+            }
         }
     }
 }
@@ -73,6 +79,31 @@ pub struct RevisionRecord {
     pub data_json: String,
     pub render_manifest_json: String,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct EditorRevisionRecord {
+    pub funnel_id: String,
+    pub name: String,
+    pub slug: String,
+    pub updated_at: String,
+    pub head_revision_id: String,
+    pub revision: RevisionRecord,
+}
+
+#[derive(Deserialize)]
+struct EditorRevisionJoin {
+    funnel_id: String,
+    name: String,
+    slug: String,
+    updated_at: String,
+    head_revision_id: String,
+    revision_id: String,
+    revision_funnel_id: String,
+    schema_version: i64,
+    data_json: String,
+    render_manifest_json: String,
+    revision_created_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -252,6 +283,22 @@ impl<'a> Repository<'a> {
                 &result,
             ])?;
 
+        let insert_editor_head = self
+            .database
+            .prepare(
+                "INSERT INTO funnel_editor_heads (funnel_id, revision_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ?) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))",
+            )
+            .bind_refs([
+                &revision_funnel_id,
+                &revision_id,
+                &revision_id,
+                &revision_funnel_id,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+
         if let Err(error) = self
             .database
             .batch(vec![
@@ -259,6 +306,7 @@ impl<'a> Repository<'a> {
                 insert_receipt,
                 insert_funnel,
                 insert_revision,
+                insert_editor_head,
             ])
             .await
         {
@@ -336,6 +384,208 @@ impl<'a> Repository<'a> {
         }
     }
 
+    pub async fn save_editor_revision(
+        &self,
+        funnel_id: &str,
+        expected_revision_id: &str,
+        revision: &NewRevision,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        validate_required_field(expected_revision_id, "expected_revision_id")?;
+        validate_required_field(&revision.id, "revision_id")?;
+        validate_required_field("funnel.revision.save", "command_id")?;
+        validate_idempotency_key(idempotency_key)?;
+        if revision.funnel_id != funnel_id {
+            return Err(RepositoryError::InvalidField("funnel_id"));
+        }
+        validate_schema_version(revision.schema_version)?;
+        validate_payload_size(&revision.data_json)?;
+        self.validate_json(&revision.data_json).await?;
+        self.validate_json(&revision.render_manifest_json).await?;
+        self.validate_json(payload_json).await?;
+        self.validate_json(result_json).await?;
+
+        if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+            return Ok(classify_receipt(
+                receipt,
+                "funnel.revision.save",
+                payload_json,
+            ));
+        }
+
+        let funnel_id_value = D1Type::Text(funnel_id);
+        let expected_id_value = D1Type::Text(expected_revision_id);
+        let revision_id_value = D1Type::Text(&revision.id);
+        let revision_funnel_id = D1Type::Text(&revision.funnel_id);
+        let schema_version = D1Type::Integer(
+            i32::try_from(revision.schema_version)
+                .map_err(|_| RepositoryError::InvalidField("schema_version"))?,
+        );
+        let data_json = D1Type::Text(&revision.data_json);
+        let manifest_json = D1Type::Text(&revision.render_manifest_json);
+        let retained_limit = D1Type::Integer(MAX_REVISIONS_RETAINED);
+        let key = D1Type::Text(idempotency_key);
+        let command = D1Type::Text("funnel.revision.save");
+        let payload = D1Type::Text(payload_json);
+        let result = D1Type::Text(result_json);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
+        let insert_receipt = self
+            .database
+            .prepare(
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+            )
+            .bind_refs([
+                &key,
+                &command,
+                &payload,
+                &result,
+                &funnel_id_value,
+                &expected_id_value,
+                &funnel_id_value,
+                &retained_limit,
+            ])?;
+
+        let owns_receipt = "EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))";
+        let insert_revision = self
+            .database
+            .prepare(format!(
+                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND {owns_receipt}"
+            ))
+            .bind_refs([
+                &revision_id_value,
+                &revision_funnel_id,
+                &schema_version,
+                &data_json,
+                &manifest_json,
+                &funnel_id_value,
+                &expected_id_value,
+                &funnel_id_value,
+                &retained_limit,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+
+        let new_head_revision = D1Type::Text(&revision.id);
+        let update_head = self
+            .database
+            .prepare(format!(
+                "UPDATE funnel_editor_heads SET revision_id = ? WHERE funnel_id = ? AND revision_id = ? AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ?) AND {owns_receipt}"
+            ))
+            .bind_refs([
+                &new_head_revision,
+                &funnel_id_value,
+                &expected_id_value,
+                &revision_id_value,
+                &funnel_id_value,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+        let update_funnel = self
+            .database
+            .prepare(format!(
+                "UPDATE funnels SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND {owns_receipt}"
+            ))
+            .bind_refs([
+                &funnel_id_value,
+                &funnel_id_value,
+                &new_head_revision,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+
+        if let Err(error) = self
+            .database
+            .batch(vec![
+                delete_expired_receipts,
+                insert_receipt,
+                insert_revision,
+                update_head,
+                update_funnel,
+            ])
+            .await
+        {
+            if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+                return Ok(classify_receipt(
+                    receipt,
+                    "funnel.revision.save",
+                    payload_json,
+                ));
+            }
+            return self
+                .classify_editor_save_failure(funnel_id, expected_revision_id, error)
+                .await;
+        }
+
+        if let Some(receipt) = self.active_receipt(idempotency_key).await? {
+            return Ok(classify_receipt(
+                receipt,
+                "funnel.revision.save",
+                payload_json,
+            ));
+        }
+        self.classify_editor_save_failure(
+            funnel_id,
+            expected_revision_id,
+            Error::RustError("editor save did not advance the head".to_owned()),
+        )
+        .await
+    }
+
+    async fn classify_editor_save_failure(
+        &self,
+        funnel_id: &str,
+        expected_revision_id: &str,
+        failure: Error,
+    ) -> RepositoryResult<MutationResult> {
+        if self.get_funnel(funnel_id).await?.is_none() {
+            return Err(RepositoryError::FunnelNotFound);
+        }
+        match self.get_editor_head(funnel_id).await? {
+            Some(head) if head != expected_revision_id => {
+                return Err(RepositoryError::StaleEditorRevision)
+            }
+            None => return Err(RepositoryError::FunnelNotFound),
+            Some(_) => {}
+        }
+        if self.revision_count(funnel_id).await? >= i64::from(MAX_REVISIONS_RETAINED) {
+            return Err(RepositoryError::EditorRevisionLimitReached);
+        }
+        Err(failure.into())
+    }
+
+    async fn get_editor_head(&self, funnel_id: &str) -> RepositoryResult<Option<String>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        self.database
+            .prepare("SELECT revision_id FROM funnel_editor_heads WHERE funnel_id = ?")
+            .bind_refs([&funnel_id])?
+            .first::<String>(Some("revision_id"))
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn revision_count(&self, funnel_id: &str) -> RepositoryResult<i64> {
+        let funnel_id = D1Type::Text(funnel_id);
+        self.database
+            .prepare("SELECT COUNT(*) AS revision_count FROM revisions WHERE funnel_id = ?")
+            .bind_refs([&funnel_id])?
+            .first::<i64>(Some("revision_count"))
+            .await?
+            .ok_or_else(|| {
+                Error::RustError("funnel revision count could not be read".to_owned()).into()
+            })
+    }
+
     async fn active_receipt(
         &self,
         idempotency_key: &str,
@@ -361,6 +611,63 @@ impl<'a> Repository<'a> {
             .first::<FunnelRecord>(None)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn get_editor_revision(
+        &self,
+        funnel_id: &str,
+    ) -> RepositoryResult<Option<EditorRevisionRecord>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        let row = self
+            .database
+            .prepare(
+                "SELECT funnels.id AS funnel_id, funnels.name, funnels.slug, funnels.updated_at, funnel_editor_heads.revision_id AS head_revision_id, revisions.id AS revision_id, revisions.funnel_id AS revision_funnel_id, revisions.schema_version, revisions.data_json, revisions.render_manifest_json, revisions.created_at AS revision_created_at FROM funnels JOIN funnel_editor_heads ON funnel_editor_heads.funnel_id = funnels.id JOIN revisions ON revisions.id = funnel_editor_heads.revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ?",
+            )
+            .bind_refs([&funnel_id])?
+            .first::<EditorRevisionJoin>(None)
+            .await?;
+        row.map(|row| {
+            validate_schema_version(row.schema_version)?;
+            Ok(EditorRevisionRecord {
+                funnel_id: row.funnel_id,
+                name: row.name,
+                slug: row.slug,
+                updated_at: row.updated_at,
+                head_revision_id: row.head_revision_id,
+                revision: RevisionRecord {
+                    id: row.revision_id,
+                    funnel_id: row.revision_funnel_id,
+                    schema_version: row.schema_version,
+                    data_json: row.data_json,
+                    render_manifest_json: row.render_manifest_json,
+                    created_at: row.revision_created_at,
+                },
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn get_owned_revision(
+        &self,
+        funnel_id: &str,
+        revision_id: &str,
+    ) -> RepositoryResult<Option<RevisionRecord>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        let revision_id = D1Type::Text(revision_id);
+        let revision = self
+            .database
+            .prepare(
+                "SELECT id, funnel_id, schema_version, data_json, render_manifest_json, created_at FROM revisions WHERE funnel_id = ? AND id = ?",
+            )
+            .bind_refs([&funnel_id, &revision_id])?
+            .first::<RevisionRecord>(None)
+            .await?;
+        if let Some(revision) = revision {
+            validate_schema_version(revision.schema_version)?;
+            Ok(Some(revision))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn list_funnels(&self) -> RepositoryResult<Vec<FunnelRecord>> {
@@ -496,9 +803,9 @@ impl<'a> Repository<'a> {
         let deleted = self
             .database
             .prepare(
-                "DELETE FROM revisions WHERE id = ? AND NOT EXISTS (SELECT 1 FROM funnels WHERE published_revision_id = ?) RETURNING id",
+                "DELETE FROM revisions WHERE id = ? AND NOT EXISTS (SELECT 1 FROM funnels WHERE published_revision_id = ?) AND NOT EXISTS (SELECT 1 FROM funnel_editor_heads WHERE revision_id = ?) RETURNING id",
             )
-            .bind_refs([&id, &id])?
+            .bind_refs([&id, &id, &id])?
             .first::<String>(Some("id"))
             .await?;
         Ok(deleted.is_some())

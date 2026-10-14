@@ -4,6 +4,8 @@ use serde_json::Value;
 
 use crate::app::{WebApp, WebAppProps};
 
+const INITIALIZE_DIOXUS_STREAMING: &str = "window.hydrate_queue=[];window.dx_hydrate=(id,data,debug_types,debug_locations)=>{const decoded=atob(data);const bytes=Uint8Array.from(decoded,(character)=>character.charCodeAt(0));if(window.hydration_callback)window.hydration_callback(id,bytes,debug_types,debug_locations);else window.hydrate_queue.push([id,bytes,debug_types,debug_locations])};";
+
 pub fn render_document(path: &str) -> Option<String> {
     if !is_dashboard_path(path) {
         return None;
@@ -25,7 +27,7 @@ pub fn render_document(path: &str) -> Option<String> {
         .replace('<', "\\u003c");
 
     Some(format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#f5f7fb\"><title>Eez Funnel</title><link rel=\"stylesheet\" href=\"/assets/dashboard.css\"></head><body><div id=\"main\">{rendered_app}</div><script id=\"dioxus-hydration-data\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"/assets/bootstrap.js\"></script></body></html>"
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#f5f7fb\"><title>Eez Funnel</title><link rel=\"stylesheet\" href=\"/assets/dashboard.css\"><script>{INITIALIZE_DIOXUS_STREAMING}</script></head><body><div id=\"main\">{rendered_app}</div><script id=\"dioxus-hydration-data\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"/assets/bootstrap.js\"></script></body></html>"
     ))
 }
 

@@ -352,6 +352,12 @@ fn is_css_identifier_byte(byte: u8) -> bool {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Renderer;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenderPolicy {
+    Published,
+    Preview,
+}
+
 impl Renderer {
     pub const fn new() -> Self {
         Self
@@ -368,7 +374,21 @@ impl Renderer {
         if content_config_hash(contents) != revision.render_manifest().config_hash() {
             return Err(RenderError::SectionContentHashMismatch);
         }
-        self.render_document(revision, theme, contents)
+        self.render_document(revision, theme, contents, RenderPolicy::Published)
+    }
+
+    pub fn render_preview(
+        &self,
+        revision: &Revision,
+        theme: &ThemeTokens,
+        contents: &BTreeMap<String, SectionContent>,
+    ) -> Result<String, RenderError> {
+        validate_render_context(revision, theme)?;
+        validate_section_contents(revision, contents)?;
+        if content_config_hash(contents) != revision.render_manifest().config_hash() {
+            return Err(RenderError::SectionContentHashMismatch);
+        }
+        self.render_document(revision, theme, contents, RenderPolicy::Preview)
     }
 
     fn render_document(
@@ -376,11 +396,16 @@ impl Renderer {
         revision: &Revision,
         theme: &ThemeTokens,
         contents: &BTreeMap<String, SectionContent>,
+        policy: RenderPolicy,
     ) -> Result<String, RenderError> {
         let manifest = revision.render_manifest();
 
-        let mut html = String::from(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Funnel</title>",
+        let csp = match policy {
+            RenderPolicy::Published => "",
+            RenderPolicy::Preview => "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">",
+        };
+        let mut html = format!(
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">{csp}<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Funnel</title>"
         );
         if manifest.renderer_version() == RENDERER_VERSION {
             html.push_str("<style>");
@@ -415,7 +440,7 @@ impl Renderer {
             let content = contents
                 .get(section.id().as_str())
                 .ok_or(RenderError::MissingSectionContent)?;
-            html.push_str(&render_section(section, content));
+            html.push_str(&render_section(section, content, policy));
         }
         html.push_str("</main></body></html>");
         Ok(html)
@@ -663,7 +688,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn render_section(section: &Section, content: &SectionContent) -> String {
+fn render_section(section: &Section, content: &SectionContent, policy: RenderPolicy) -> String {
     let section_type = match section.section_type() {
         SectionType::Hero => "hero",
         SectionType::Features => "features",
@@ -675,11 +700,11 @@ fn render_section(section: &Section, content: &SectionContent) -> String {
         "<section class=\"section section-{section_type}\" data-section-id=\"{}\" data-section-type=\"{section_type}\" data-order=\"{}\">{}</section>",
         escape_html_attribute(section.id().as_str()),
         section.order(),
-        render_section_content(content),
+        render_section_content(content, policy),
     )
 }
 
-fn render_section_content(content: &SectionContent) -> String {
+fn render_section_content(content: &SectionContent, policy: RenderPolicy) -> String {
     let mut html = String::new();
     match content {
         SectionContent::Hero {
@@ -693,12 +718,12 @@ fn render_section_content(content: &SectionContent) -> String {
             html.push_str(&escape_html_text(title));
             html.push_str("</h1><p>");
             html.push_str(&escape_html_text(subtitle));
-            html.push_str("</p><a class=\"button\" href=\"");
-            html.push_str(&escape_html_attribute(cta_url));
-            html.push_str("\">");
+            html.push_str("</p>");
+            push_link_opening(&mut html, "button", cta_url, policy);
             html.push_str(&escape_html_text(cta_label));
-            html.push_str("</a></div>");
-            if let Some(image) = image {
+            push_link_closing(&mut html, policy);
+            html.push_str("</div>");
+            if let Some(image) = image.as_ref().filter(|_| policy == RenderPolicy::Published) {
                 html.push_str("<img class=\"hero-image\" src=\"");
                 html.push_str(&escape_html_attribute(&image.url));
                 html.push_str("\" alt=\"");
@@ -744,20 +769,20 @@ fn render_section_content(content: &SectionContent) -> String {
             html.push_str(&escape_html_text(title));
             html.push_str("</h2><p>");
             html.push_str(&escape_html_text(body));
-            html.push_str("</p><a class=\"button\" href=\"");
-            html.push_str(&escape_html_attribute(cta_url));
-            html.push_str("\">");
+            html.push_str("</p>");
+            push_link_opening(&mut html, "button", cta_url, policy);
             html.push_str(&escape_html_text(cta_label));
-            html.push_str("</a></div>");
+            push_link_closing(&mut html, policy);
+            html.push_str("</div>");
         }
         SectionContent::Footer { links, copyright } => {
             html.push_str("<nav aria-label=\"Footer\"><ul>");
             for link in links {
-                html.push_str("<li><a href=\"");
-                html.push_str(&escape_html_attribute(&link.url));
-                html.push_str("\">");
+                html.push_str("<li>");
+                push_link_opening(&mut html, "", &link.url, policy);
                 html.push_str(&escape_html_text(&link.label));
-                html.push_str("</a></li>");
+                push_link_closing(&mut html, policy);
+                html.push_str("</li>");
             }
             html.push_str("</ul></nav><small>");
             html.push_str(&escape_html_text(copyright));
@@ -765,6 +790,36 @@ fn render_section_content(content: &SectionContent) -> String {
         }
     }
     html
+}
+
+fn push_link_opening(html: &mut String, class: &str, url: &str, policy: RenderPolicy) {
+    match policy {
+        RenderPolicy::Published if class.is_empty() => {
+            html.push_str("<a href=\"");
+            html.push_str(&escape_html_attribute(url));
+            html.push_str("\">");
+        }
+        RenderPolicy::Published => {
+            html.push_str("<a class=\"");
+            html.push_str(class);
+            html.push_str("\" href=\"");
+            html.push_str(&escape_html_attribute(url));
+            html.push_str("\">");
+        }
+        RenderPolicy::Preview if class.is_empty() => html.push_str("<span>"),
+        RenderPolicy::Preview => {
+            html.push_str("<span class=\"");
+            html.push_str(class);
+            html.push_str("\">");
+        }
+    }
+}
+
+fn push_link_closing(html: &mut String, policy: RenderPolicy) {
+    match policy {
+        RenderPolicy::Published => html.push_str("</a>"),
+        RenderPolicy::Preview => html.push_str("</span>"),
+    }
 }
 
 fn escape_html_attribute(value: &str) -> String {
