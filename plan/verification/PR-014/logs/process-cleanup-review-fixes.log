@@ -1,6 +1,6 @@
-Post-validation local runtime cleanup
-Command: ps -eo pid,stat,args | awk '$2 !~ /Z/ && /([w]rangler|[w]orkerd)/ {print}'
-Result: no active wrangler/workerd processes
+Post-final-validation local runtime cleanup
+Command: ps -eo pid,stat,args | awk '$2 !~ /Z/ && $0 ~ /[w]rangler|[w]orkerd/ {print}'
+Result: no active wrangler/workerd processes (no output)
 Command: ss -ltnp | awk '/:(8787|8790|8791|8792)\b/ {print}'
-Result: no local Worker listeners on the smoke ports
+Result: no local Worker listeners on smoke ports (no output)
 Historical defunct workerd entries were excluded by process state and are not active processes.

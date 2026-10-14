@@ -1,36 +1,31 @@
 PR-014 publication review-fix verification
-Evidence refreshed: 2026-10-14T19:45:15Z
+Evidence refreshed: 2026-10-14T20:10:45Z
 Branch: feat/014_publish
 Base commit: 41f0df225650c32878dfb14000f7116784aad765 (exact origin/main SHA)
-Verified source commit: aa15f1b67aef4490f3e758b090207caf493c2c93
-Source fingerprint: 05e755a2396c3486833786bd5475734b498b5e7afe42ef76c31f70b992a3ee93 (123 files)
-Fingerprint inputs and exact log hashes are recorded in results.json.
+Verified source commit: 07a02418eed6e111d1aa221bb07739b4da4df697
+Source fingerprint: 7b85f4311c5e28118eda715ab65483d3b81d73653d72260127cb3722d3bb3840 (123 files)
+Fingerprint inputs and compressed/raw log hashes are recorded in results.json.
 
 Review fixes:
-- A publication pointer update now requires `changes() = 1` from the immediately preceding receipt claim in the same D1 batch. An old matching receipt can replay its stored response but cannot reapply a pointer write after a distinct publish/unpublish. Local D1/Worker checks cover publish A -> unpublish B -> late replay A and unpublish B -> publish C -> late replay B.
-- Publish `revision_id` and unpublish `expected_published_revision_id` presence is classified before typed decode. Active receipts still take precedence over fresh validation results.
+- A publication pointer update requires the same D1 batch to claim one new receipt row (`changes() = 1`). A matching active receipt from an earlier batch replays its stored result without reapplying its pointer mutation. Local Worker/D1 regressions cover publish A -> unpublish B -> late replay A and unpublish B -> publish C -> late replay B.
+- Publish `revision_id`, unpublish `expected_published_revision_id`, and public-read `slug` presence are checked before typed decode, preserving `validation/missing_field`. Active mutation receipts still take precedence over fresh validation errors.
 - Unsupported stored schema on public GET maps to `validation/schema_version_unsupported` / HTTP 400.
-- Route IDs are injected from the route and parsed before mutation; a fresh invalid route returns `not_found/funnel`, while a reused key is classified before the route error. It cannot mutate state.
-- D18 records these receipt and error-classification boundaries. No public contract, database migration/schema, dependency, lockfile, or renderer changed; the 16 KiB request body ceiling is unchanged.
+- Route IDs are injected from the route before typed parsing; a fresh invalid route returns `not_found/funnel` without mutation, and a reused key is classified before the route error.
+- D18 records the receipt and route classification boundaries. The 16 KiB request body cap and C-01/C-04 behavior remain unchanged.
 
-Validation (exit 0):
-- `source .project-tools/env.sh && cargo xtask check`: all workspace tests passed. Log `cargo-check-review-fixes.log.gz`; compressed SHA-256 `f7a0b40e73ab909763665e2bce97a69e9acbc0a8524065b7274ed387651d4956`; raw SHA-256 `75a3b8f6b788ff10d29284f5c64d70dcb86bd87488ed2c171327251839f3100c`.
-- `source .project-tools/env.sh && cargo xtask ci`: workspace checks/tests, WASM/assets, local Worker/D1 smoke, and cargo-audit passed. RustSec loaded 1,314 advisories, scanned 346 locked dependencies, and found zero vulnerabilities. Smoke marker includes replay no-reapply, missing-field classification, route receipt precedence, and unsupported-schema 400. Log `cargo-ci-review-fixes.log.gz`; compressed SHA-256 `769328d42252a61f5a4f18e6c2926e92e1c1fae2a0f90437cde3635c517eb116`; raw SHA-256 `00865b76eef7d284847c1a4ba5162aa2544002d72d7354b857e95bae38719516`.
-- `source .project-tools/env.sh && cargo test -p eez-commands publication_tests -- --nocapture`: 6 passed. Log `focused-publication-tests-review-fixes.log.gz`; compressed SHA-256 `086f7054009c526773e88830044f22021d6580b4285ccc554b786845d7b9e9eb`; raw SHA-256 `eb709f4f094b6df4c29601190a73e0f5dd81bd0fd809ab5ce80a74876d2ec886`.
-- `source .project-tools/env.sh && bash scripts/smoke-pr009.sh`: Worker/D1 regressions for both late retries, required fields, route receipt classification and unsupported schema passed. Log `pr009-publication-findings-smoke.log.gz`; compressed SHA-256 `85ebb882e4bc63f0418dbd594423c430f46b445f5c74dc7cb4c8a03c5fcaaeeb`; raw SHA-256 `d078c4a7c56d2cf96098649555e7b758a397b7139260369bd8a4b5968d2d6085`.
-- `source .project-tools/env.sh && bash scripts/smoke-pr003.sh`: repository-level product probe verified both late-retry interleavings; `local_mode=only` and port cleanup passed. Log `pr003-replay-smoke-review-fixes.log.gz`; compressed SHA-256 `1354a8fecce06dba0b42c0bc9d073d55162babfeb35f7cea05e5f4e370efe194`; raw SHA-256 `873d0d89110aabdde647520b48684c0ec4ccf0c3d0e8cb054699c59c3b9c9fa1`.
-- `npm run test:pr010:migration`: PASS; existing migration preflight and valid-backfill harness passed, PR-014 introduces no migration. Log `migration-review-fixes.log.gz`; compressed SHA-256 `bc472ce6d89e316da2f8b148cde030a1df6da13fd4b77b1164fe64ca36a7a0ef`; raw SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
-- `npm run test:pr010:browser`: PASS; prior editor/responsive browser suite remains green and critical axe findings=0. Log `browser-review-fixes.log.gz`; compressed SHA-256 `fbb31c477a0be5a97ee74f9fa013c054c222baf3aac7600dabd96d6d4628dd55`; raw SHA-256 `2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250`.
-- `git diff --check`, `cargo fmt --all -- --check`, and frozen-surface comparison: PASS. No migrations, frozen contracts, package/Cargo manifests, lockfiles, or renderer files changed.
-- Post-test cleanup found no active wrangler/workerd process and no local Worker listeners; historical defunct workerd entries were excluded. Exact check is in `process-cleanup-review-fixes.log`.
+Validation (all commands exit 0 unless explicitly noted):
+- `source .project-tools/env.sh && cargo xtask check`: workspace tests passed, command suite 25 tests. Log `logs/cargo-check-final.log.gz`; compressed SHA-256 `5a584135d1de8a1ffa3b813c129be4d801b197003d6907d21286aaf00c86903a`; raw SHA-256 `931838cc6fc725ab309128c156747b22a077ded570bf572890ac91863e378c20`.
+- `source .project-tools/env.sh && cargo xtask ci`: workspace checks/tests, WASM/assets, local Worker/D1 smoke, and cargo-audit passed. RustSec loaded 1,314 advisories, scanned 346 locked dependencies, and found zero vulnerabilities. Smoke marker includes late-replay no-reapply, required-field classification, route receipt precedence, and unsupported-schema 400. Log `logs/cargo-ci-final.log.gz`; compressed SHA-256 `664e26e384aa5e35a3187667160ae623ce62e86483adb6dd81e079a49b78b139`; raw SHA-256 `39d74d9ea8ede93d4b911329fe4dd8eaec6db952e613b89c962fb2022ffb3cd4`.
+- `source .project-tools/env.sh && cargo test -p eez-commands publication_tests -- --nocapture`: 7 passed, including missing public slug. Log `logs/focused-publication-final.log.gz`; compressed SHA-256 `6b23f7e631087d25022ceda14fba23d51d0f387943fa83ab5a8cef77b35466f7`; raw SHA-256 `3828215579f8c918ede7b74bf2e7298461661f0630e8bc43428d147a81cf9929`.
+- `source .project-tools/env.sh && bash scripts/smoke-pr003.sh`: both repository-level late-replay interleavings pass; product probe passes, local-only mode and port cleanup pass. Log `logs/pr003-final.log.gz`; compressed SHA-256 `edc09c948d403e3141df06940255c3fa4b2e7085dad877a80f525c326a6a994a`; raw SHA-256 `63b2d7fb4919010cbc56c3ac05310d46ee619ed563dc2046501bb02a026b3d55`.
+- `npm run test:pr010:migration`: migration preflight and valid-backfill harness pass; PR-014 introduces no migration. Log `logs/migration-final.log.gz`; compressed SHA-256 `bc472ce6d89e316da2f8b148cde030a1df6da13fd4b77b1164fe64ca36a7a0ef`; raw SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `npm run test:pr010:browser`: existing hydrated PR-010–013 browser coverage passes, including responsive snapshots, inspector/editor controls, and critical axe findings=0. Log `logs/browser-final.log.gz`; compressed SHA-256 `fbb31c477a0be5a97ee74f9fa013c054c222baf3aac7600dabd96d6d4628dd55`; raw SHA-256 `2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250`.
+- `git diff --check`, `cargo fmt --all -- --check`, and frozen-surface comparison pass. No frozen contracts, migrations, manifests, lockfiles, or renderer files changed. Post-test cleanup found zero active Worker processes and zero smoke-port listeners.
 
-Regression evidence (gzip is lossless; `gzip -cd` restores the captured bytes):
-- `late-replay-regression-red.log.gz`: captures the failure before the SQL guard. Compressed SHA-256 `593744f7e48234177cd320ade89fd9e5a1004b28341d0c8dbdb1e143fc8530d6`; raw SHA-256 `98f165eb2978acf8de20a797dd586e5c006cb94a48524043ddda1309b60b77df`.
-- `late-replay-regression-green.log.gz`: captures the local Worker/D1 pass after it. Compressed SHA-256 `be7cc9fa6d74265dbef369329b33ce672578c8508f2f663700e595669de0df93`; raw SHA-256 `f82050014e6f6c74a3d1cdb7d847ded56234008fe3ec42420648a99e733d484a`.
-- `missing-required-fields-red.log.gz`: captures the old invalid_json classification. Compressed SHA-256 `c94ce1ee572480ff373d6275203eb62b229f4d10218f0443b4f9748aedd7ab4e`; raw SHA-256 `da6e302f3392ae9527008452d97ff4ef01ba256a1c36b7ef719a3c46db67d77f`.
-- `missing-required-fields-green.log.gz`: captures the corrected missing_field behavior. Compressed SHA-256 `bba7999dfaf68d5d88a0f7fce72a081fb2832f739e761f60ec8b0808437ca437`; raw SHA-256 `e2d5935b2f9155619da9c8664699aa58d4a4d05d12413d9058aece9ba8411147`.
+Regression evidence:
+- `logs/public-slug-missing-red.log.gz` captures `{}` returning `validation/invalid_json` before the fix (expected `validation/missing_field`), exit 101; compressed SHA-256 `afdff0553d331b6bcdaeb0c98171afc880ca665ea37ceeee06647a559e95f37f`. The green 7-test publication log above contains the focused regression.
+- Lossless red/green evidence for the receipt ABA and required publication fields is retained in the earlier `late-replay-regression-*` and `missing-required-fields-*` logs.
 
-Audit and delivery boundaries:
-- Direct diff audit found zero added comments, TODO/FIXME markers, or lint suppressions. Manual boundary audit covers all four review findings.
-- Full `/no-comments` and `/interrogate` independent-agent workflows were not run because PR-014 instruction prohibited delegation. GPT-6.1-Sol remains the sole GitHub PR reviewer/merger.
-- Previous hosted run 38623947750 passed on the old PR head; fresh hosted CI is pending the updated push. No remote D1 action, deployment, PR review, or merge was run.
+Audit and delivery limits:
+- Direct diff scans found zero added comments, TODO/FIXME markers, or lint suppressions. Manual boundary checks cover the five findings. Full `/no-comments` and `/interrogate` independent-agent workflows were not run because PR-014 prohibited delegation; GPT-6.1-Sol remains the only PR reviewer/merger.
+- Previous hosted run 38623947750 passed on the old head; fresh hosted CI is pending the updated push. No remote D1 operation, deployment, PR review, or merge ran.
