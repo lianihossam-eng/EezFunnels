@@ -3,6 +3,15 @@ use eez_domain::FunnelBlueprint;
 use serde::Deserialize;
 #[cfg(feature = "browser")]
 use serde_json::Value;
+#[cfg(any(feature = "browser", test))]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "browser")]
+use uuid::Uuid;
+
+#[cfg(feature = "browser")]
+type IdempotencyKeyState = PreparedIdempotencyKey;
+#[cfg(not(feature = "browser"))]
+type IdempotencyKeyState = String;
 
 #[derive(Clone, PartialEq, Routable)]
 #[rustfmt::skip]
@@ -116,12 +125,12 @@ fn Funnels() -> Element {
     let mut blueprint = use_signal(|| FunnelBlueprint::Tripwire);
     let mut create_pending = use_signal(|| false);
     let mut create_error = use_signal(|| None::<String>);
-    let mut create_idempotency_key = use_signal(|| None::<String>);
+    let mut create_idempotency_key = use_signal(|| None::<IdempotencyKeyState>);
     let mut create_success = use_signal(|| None::<String>);
     let mut delete_target = use_signal(|| None::<String>);
     let mut delete_pending = use_signal(|| false);
     let mut delete_error = use_signal(|| None::<String>);
-    let mut delete_idempotency_key = use_signal(|| None::<String>);
+    let mut delete_idempotency_key = use_signal(|| None::<IdempotencyKeyState>);
     let mut delete_idempotency_target = use_signal(|| None::<String>);
 
     #[cfg(feature = "browser")]
@@ -275,12 +284,32 @@ fn Funnels() -> Element {
                         "blueprint": request_blueprint.id(),
                     }).to_string();
                     #[cfg(feature = "browser")]
-                    let retry_key = create_idempotency_key();
+                    let prepared_key = match prepare_idempotency_key(
+                        "POST",
+                        "/api/funnels",
+                        Some(&request_body),
+                        create_idempotency_key(),
+                    ) {
+                        Ok(prepared_key) => prepared_key,
+                        Err(()) => {
+                            create_error.set(Some("The browser could not prepare a retry-safe request.".to_owned()));
+                            create_pending.set(false);
+                            return;
+                        }
+                    };
+                    #[cfg(feature = "browser")]
+                    create_idempotency_key.set(Some(prepared_key.clone()));
                     #[cfg(feature = "browser")]
                     spawn(async move {
-                        match api_request("POST", "/api/funnels", Some(request_body), retry_key).await {
+                        match api_request(
+                            "POST",
+                            "/api/funnels",
+                            Some(request_body),
+                            Some(prepared_key.clone()),
+                        ).await {
                             Ok(response) if response.status == 201 => {
                                 let message = created_summary(&response.body, &request_name);
+                                let _ = clear_idempotency_storage(&prepared_key);
                                 create_success.set(Some(message));
                                 create_open.set(false);
                                 funnel_name.set(String::new());
@@ -294,7 +323,7 @@ fn Funnels() -> Element {
                                 }
                             }
                             Ok(response) => {
-                                create_idempotency_key.set(response.idempotency_key);
+                                create_idempotency_key.set(Some(prepared_key.clone()));
                                 create_error.set(Some(error_message(&response.body)));
                             }
                             Err(()) => create_error.set(Some("The funnel could not be created. Try again.".to_owned())),
@@ -388,11 +417,31 @@ fn Funnels() -> Element {
                                 #[cfg(feature = "browser")]
                                 let response_funnel_id = target_id.clone();
                                 #[cfg(feature = "browser")]
-                                let retry_key = delete_idempotency_key();
+                                let prepared_key = match prepare_idempotency_key(
+                                    "DELETE",
+                                    &request_path,
+                                    None,
+                                    delete_idempotency_key(),
+                                ) {
+                                    Ok(prepared_key) => prepared_key,
+                                    Err(()) => {
+                                        delete_error.set(Some("The browser could not prepare a retry-safe request.".to_owned()));
+                                        delete_pending.set(false);
+                                        return;
+                                    }
+                                };
+                                #[cfg(feature = "browser")]
+                                delete_idempotency_key.set(Some(prepared_key.clone()));
                                 #[cfg(feature = "browser")]
                                 spawn(async move {
-                                    match api_request("DELETE", &request_path, None, retry_key).await {
+                                    match api_request(
+                                        "DELETE",
+                                        &request_path,
+                                        None,
+                                        Some(prepared_key.clone()),
+                                    ).await {
                                         Ok(response) if response.status == 200 => {
+                                            let _ = clear_idempotency_storage(&prepared_key);
                                             let current = load_state();
                                             if let Some(mut items) = current {
                                                 items.retain(|item| item.id != response_funnel_id);
@@ -404,7 +453,7 @@ fn Funnels() -> Element {
                                             delete_idempotency_target.set(None);
                                         }
                                         Ok(response) => {
-                                            delete_idempotency_key.set(response.idempotency_key);
+                                            delete_idempotency_key.set(Some(prepared_key.clone()));
                                             delete_error.set(Some(error_message(&response.body)));
                                         }
                                         Err(()) => delete_error.set(Some("The funnel could not be deleted. Try again.".to_owned())),
@@ -444,7 +493,76 @@ struct FunnelListResponse {
 struct BrowserResponse {
     status: u16,
     body: String,
-    idempotency_key: Option<String>,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedIdempotencyKey {
+    key: String,
+    slot: String,
+}
+
+#[cfg(any(feature = "browser", test))]
+fn idempotency_storage_slot(method: &str, path: &str, body: Option<&str>) -> String {
+    let body = body
+        .map(|body| {
+            serde_json::from_str::<serde_json::Value>(body)
+                .unwrap_or_else(|_| serde_json::Value::String(body.to_owned()))
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let canonical_request = serde_json::json!([method, path, body]).to_string();
+    let digest = Sha256::digest(canonical_request.as_bytes());
+    let digest_hex = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            output.push(HEX[(byte >> 4) as usize] as char);
+            output.push(HEX[(byte & 0x0f) as usize] as char);
+            output
+        });
+    format!("eezfunnel:idempotency:v1:{method}:{path}:{digest_hex}")
+}
+
+#[cfg(feature = "browser")]
+fn prepare_idempotency_key(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    retry_key: Option<PreparedIdempotencyKey>,
+) -> Result<PreparedIdempotencyKey, ()> {
+    let slot = idempotency_storage_slot(method, path, body);
+    let storage = web_sys::window()
+        .ok_or(())?
+        .session_storage()
+        .map_err(|_| ())?
+        .ok_or(())?;
+    let stored_key = storage
+        .get_item(&slot)
+        .map_err(|_| ())?
+        .and_then(|stored| Uuid::parse_str(&stored).ok().map(|key| key.to_string()));
+    let retry_key = retry_key
+        .filter(|retry_key| retry_key.slot == slot)
+        .and_then(|retry_key| {
+            Uuid::parse_str(&retry_key.key)
+                .ok()
+                .map(|key| key.to_string())
+        });
+    let key = retry_key
+        .or(stored_key)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    storage.set_item(&slot, &key).map_err(|_| ())?;
+    Ok(PreparedIdempotencyKey { key, slot })
+}
+
+#[cfg(feature = "browser")]
+fn clear_idempotency_storage(prepared_key: &PreparedIdempotencyKey) -> Result<(), ()> {
+    web_sys::window()
+        .ok_or(())?
+        .session_storage()
+        .map_err(|_| ())?
+        .ok_or(())?
+        .remove_item(&prepared_key.slot)
+        .map_err(|_| ())
 }
 
 #[cfg(feature = "browser")]
@@ -494,18 +612,14 @@ fn error_message(body: &str) -> String {
 #[cfg(feature = "browser")]
 const BROWSER_API_REQUEST: &str = r#"
 const request = await dioxus.recv();
-let key = request.idempotency_key;
-if ((request.method === "POST" || request.method === "DELETE") && !key) {
-    key = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
 const headers = {"Accept": "application/json"};
 if (request.body !== null) headers["Content-Type"] = "application/json";
-if (key) headers["Idempotency-Key"] = key;
+if (request.idempotency_key) headers["Idempotency-Key"] = request.idempotency_key;
 try {
     const response = await fetch(request.path, {method: request.method, headers, body: request.body ?? undefined});
-    dioxus.send({status: response.status, body: await response.text(), idempotency_key: key ?? null});
+    dioxus.send({status: response.status, body: await response.text()});
 } catch (_) {
-    dioxus.send({status: 0, body: "", idempotency_key: key ?? null});
+    dioxus.send({status: 0, body: ""});
 }
 "#;
 
@@ -514,7 +628,7 @@ async fn api_request(
     method: &str,
     path: &str,
     body: Option<String>,
-    idempotency_key: Option<String>,
+    idempotency_key: Option<PreparedIdempotencyKey>,
 ) -> Result<BrowserResponse, ()> {
     let mut request = document::eval(BROWSER_API_REQUEST);
     request
@@ -522,7 +636,7 @@ async fn api_request(
             "method": method,
             "path": path,
             "body": body,
-            "idempotency_key": idempotency_key,
+            "idempotency_key": idempotency_key.map(|prepared_key| prepared_key.key),
         }))
         .map_err(|_| ())?;
     request.recv().await.map_err(|_| ())
@@ -638,6 +752,35 @@ mod tests {
         assert_eq!(
             dialog_cancel_disposition(false),
             DialogCancelDisposition::Dismiss
+        );
+    }
+
+    #[test]
+    fn idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields() {
+        let body = r#"{"name":"Offer","blueprint":"tripwire"}"#;
+        let original = idempotency_storage_slot("POST", "/api/funnels", Some(body));
+        assert_eq!(
+            original,
+            idempotency_storage_slot(
+                "POST",
+                "/api/funnels",
+                Some(r#"{ "blueprint": "tripwire", "name": "Offer" }"#),
+            )
+        );
+        assert!(!original.contains("Offer"));
+        assert!(!original.contains("tripwire"));
+        assert!(!original.contains(body));
+        assert_ne!(
+            original,
+            idempotency_storage_slot(
+                "POST",
+                "/api/funnels",
+                Some(r#"{"name":"Offer 2","blueprint":"tripwire"}"#),
+            )
+        );
+        assert_ne!(
+            original,
+            idempotency_storage_slot("DELETE", "/api/funnels/funnel-1", None)
         );
     }
 }

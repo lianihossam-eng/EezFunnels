@@ -33,6 +33,16 @@ replay returns the stored result; a key used by another command or parameter set
 `conflict/idempotency_payload_mismatch`. The API adds the current request correlation ID after the
 stored result is read, so retries retain their own request correlation without repeating effects.
 
+The browser prepares a UUID idempotency key synchronously before dispatching each create or delete
+request and stores it in `sessionStorage`. The slot names the HTTP method and API route, followed by
+a SHA-256 digest of the canonical request tuple (method, route, and canonical JSON body, or JSON
+`null` for a bodyless request). User-entered body fields never appear in the slot name, and the slot
+value contains only the UUID. This lets a retry after a lost response reuse the same key while a
+changed payload, method, or route gets an independent key. The entry remains for ambiguous
+transport/evaluator failures and non-success responses, and is removed after the dashboard receives
+a successful create/delete response. Browser session storage itself is cleared when its tab session
+ends.
+
 The dashboard's first SSR and hydration render both show the same loading state. The funnel list
 loads after hydration through same-origin API calls. Creation success reports the persisted initial
 section summary and reloads the list; deletion removes an item only after the API succeeds. This PR
