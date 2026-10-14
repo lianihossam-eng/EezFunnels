@@ -10,7 +10,8 @@ use eez_render::{
     Testimonial, ThemeTokens, RENDERER_VERSION,
 };
 use eez_storage::repository::{
-    FunnelRecord, MutationResult, NewFunnel, NewRevision, Repository, RepositoryError,
+    FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation, Repository,
+    RepositoryError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -139,6 +140,91 @@ impl FunnelDeleteCommand {
 
     pub fn funnel_id(&self) -> &str {
         &self.funnel_id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FunnelPublishCommand {
+    funnel_id: String,
+    revision_id: String,
+    pub(super) expected_published_revision_id: Option<String>,
+}
+
+impl FunnelPublishCommand {
+    const ID: &'static str = "funnel.publish";
+
+    pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if ["funnel_id", "revision_id", "expected_published_revision_id"]
+            .iter()
+            .any(|field| object.get(*field).is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.revision_id)?;
+        if let Some(expected) = &command.expected_published_revision_id {
+            validate_route_id(expected)?;
+        }
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FunnelUnpublishCommand {
+    funnel_id: String,
+    expected_published_revision_id: String,
+}
+
+impl FunnelUnpublishCommand {
+    const ID: &'static str = "funnel.unpublish";
+
+    pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if ["funnel_id", "expected_published_revision_id"]
+            .iter()
+            .any(|field| object.get(*field).is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.expected_published_revision_id)?;
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FunnelPublicReadCommand {
+    slug: String,
+}
+
+impl FunnelPublicReadCommand {
+    const ID: &'static str = "funnel.public.read";
+
+    pub(super) fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if object.get("slug").is_none() {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        if !valid_public_slug(&command.slug) {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
     }
 }
 
@@ -273,6 +359,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
     ) -> Result<Value, FunnelCommandError> {
         match command_id {
             FunnelListCommand::ID => self.execute_list(parameters).await,
+            FunnelPublicReadCommand::ID => self.execute_public_read(parameters).await,
+            FunnelPublishCommand::ID => {
+                self.execute_publish(parameters, required_idempotency_key(idempotency_key)?)
+                    .await
+            }
+            FunnelUnpublishCommand::ID => {
+                self.execute_unpublish(parameters, required_idempotency_key(idempotency_key)?)
+                    .await
+            }
             FunnelEditorReadCommand::ID => self.execute_editor_read(parameters).await,
             "funnel.editor.preview" => self.execute_editor_preview(parameters).await,
             "funnel.revision.save" => {
@@ -298,6 +393,155 @@ impl<'repo, 'database> Session<'repo, 'database> {
             items: self.repository.list_funnels().await?,
         };
         serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_publish(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelPublishCommand::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, FunnelPublishCommand::ID, None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                FunnelPublishCommand::ID,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let funnel = self
+            .repository
+            .get_funnel(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if funnel.published_revision_id != command.expected_published_revision_id
+            || funnel.published_revision_id.as_deref() == Some(&command.revision_id)
+        {
+            return Err(FunnelCommandError::StalePublishedRevision);
+        }
+        let record = self
+            .repository
+            .get_owned_revision(&command.funnel_id, &command.revision_id)
+            .await?
+            .ok_or(FunnelCommandError::RevisionNotFound)?;
+        decode_snapshot(&record, &command.funnel_id)?;
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": FunnelPublishCommand::ID,
+            "funnel_id": command.funnel_id,
+            "published_revision_id": command.revision_id,
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = self
+            .repository
+            .set_published_revision_idempotently(&PublicationMutation {
+                funnel_id: &command.funnel_id,
+                published_revision_id: Some(&command.revision_id),
+                expected_published_revision_id: command.expected_published_revision_id.as_deref(),
+                command_id: FunnelPublishCommand::ID,
+                idempotency_key,
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+            })
+            .await?;
+        mutation_result_to_value(result)
+    }
+
+    async fn execute_unpublish(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelUnpublishCommand::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, FunnelUnpublishCommand::ID, None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                FunnelUnpublishCommand::ID,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let funnel = self
+            .repository
+            .get_funnel(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if funnel.published_revision_id.as_deref() != Some(&command.expected_published_revision_id)
+        {
+            return Err(FunnelCommandError::StalePublishedRevision);
+        }
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": FunnelUnpublishCommand::ID,
+            "funnel_id": command.funnel_id,
+            "published_revision_id": null,
+            "unpublished": true,
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = self
+            .repository
+            .set_published_revision_idempotently(&PublicationMutation {
+                funnel_id: &command.funnel_id,
+                published_revision_id: None,
+                expected_published_revision_id: Some(&command.expected_published_revision_id),
+                command_id: FunnelUnpublishCommand::ID,
+                idempotency_key,
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+            })
+            .await?;
+        mutation_result_to_value(result)
+    }
+
+    async fn execute_public_read(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
+        let command = FunnelPublicReadCommand::from_json(parameters)?;
+        let record = self
+            .repository
+            .get_published_revision_by_slug(&command.slug)
+            .await?
+            .ok_or(FunnelCommandError::SlugNotFound)?;
+        let validated = decode_snapshot(&record, &record.funnel_id)?;
+        let html =
+            Renderer::new().render(&validated.revision, &validated.theme, &validated.contents)?;
+        Ok(serde_json::json!({
+            "command_id": FunnelPublicReadCommand::ID,
+            "revision_id": record.id,
+            "html": html,
+        }))
     }
 
     async fn execute_editor_read(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
@@ -959,8 +1203,11 @@ pub enum FunnelCommandError {
     IdempotencyPayloadMismatch,
     DuplicateSectionOrder,
     StaleEditorRevision,
+    StalePublishedRevision,
     EditorRevisionLimitReached,
     FunnelNotFound,
+    RevisionNotFound,
+    SlugNotFound,
     UnknownCommand,
     Domain(DomainError),
     Render(RenderError),
@@ -977,17 +1224,27 @@ impl FunnelCommandError {
             Self::IdempotencyPayloadMismatch => "conflict/idempotency_payload_mismatch",
             Self::DuplicateSectionOrder => "validation/order_duplicate",
             Self::StaleEditorRevision => "conflict/edit_stale_revision",
+            Self::StalePublishedRevision => "conflict/publish_stale_revision",
             Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
             Self::FunnelNotFound => "not_found/funnel",
+            Self::RevisionNotFound => "not_found/revision",
+            Self::SlugNotFound => "not_found/slug",
             Self::Storage(RepositoryError::FunnelLimitReached) => "conflict/funnel_limit_reached",
             Self::Storage(RepositoryError::StaleEditorRevision) => "conflict/edit_stale_revision",
+            Self::Storage(RepositoryError::StalePublishedRevision) => {
+                "conflict/publish_stale_revision"
+            }
             Self::Storage(RepositoryError::EditorRevisionLimitReached) => {
                 "conflict/revision_limit_reached"
             }
             Self::UnknownCommand => "validation/operation_not_supported",
             Self::Storage(RepositoryError::FunnelNotFound) => "not_found/funnel",
+            Self::Storage(RepositoryError::RevisionNotFound) => "not_found/revision",
             Self::Storage(RepositoryError::InvalidJson | RepositoryError::InvalidField(_)) => {
                 "validation/invalid_json"
+            }
+            Self::Storage(RepositoryError::UnsupportedSchemaVersion(_)) => {
+                "validation/schema_version_unsupported"
             }
             Self::Storage(_) => "external/unavailable",
             Self::Internal => "internal/unexpected",
@@ -1064,6 +1321,15 @@ fn validate_route_id(id: &str) -> Result<(), FunnelCommandError> {
         return Err(FunnelCommandError::InvalidParameters);
     }
     Ok(())
+}
+
+fn valid_public_slug(slug: &str) -> bool {
+    (1..=128).contains(&slug.len())
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
 }
 
 fn slug_from_name_and_id(name: &str, id: &str) -> String {

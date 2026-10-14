@@ -95,3 +95,6 @@ mod funnel_create_tests;
 
 #[cfg(test)]
 mod editor_tests;
+
+#[cfg(test)]
+mod publication_tests;
