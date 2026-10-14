@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-012 Undo/redo (`feat/012_history`; PR #13 open; local gates pass; fix-head hosted CI pending)
+Current phase: PR-012 Undo/redo (`feat/012_history`; PR #13 open; local gates and evidence pass; hosted CI/review state tracked on the current PR head)
 Last updated: 2026-10-14
 
 ## Phases
@@ -17,7 +17,7 @@ Last updated: 2026-10-14
 - [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
-- [ ] PR-012 Undo/redo (`feat/012_history`; PR #13 open; source fix `1c7b40b` passes local gates; refreshed hosted CI and Sol re-review pending)
+- [ ] PR-012 Undo/redo (`feat/012_history`; PR #13 open; source fixes `1c7b40b` and `b0cd5ed` pass local gates; hosted CI and Sol re-review are required on the current PR head)
 - [ ] PR-013 Responsive preview
 - [ ] PR-014 Publication /f/:slug
 - [ ] PR-015 Command registry
@@ -183,14 +183,19 @@ records these semantics. Source commit `1c7b40b41779a3e57756182818c7de31fcacec50
 identical history announcements by alternating text between two persistent spans in the atomic polite
 region. The browser regression first failed on the second same-field undo (expected two live-region
 mutations, observed one), then passed for consecutive undo and redo transitions with restored values.
-It verifies DOM mutations and text; assistive-technology speech delivery is not verified. `cargo xtask check`, `cargo xtask ci`, the local migration harness, and hydrated Worker/browser suite pass, including
-the 100 edits / undo 50 / redo 50 regression; the browser suite reports zero critical axe findings.
+It verifies DOM mutations and text; assistive-technology speech delivery is not verified. The follow-up
+history-boundary fix consumes recognized Ctrl+Z/Ctrl+Y in the editor before attempting an app transition,
+including empty undo/redo directions; its hydrated regression verifies the input value and input-event
+count stay unchanged at both boundaries while ordinary history remains usable. `cargo xtask check`,
+`cargo xtask ci`, the local migration harness, presentation tests, and hydrated Worker/browser suite pass,
+including the 100 edits / undo 50 / redo 50 regression; the browser suite reports zero critical axe findings.
 Hosted run `38598159776` initially failed only at the PR-009 process-cleanup fixture; the supported
 failed-job rerun completed successfully on old head `0ac87e5267c4bb6390717100b247be1429ddcd54` in
-job `115971746548`. The new fix head requires fresh hosted CI after push. PR #13 is open at
+job `115971746548`. The new boundary-fix head requires fresh hosted CI after push. PR #13 is open at
 https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`; Sol review remains pending.
-Fresh interrogate found zero actionable code findings, and the no-comments audit found none. Exact
-logs and source fingerprint are in `plan/verification/PR-012/`.
+Fresh two-reviewer interrogate found zero actionable findings, and no-comments found no comments,
+actionable TODO/FIXME markers, suppressions, or workaround prose. Exact source-fingerprint evidence
+is recorded in `plan/verification/PR-012/`.
 
 The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
 Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel

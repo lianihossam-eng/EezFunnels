@@ -1,22 +1,28 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
      Running `target/debug/xtask check`
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+    Checking eez-dashboard-presentation v0.1.0 (/workspace/EezFunnels/crates/dashboard-presentation)
+    Checking eez-dashboard v0.1.0 (/workspace/EezFunnels/apps/dashboard)
+    Checking eez-api v0.1.0 (/workspace/EezFunnels/apps/api)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s
+   Compiling eez-dashboard-presentation v0.1.0 (/workspace/EezFunnels/crates/dashboard-presentation)
+   Compiling eez-dashboard v0.1.0 (/workspace/EezFunnels/apps/dashboard)
+   Compiling eez-api v0.1.0 (/workspace/EezFunnels/apps/api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.51s
      Running unittests src/lib.rs (target/debug/deps/eez_api-6311c3b0c833e000)
 
 running 12 tests
-test errors::tests::every_contract_error_has_a_stable_category_and_status ... ok
-test errors::tests::unclassified_errors_require_an_alert ... ok
-test errors::tests::workspace_capacity_error_matches_the_d14_decision ... ok
 test errors::tests::storage_failures_propagate_as_safe_external_errors ... ok
+test errors::tests::unclassified_errors_require_an_alert ... ok
+test errors::tests::every_contract_error_has_a_stable_category_and_status ... ok
 test errors::tests::internal_responses_hide_details_and_keep_correlation_id ... ok
-test host::tests::allowlist_accepts_only_exact_hosts_and_ports ... ok
+test errors::tests::workspace_capacity_error_matches_the_d14_decision ... ok
 test host::tests::allowlist_compares_hostnames_without_case_sensitivity ... ok
+test host::tests::allowlist_accepts_only_exact_hosts_and_ports ... ok
 test host::tests::empty_or_wildcard_entries_do_not_allow_hosts ... ok
-test tests::missing_correlation_id_is_generated_and_written_to_headers ... ok
 test tests::empty_correlation_id_is_replaced_and_written_to_headers ... ok
-test tests::nonempty_correlation_id_is_preserved_in_headers ... ok
+test tests::missing_correlation_id_is_generated_and_written_to_headers ... ok
 test tests::overlength_correlation_id_is_replaced_and_written_to_headers ... ok
+test tests::nonempty_correlation_id_is_preserved_in_headers ... ok
 
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -37,11 +43,11 @@ test editor_tests::inspector_schema_exposes_all_five_controls_and_existing_repea
 test editor_tests::inspector_applies_sparse_typed_changes_and_round_trips_v1_as_v2 ... ok
 test editor_tests::strict_decoder_reconstructs_and_preflights_valid_initial_snapshot ... ok
 test editor_tests::v1_decoder_rejects_duplicate_keys_before_order_save_transcoding ... ok
-test editor_tests::strict_decoder_rejects_unknown_fields_versions_manifest_mismatch_and_duplicate_orders ... ok
 test funnel_create_tests::create_and_delete_commands_report_missing_required_fields ... ok
 test funnel_create_tests::create_command_rejects_unknown_fields_and_unbounded_names ... ok
-test editor_tests::v1_order_only_snapshot_encoding_stays_v1_and_v2_unknown_fields_fail_closed ... ok
+test editor_tests::strict_decoder_rejects_unknown_fields_versions_manifest_mismatch_and_duplicate_orders ... ok
 test funnel_create_tests::funnel_blueprint_catalog_is_closed_and_stable ... ok
+test editor_tests::v1_order_only_snapshot_encoding_stays_v1_and_v2_unknown_fields_fail_closed ... ok
 test theme_set_tests::theme_set_parses_stable_json_and_rejects_unknown_theme_ids ... ok
 test funnel_create_tests::tripwire_creation_prepares_a_renderable_three_section_initial_revision ... ok
 test theme_set_tests::theme_set_returns_a_new_renderable_revision_without_mutating_the_source ... ok
@@ -59,109 +65,109 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running unittests src/lib.rs (target/debug/deps/eez_dashboard_presentation-f31c178ace55478d)
 
 running 34 tests
+test routes::editor::tests::definitive_client_save_error_unlocks_controls_without_retrying_same_request ... ok
 test routes::editor::tests::editor_history_stays_locked_for_retryable_and_stale_saves ... ok
 test routes::editor::tests::clearing_nullable_attribution_submits_null_but_required_text_stays_empty_string ... ok
-test routes::editor::tests::editor_keeps_one_hundred_setting_edits_undoable_and_redoable ... ok
-test routes::editor::tests::definitive_client_save_error_unlocks_controls_without_retrying_same_request ... ok
-test routes::editor::tests::editor_preview_discards_old_generations_and_preserves_last_good_frame_on_error ... ok
 test routes::editor::tests::editor_pointer_and_keyboard_reordering_share_the_exact_order_transition ... ok
+test routes::editor::tests::editor_preview_discards_old_generations_and_preserves_last_good_frame_on_error ... ok
 test routes::editor::tests::editor_new_edit_discards_redo_history ... ok
 test routes::editor::tests::editor_save_waits_until_keyboard_reorder_is_dropped_or_canceled ... ok
 test routes::editor::tests::editor_undo_distinguishes_missing_changes_from_nullable_values ... ok
-test routes::editor::tests::keyboard_cancel_cannot_invalidate_an_in_flight_save ... ok
 test routes::editor::tests::image_control_clears_or_updates_one_typed_value_and_preserves_other_properties ... ok
-test routes::editor::tests::old_save_responses_cannot_mutate_a_different_route_or_revision ... ok
+test routes::editor::tests::keyboard_cancel_cannot_invalidate_an_in_flight_save ... ok
 test routes::editor::tests::keyboard_reorder_is_one_history_edit_and_escape_records_none ... ok
+test routes::editor::tests::old_save_responses_cannot_mutate_a_different_route_or_revision ... ok
 test routes::editor::tests::preset_preview_updates_inherited_color_and_explicit_old_color_stays_dirty ... ok
+test routes::editor::tests::setting_history_announcement_replaces_stale_reorder_text ... ok
 test routes::editor::tests::schema_setting_edits_preview_and_save_without_changing_order_only_requests ... ok
 test routes::editor::tests::successful_editor_save_adopts_its_revision_as_a_clean_base ... ok
 test routes::editor::tests::successful_save_clears_history_and_locks_undo_while_in_flight ... ok
-test routes::editor::tests::setting_history_announcement_replaces_stale_reorder_text ... ok
 test routes::tests::a_list_response_started_before_delete_cannot_restore_the_deleted_funnel ... ok
 test routes::tests::create_name_limit_matches_the_command_utf8_byte_limit ... ok
-test routes::tests::idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields ... ok
-test routes::tests::stale_funnel_responses_do_not_replace_the_newer_list_state ... ok
+test routes::editor::tests::editor_keeps_one_hundred_setting_edits_undoable_and_redoable ... ok
 test routes::tests::native_dialog_cancel_stays_open_until_pending_mutation_finishes ... ok
+test routes::tests::stale_funnel_responses_do_not_replace_the_newer_list_state ... ok
 test routes::tests::successful_create_closes_and_enables_form_before_unresolved_list_refresh ... ok
 test routes::tests::unsuccessful_create_responses_clear_pending_without_refreshing ... ok
+test routes::tests::idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields ... ok
 test tests::dashboard_renderer_rejects_unowned_and_extra_paths ... ok
 test routes::tests::create_fields_are_disabled_while_a_request_is_pending ... ok
 test tests::funnel_detail_route_rejects_invalid_identifiers ... ok
 test routes::tests::create_fields_explain_when_multibyte_name_exceeds_command_byte_limit ... ok
+test tests::dashboard_root_renders_a_hydratable_shell ... ok
 test tests::create_dialog_has_a_native_backdrop_for_modal_interaction ... ok
 test tests::funnel_detail_route_renders_the_validated_identifier ... ok
-test tests::dashboard_root_renders_a_hydratable_shell ... ok
-test tests::hydration_mount_wraps_the_server_rendered_app_root ... ok
 test tests::funnels_route_renders_its_page_inside_the_shared_shell ... ok
+test tests::hydration_mount_wraps_the_server_rendered_app_root ... ok
 
 test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
      Running unittests src/lib.rs (target/debug/deps/eez_domain-c6e57437473d65ec)
 
 running 13 tests
+test tests::compatibility_registry_accepts_v1_and_rejects_missing_or_unsupported_schema ... ok
 test tests::failed_publish_preserves_the_current_pointer ... ok
 test tests::publication_state_errors_do_not_expose_implementation_details ... ok
-test tests::compatibility_registry_accepts_v1_and_rejects_missing_or_unsupported_schema ... ok
 test tests::publish_succeeds_from_a_hydrated_published_baseline ... ok
 test tests::revision_requires_a_manifest_for_its_own_id ... ok
 test tests::revision_snapshot_is_deterministic_and_exposes_only_immutable_accessors ... ok
 test tests::revision_limit_from_c01_config_accepts_100_sections_and_rejects_101 ... ok
 test tests::section_validation_rejects_unknown_types_missing_ids_and_duplicate_orders ... ok
 test tests::stale_publish_from_a_hydrated_state_keeps_the_loaded_pointer ... ok
-test theme_tests::theme_fork_updates_the_manifest_without_mutating_the_source_revision ... ok
-test theme_tests::preset_ids_round_trip_through_json_and_unknown_ids_are_rejected ... ok
 test theme_tests::preset_catalog_has_five_stable_ids_and_distinct_tokens ... ok
+test theme_tests::preset_ids_round_trip_through_json_and_unknown_ids_are_rejected ... ok
+test theme_tests::theme_fork_updates_the_manifest_without_mutating_the_source_revision ... ok
 test tests::one_hundred_concurrent_publications_from_one_baseline_have_one_winner ... ok
 
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 
      Running unittests src/lib.rs (target/debug/deps/eez_render-7e17d6ccfaeed623)
 
 running 35 tests
-test renderer_tests::accepts_css_identifiers_that_contain_the_letters_url ... ok
 test renderer_tests::css_function_rejection_requires_a_css_function_token ... ok
+test renderer_tests::accepts_css_identifiers_that_contain_the_letters_url ... ok
 test renderer_tests::escapes_untrusted_render_manifest_attribute_values ... ok
-test renderer_tests::injects_theme_tokens_as_sorted_css_custom_properties ... ok
 test renderer_tests::dispatches_each_supported_section_type_in_revision_order ... ok
+test renderer_tests::injects_theme_tokens_as_sorted_css_custom_properties ... ok
 test renderer_tests::hero_image_placeholder_styles_do_not_change_published_renderer_v2_bytes ... ok
 test renderer_tests::rejects_a_manifest_with_a_tampered_theme_version ... ok
-test renderer_tests::preset_theme_visual_snapshots_match_tokens_and_renderer_stylesheet ... ok
 test renderer_tests::rejects_renderer_and_theme_versions_outside_the_manifest ... ok
-test renderer_tests::preview_blocks_navigation_and_remote_images_with_restrictive_policy ... ok
 test renderer_tests::rejects_unsafe_token_names_and_values ... ok
+test renderer_tests::preset_theme_visual_snapshots_match_tokens_and_renderer_stylesheet ... ok
+test renderer_tests::rendering_is_deterministic_for_the_render_manifest ... ok
+test renderer_tests::preview_blocks_navigation_and_remote_images_with_restrictive_policy ... ok
 test renderer_tests::theme_version_is_bound_to_normalized_token_contents ... ok
 test renderer_tests::trims_line_breaks_at_css_value_boundaries_before_emission ... ok
-test renderer_tests::rendering_is_deterministic_for_the_render_manifest ... ok
 test section_content_tests::absolute_https_scheme_is_case_insensitive ... ok
 test section_content_tests::content_changes_are_rejected_for_the_same_revision_manifest ... ok
-test section_content_tests::content_lists_are_bounded_by_c01_max_blocks_per_section ... ok
 test section_content_tests::content_requires_exact_id_coverage_and_matching_section_types ... ok
+test section_content_tests::content_lists_are_bounded_by_c01_max_blocks_per_section ... ok
 test section_content_tests::content_text_escapes_markup_delimiters_and_replaces_controls ... ok
-test section_content_tests::every_url_sink_rejects_unsafe_schemes ... ok
 test section_content_tests::cta_section_snapshot_renders_a_button ... ok
+test section_content_tests::features_section_snapshot_renders_a_grid ... ok
+test section_content_tests::every_url_sink_rejects_unsafe_schemes ... ok
 test section_content_tests::footer_section_snapshot_renders_links_and_copyright ... ok
 test section_content_tests::hero_section_snapshot_renders_content_and_optional_image ... ok
-test section_content_tests::features_section_snapshot_renders_a_grid ... ok
 test section_content_tests::render_context_errors_precede_content_validation_errors ... ok
 test section_content_tests::relative_https_spellings_are_rejected_for_links_and_images ... ok
-test section_content_tests::content_config_hash_is_stable_and_binds_ids_variants_and_all_fields ... ok
 test section_content_tests::renderer_v2_styles_nonempty_footer_links_using_emitted_markup ... ok
 test section_content_tests::section_content_accepts_same_worker_root_relative_paths ... ok
 test section_content_tests::section_content_enforces_an_aggregate_one_mib_utf8_budget ... ok
+test section_content_tests::content_config_hash_is_stable_and_binds_ids_variants_and_all_fields ... ok
 test section_content_tests::section_content_rejects_urls_outside_same_origin_or_https_policy ... ok
 test section_content_tests::testimonials_section_snapshot_renders_a_list ... ok
 test section_content_tests::ten_thousand_generated_urls_fail_closed_across_url_boundaries ... ok
 test section_content_tests::ten_thousand_generated_section_text_values_cannot_inject_markup ... ok
 test renderer_tests::ten_thousand_generated_html_and_css_inputs_cannot_inject_active_markup ... ok
 
-test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
 
      Running unittests src/lib.rs (target/debug/deps/eez_storage-3419f5e6eacabdbe)
 
 running 5 tests
 test repository::tests::required_fields_reject_empty_and_whitespace_values ... ok
-test repository::tests::schema_version_one_is_supported ... ok
 test repository::tests::unsupported_schema_versions_are_rejected ... ok
+test repository::tests::schema_version_one_is_supported ... ok
 test theme_seed_tests::theme_seed_migration_uses_the_domain_catalog_token_json ... ok
 test repository::tests::payload_limit_counts_utf8_bytes ... ok
 
@@ -171,8 +177,8 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 running 26 tests
 test layers::tests::equal_layer_dependency_is_rejected ... ok
-test layers::tests::external_path_dependency_cannot_hide_a_workspace_backdoor ... ok
 test layers::tests::classification_cannot_rewrite_frozen_architecture ... ok
+test layers::tests::external_path_dependency_cannot_hide_a_workspace_backdoor ... ok
 test layers::tests::invalid_classifications_are_rejected ... ok
 test layers::tests::live_metadata_accepts_descending_renamed_path_edge ... ok
 test layers::tests::malformed_metadata_fails_without_crashing ... ok
@@ -201,7 +207,7 @@ test tests::failing_cargo_status_is_preserved ... ok
 test layers::tests::live_registry_patch_helper_cannot_hide_a_workspace_backdoor ... ok
 test layers::tests::live_metadata_covers_renamed_optional_target_dev_and_build_edges ... ok
 
-test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
 
      Running tests/bootstrap_cli.rs (target/debug/deps/bootstrap_cli-6e85c083ae30d94d)
 
@@ -209,7 +215,7 @@ running 2 tests
 test xtask_unknown_task_and_broken_cargo_exit_nonzero ... ok
 test eez_cli_help_is_honest_and_unsupported_commands_fail ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
 
      Running tests/pr001_cli.rs (target/debug/deps/pr001_cli-d6ecce9c98c0dfb7)
 
@@ -221,7 +227,7 @@ test unix::ci_propagates_worker_wasm_failure_and_skips_later_gates ... ok
 test unix::ci_runs_all_gates_in_order_and_propagates_audit_failure ... ok
 test unix::ci_runs_funnel_smoke_before_audit ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
 
    Doc-tests eez_api
 

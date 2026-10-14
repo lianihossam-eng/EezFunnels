@@ -1,12 +1,12 @@
 {
   "task": "PR-012",
-  "evidence_refreshed_at_utc": "2026-10-14T17:43:30Z",
+  "evidence_refreshed_at_utc": "2026-10-14T17:57:25Z",
   "branch": "feat/012_history",
   "base_commit": "d783e3f3a9e43ff7c74cb245250852cf74073600",
-  "verified_source_commit": "1c7b40b41779a3e57756182818c7de31fcacec50",
-  "source_commit_role": "The implementation, browser regression, and D17 announcement behavior are committed in the verified source commit. The following evidence/status commit changes only plan/verification metadata and plan/STATUS.md; those are excluded from the source fingerprint.",
+  "verified_source_commit": "b0cd5edb903d22ef9bd53dcdfe529b748723126e",
+  "source_commit_role": "The implementation, boundary regression, D17 shortcut behavior, and announcement behavior are committed in the verified source commit. The following evidence/status commit changes only plan/verification metadata and plan/STATUS.md; those are excluded from the source fingerprint.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "2b94facbc8cffa1441c4d5d25171a8a2bac6c5b322241959f4a96e6715587a20",
+  "source_fingerprint_sha256": "b2d520d418a4b0e1e77d64535cad4cae4f7cf10d5129ed154878ce11ef277a0c",
   "source_file_count": 121,
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
@@ -50,7 +50,7 @@
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "20a89afe5ddcbfe0d627d79a160532a3cfb302c83264945fd8d83200873b3035",
     "crates/dashboard-presentation/src/routes.rs": "a3900cb44d8999e53624cfb32f6c7ee06261cd139fa30963f2dac964d61527f3",
-    "crates/dashboard-presentation/src/routes/editor.rs": "d64d382f539150d5f05c0b6b353ad93ecb47b70979253fe46f538960da2579cc",
+    "crates/dashboard-presentation/src/routes/editor.rs": "e79768a402dff35db68ec6d99d91b296a6fec762798f33bccc74240885993ccc",
     "crates/dashboard-presentation/src/routes/editor/inspector.rs": "900b53a992d84ea5364ec8fd7183b7851dd199255244bd3e3416701e7222e9e9",
     "crates/dashboard-presentation/src/ssr.rs": "2731cce4be71bb41a50b4c0d04e1c395a0494c6ee69006569e0ae1984cbbad2e",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
@@ -101,7 +101,7 @@
     "plan/decisions/D14_workspace_funnel_limit.md": "36e7cc5c2b6cc7aa1af3264d56c8d7aa2104a417669d01e49e0bb5cf63a92207",
     "plan/decisions/D15_visual_editor.md": "85c06296b35c8fe847554fd71c29b49a2db1ded39fb01e04bdda905bd1756260",
     "plan/decisions/D16_settings_inspector.md": "4497a55412336ba8f6c8c647777bbfef22da6d1e2e54a0f28e42692d25af59e4",
-    "plan/decisions/D17_editor_history.md": "d744bb57b93acec8012bbbc38d0232d2f112eb790e71c0e8893ac3fffd380e54",
+    "plan/decisions/D17_editor_history.md": "37c03580cfbf61338810fd4ade20fdcadfdc539d351873ec945bb0ff73f64b0a",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -121,7 +121,7 @@
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
     "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
-    "scripts/test-pr010-browser.mjs": "1365c52716f27ba0be578e014c33c4d4b8d3cbb566b784332378810fbb4e90ec",
+    "scripts/test-pr010-browser.mjs": "758c14afa2bb6992281c89d781ec910ce67dc2babcdc2054ae3a04eca0abba97",
     "scripts/test-pr010-migration.py": "ac3faaa4f07c2e5d2fb52a2165e1780edb6552b48848d93df406f3ea28ea9fd3",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
@@ -140,7 +140,7 @@
   "implementation": {
     "decision": "plan/decisions/D17_editor_history.md",
     "history": "Closed JSON paths cover section order and sparse typed settings changes; history retains the latest 100 edits, drops the redo tail on a new edit, and checks expected JSON before applying a diff.",
-    "boundaries": "Preview/effective values, selection, request state, and server output stay outside history. Undo/redo use the existing preview generation path. Successful save and route load reset history; save/retryable/stale/keyboard-drag states lock it.",
+    "boundaries": "Preview/effective values, selection, request state, and server output stay outside history. Undo/redo use the existing preview generation path. Successful save and route load reset history; save/retryable/stale/keyboard-drag states lock history transitions. Recognized unshifted Ctrl+Z/Ctrl+Y shortcuts are still prevented at the editor boundary when app history is empty or locked, so native input undo/redo cannot mutate input values or browser redo state.",
     "announcements": "Undo/redo announces order action, moved section, and resulting position, or the schema label for setting diffs. An incrementing revision alternates identical text between two persistent spans in the same atomic polite live region to create a fresh DOM mutation.",
     "compatibility": "No API request, persistence format, contract, migration, idempotency, retry, editor-head CAS, dependency, or lockfile changes.",
     "frozen_contracts_changed": false,
@@ -148,22 +148,22 @@
     "lockfile_changed": false,
     "sql_migrations_added": false,
     "remote_operations": false,
-    "announcement_verification_limit": "Hydrated browser coverage verifies MutationObserver callbacks and live-region text for consecutive identical undo/redo messages. It does not verify screen-reader speech delivery."
+    "announcement_verification_limit": "Hydrated browser coverage verifies MutationObserver callbacks and live-region text for repeated consecutive undo/redo messages. It does not verify screen-reader speech delivery."
   },
   "checks": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && cargo xtask check",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/xtask-check.log",
-      "log_sha256": "ddf3fc5c141f5cc15cb8fe9997605435ca21a759d34c8f473956cd7b9530db5c",
-      "outcome": "Formatting, Clippy with warnings denied, all workspace tests, and layer validation passed on the repeated-announcement fix. Dashboard presentation has 34 passing tests."
+      "log_sha256": "0774f40326f1b98d6ff4441dcade528c9b2c416a9f2f515b5f4cb57171f97182",
+      "outcome": "PASS on the boundary fix: formatting, Clippy with warnings denied, all workspace tests, and layer validation. Dashboard presentation has 34 passing tests."
     },
     "cargo_xtask_ci": {
       "command": "source .project-tools/env.sh && cargo xtask ci",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/xtask-ci.log",
-      "log_sha256": "01d3521a34cdc254f9f632628167cec2a06afb8b8a7debfaced94beeceb72690",
-      "outcome": "Workspace checks/tests, dashboard and API WASM builds, asset generation, local D1 smoke including process cleanup, and cargo audit passed.",
+      "log_sha256": "8cae50e60a5eacf46dea94ba4895d8192c0691f2a2a9c1357cbe8748575f22e5",
+      "outcome": "PASS on the boundary fix: workspace checks/tests, dashboard and API WASM builds, asset generation, local D1 smoke including process cleanup, and cargo audit.",
       "audit": {
         "advisories_loaded": 1314,
         "locked_crate_dependencies_scanned": 346,
@@ -175,21 +175,27 @@
       "command": "source .project-tools/env.sh && cargo test -p eez-dashboard-presentation",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/presentation-tests.log",
-      "log_sha256": "eb97f5eb1a8f09c95c189e2b2b2d3a9eb6784676484fd75a18c6c2b8b6779b97",
-      "outcome": "34 tests passed, including 100 edits / undo 50 / redo 50, nullable/missing values, branch truncation, order announcements, setting announcements, keyboard grouping/cancel, and save locks/reset.",
-      "test_first": "The 100-edit test first failed with undo/redo stubs. The hydrated identical-announcement regression failed before the final revision/alternating-span fix: second Ctrl+Z expected two mutations but observed one."
+      "log_sha256": "b58fb6b265393753135177511c0c700b13195548ee596039c86b2f9187956ae8",
+      "outcome": "34 tests passed, including 100 edits / undo 50 / redo 50, nullable and missing sparse values, branch truncation, order announcements, setting announcements, keyboard grouping/cancel, and save locks/reset.",
+      "test_first": "The 100-edit test first failed with undo/redo stubs. The hydrated identical-announcement regression failed before the revision/alternating-span fix. The new history-boundary browser test failed before the prevent-default fix because Ctrl+Y at empty redo had defaultPrevented=false."
     },
     "browser_integration": {
       "command": "npm run test:pr012:browser",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/browser.log",
       "log_sha256": "a07dba6b33855ebdc2d898d4c8b4f25a59e9039a020ca7f5dfbcf44b399ec2b8",
-      "outcome": "Hydrated Worker/browser checks passed for Ctrl+Z/Ctrl+Y, preview requests, dirty/save state, order undo/redo announcements, consecutive identical setting undo/redo text mutations and restored values, existing editor interactions, and save/CAS coverage. Axe critical findings: 0. This verifies DOM mutation/text only; screen-reader speech delivery is unverified.",
+      "outcome": "PASS. Hydrated Worker/browser suite covers 100 accepted edits, Ctrl+Y at empty redo, Ctrl+Z at empty undo, unchanged input values, no input events at either app-history edge, and normal undo/redo through the boundary; it also covers consecutive same-field undo/redo announcements, preview, dirty/save, save/CAS, inspector, and editor interactions. Axe critical findings: 0. Test evidence observes DOM mutations/input events; it does not establish screen-reader speech delivery.",
       "axe_critical_findings": 0,
       "repeated_announcement_regression": {
         "transitions": 6,
         "checks": "Two same-field undos, two same-field redos, then two undos each produced a new MutationObserver record and the expected live-region message; the editor value returned to its saved baseline.",
         "assistive_technology_speech_verified": false
+      },
+      "history_boundary_regression": {
+        "test_first_failure_log": "plan/verification/PR-012/logs/history-boundary-failure-before-fix.log",
+        "test_first_failure_sha256": "dc8da1923bad55633544917a9b936dc864019c78266624b6a57ff8c24f766c39",
+        "red_behavior": "With the old handler, Ctrl+Y at the empty redo boundary was not defaultPrevented (false; assertion expected true).",
+        "green_behavior": "Both recognized shortcuts at empty history directions are defaultPrevented; they leave the input value unchanged, create no input event, and preserve subsequent app undo/redo behavior."
       }
     },
     "migration_harness": {
@@ -211,31 +217,32 @@
         "exit_code": 0,
         "log": "plan/verification/PR-012/logs/diff-check.log",
         "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "outcome": "PASS across code, D17, STATUS, and structured evidence. Captured command logs are excluded to preserve terminal output verbatim."
+        "outcome": "PASS for the complete PR diff against origin/main after the boundary fix; captured command output is empty because git diff --check emitted no diagnostics."
       },
       "frozen_surface_check": {
         "command": "git diff --exit-code origin/main -- Cargo.toml Cargo.lock migrations plan/contracts",
         "exit_code": 0,
         "log": "plan/verification/PR-012/logs/frozen-surface.log",
         "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "outcome": "No contracts, manifests/lockfiles, or migration files changed."
+        "outcome": "PASS; no contracts, manifests/lockfiles, or migration files changed."
       }
     }
   },
   "reviews": {
     "interrogate": {
       "independent_reviewers": 2,
-      "first_pass_actionable_findings": 1,
+      "first_pass_actionable_findings": 0,
       "resolved_findings": [
-        "Undo/redo of order diffs announces the action, moved section, and resulting position.",
-        "Repeated identical same-field undo/redo messages now create a fresh live-region DOM mutation for each transition."
+        "Undo/redo of order diffs announces action, moved section, and resulting position.",
+        "Repeated identical same-field undo/redo messages create a fresh live-region DOM mutation for each transition.",
+        "Recognized Ctrl+Z/Ctrl+Y shortcuts remain prevented at empty app-history directions, protecting input values and redo state from native browser history."
       ],
       "final_actionable_findings": 0,
       "noted_limitations": [
-        "Browser evidence verifies live-region DOM mutation/text, not screen-reader speech delivery."
+        "Browser evidence verifies DOM mutation/text and input event behavior; screen-reader speech delivery is not verified."
       ],
       "log": "plan/verification/PR-012/logs/interrogate.log",
-      "log_sha256": "b4498a0ce59cae89439f02fe85accf3810171d0a0a13639571132f2e2796c951"
+      "log_sha256": "f48e1105d4f2f48c1ec3dd551c4c9b30e86acb5247739ab84a0ef944553b8d61"
     },
     "no_comments": {
       "auditor": "Project-local no-comments skill audit",
@@ -246,7 +253,7 @@
       "findings": 0,
       "open_constraints": 0,
       "log": "plan/verification/PR-012/logs/no-comments.log",
-      "log_sha256": "a0984c65a870beb26c2a15deb6d39d3696f90a4e393eb4a3ce74bdb9e0e83a8c"
+      "log_sha256": "3c0700f7bd9678a0dd2bf29241d4908360036ea883d12bdf36623b5f25478d65"
     }
   },
   "hosted_ci": {
@@ -257,8 +264,8 @@
     "previous_run_id": "38598159776",
     "previous_failed_job_rerun_id": "115971746548",
     "previous_head_rerun_status": "SUCCESS; the earlier cleanup-fixture failure did not reproduce on the same head.",
-    "fix_source_commit": "1c7b40b41779a3e57756182818c7de31fcacec50",
-    "status_at_evidence_capture": "fix source is local and not yet pushed; fresh hosted CI is required after push.",
+    "fix_source_commit": "b0cd5edb903d22ef9bd53dcdfe529b748723126e",
+    "status_at_evidence_capture": "Boundary fix is committed locally and awaits push; fresh hosted CI and GPT-6.1-Sol re-review are required on the new pushed head.",
     "required_before_merge": true,
     "review_handoff": "GPT-6.1-Sol handles PR review and merge. This work did not review or merge a PR."
   },

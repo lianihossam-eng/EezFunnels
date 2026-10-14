@@ -1,44 +1,44 @@
    Compiling eez-dashboard-presentation v0.1.0 (/workspace/EezFunnels/crates/dashboard-presentation)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.22s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.37s
      Running unittests src/lib.rs (target/debug/deps/eez_dashboard_presentation-73e89a24baabd14a)
 
 running 34 tests
+test routes::editor::tests::clearing_nullable_attribution_submits_null_but_required_text_stays_empty_string ... ok
+test routes::editor::tests::editor_new_edit_discards_redo_history ... ok
 test routes::editor::tests::definitive_client_save_error_unlocks_controls_without_retrying_same_request ... ok
 test routes::editor::tests::editor_history_stays_locked_for_retryable_and_stale_saves ... ok
-test routes::editor::tests::clearing_nullable_attribution_submits_null_but_required_text_stays_empty_string ... ok
-test routes::editor::tests::editor_preview_discards_old_generations_and_preserves_last_good_frame_on_error ... ok
 test routes::editor::tests::editor_pointer_and_keyboard_reordering_share_the_exact_order_transition ... ok
-test routes::editor::tests::editor_new_edit_discards_redo_history ... ok
+test routes::editor::tests::editor_preview_discards_old_generations_and_preserves_last_good_frame_on_error ... ok
 test routes::editor::tests::editor_save_waits_until_keyboard_reorder_is_dropped_or_canceled ... ok
 test routes::editor::tests::editor_undo_distinguishes_missing_changes_from_nullable_values ... ok
 test routes::editor::tests::image_control_clears_or_updates_one_typed_value_and_preserves_other_properties ... ok
+test routes::editor::tests::editor_keeps_one_hundred_setting_edits_undoable_and_redoable ... ok
 test routes::editor::tests::keyboard_cancel_cannot_invalidate_an_in_flight_save ... ok
 test routes::editor::tests::old_save_responses_cannot_mutate_a_different_route_or_revision ... ok
-test routes::editor::tests::preset_preview_updates_inherited_color_and_explicit_old_color_stays_dirty ... ok
 test routes::editor::tests::schema_setting_edits_preview_and_save_without_changing_order_only_requests ... ok
 test routes::editor::tests::setting_history_announcement_replaces_stale_reorder_text ... ok
-test routes::editor::tests::keyboard_reorder_is_one_history_edit_and_escape_records_none ... ok
-test routes::tests::a_list_response_started_before_delete_cannot_restore_the_deleted_funnel ... ok
 test routes::editor::tests::successful_editor_save_adopts_its_revision_as_a_clean_base ... ok
 test routes::editor::tests::successful_save_clears_history_and_locks_undo_while_in_flight ... ok
+test routes::tests::a_list_response_started_before_delete_cannot_restore_the_deleted_funnel ... ok
+test routes::editor::tests::preset_preview_updates_inherited_color_and_explicit_old_color_stays_dirty ... ok
 test routes::tests::create_name_limit_matches_the_command_utf8_byte_limit ... ok
 test routes::tests::idempotency_storage_slot_uses_canonical_payload_digest_without_exposing_fields ... ok
+test routes::tests::create_fields_explain_when_multibyte_name_exceeds_command_byte_limit ... ok
+test routes::tests::create_fields_are_disabled_while_a_request_is_pending ... ok
 test routes::tests::native_dialog_cancel_stays_open_until_pending_mutation_finishes ... ok
 test routes::tests::stale_funnel_responses_do_not_replace_the_newer_list_state ... ok
 test routes::tests::successful_create_closes_and_enables_form_before_unresolved_list_refresh ... ok
-test routes::tests::unsuccessful_create_responses_clear_pending_without_refreshing ... ok
-test routes::tests::create_fields_are_disabled_while_a_request_is_pending ... ok
-test routes::editor::tests::editor_keeps_one_hundred_setting_edits_undoable_and_redoable ... ok
 test tests::dashboard_renderer_rejects_unowned_and_extra_paths ... ok
-test routes::tests::create_fields_explain_when_multibyte_name_exceeds_command_byte_limit ... ok
+test routes::tests::unsuccessful_create_responses_clear_pending_without_refreshing ... ok
 test tests::funnel_detail_route_rejects_invalid_identifiers ... ok
+test routes::editor::tests::keyboard_reorder_is_one_history_edit_and_escape_records_none ... ok
+test tests::create_dialog_has_a_native_backdrop_for_modal_interaction ... ok
 test tests::dashboard_root_renders_a_hydratable_shell ... ok
 test tests::funnel_detail_route_renders_the_validated_identifier ... ok
-test tests::create_dialog_has_a_native_backdrop_for_modal_interaction ... ok
 test tests::hydration_mount_wraps_the_server_rendered_app_root ... ok
 test tests::funnels_route_renders_its_page_inside_the_shared_shell ... ok
 
-test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 
    Doc-tests eez_dashboard_presentation
 
