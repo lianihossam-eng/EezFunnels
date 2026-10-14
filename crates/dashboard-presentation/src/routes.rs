@@ -16,6 +16,45 @@ type IdempotencyKeyState = String;
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const FUNNEL_NAME_LIMIT_MESSAGE: &str = "Funnel name must be 120 UTF-8 bytes or fewer.";
 
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FunnelLoadVersion(u64);
+
+#[cfg(any(feature = "browser", test))]
+impl FunnelLoadVersion {
+    fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+
+    fn is_current(self, latest: Self) -> bool {
+        self == latest
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct FunnelListLoad {
+    #[cfg(any(feature = "browser", test))]
+    latest: FunnelLoadVersion,
+    response: Option<Result<Vec<FunnelCard>, ()>>,
+}
+
+impl FunnelListLoad {
+    #[cfg(any(feature = "browser", test))]
+    fn begin(&mut self) -> FunnelLoadVersion {
+        let request = self.latest.next();
+        self.latest = request;
+        self.response = None;
+        request
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn complete(&mut self, request: FunnelLoadVersion, response: Result<Vec<FunnelCard>, ()>) {
+        if request.is_current(self.latest) {
+            self.response = Some(response);
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Routable)]
 #[rustfmt::skip]
 pub(crate) enum RouteView {
@@ -121,8 +160,7 @@ fn dialog_cancel_disposition(mutation_pending: bool) -> DialogCancelDisposition 
 
 #[component]
 fn Funnels() -> Element {
-    let mut load_state = use_signal(|| None::<Vec<FunnelCard>>);
-    let mut load_failed = use_signal(|| false);
+    let load_state = use_signal(FunnelListLoad::default);
     let mut create_open = use_signal(|| false);
     let mut funnel_name = use_signal(String::new);
     let mut blueprint = use_signal(|| FunnelBlueprint::Tripwire);
@@ -138,13 +176,10 @@ fn Funnels() -> Element {
 
     #[cfg(feature = "browser")]
     {
-        let mut page_state = load_state;
+        let page_state = load_state;
         use_effect(move || {
             spawn(async move {
-                match load_funnels().await {
-                    Ok(items) => page_state.set(Some(items)),
-                    Err(()) => load_failed.set(true),
-                }
+                refresh_funnel_list(page_state).await;
             });
         });
 
@@ -183,34 +218,29 @@ fn Funnels() -> Element {
         if let Some(message) = create_success() {
             p { class: "success-message", role: "status", "{message}" }
         }
-        match (load_state(), load_failed()) {
-            (None, false) => rsx! {
+        match load_state().response {
+            None => rsx! {
                 section { class: "empty-state", "aria-label": "Funnel list", role: "status",
                     "Loading your funnels…"
                 }
             },
-            (None, true) => rsx! {
+            Some(Err(())) => rsx! {
                 section { class: "empty-state", "aria-label": "Funnel list", role: "status",
                     p { "Your funnels could not be loaded." }
                     button {
                         class: "secondary-button",
                         r#type: "button",
                         onclick: move |_| {
-                            load_state.set(None);
-                            load_failed.set(false);
                             #[cfg(feature = "browser")]
                             spawn(async move {
-                                match load_funnels().await {
-                                    Ok(items) => load_state.set(Some(items)),
-                                    Err(()) => load_failed.set(true),
-                                }
+                                refresh_funnel_list(load_state).await;
                             });
                         },
                         "Try again"
                     }
                 }
             },
-            (Some(items), _) if items.is_empty() => rsx! {
+            Some(Ok(items)) if items.is_empty() => rsx! {
                 section { class: "empty-state", "aria-label": "Funnel list",
                     h3 { "No funnels yet" }
                     p { "Create a funnel to start with a ready-to-edit page." }
@@ -222,7 +252,7 @@ fn Funnels() -> Element {
                     }
                 }
             },
-            (Some(items), _) => rsx! {
+            Some(Ok(items)) => rsx! {
                 section { class: "funnel-list", "aria-label": "Funnel list",
                     for item in items {
                         article { class: "funnel-card",
@@ -318,12 +348,7 @@ fn Funnels() -> Element {
                                 funnel_name.set(String::new());
                                 blueprint.set(FunnelBlueprint::Tripwire);
                                 create_idempotency_key.set(None);
-                                load_state.set(None);
-                                load_failed.set(false);
-                                match load_funnels().await {
-                                    Ok(items) => load_state.set(Some(items)),
-                                    Err(()) => load_failed.set(true),
-                                }
+                                refresh_funnel_list(load_state).await;
                             }
                             Ok(response) => {
                                 create_idempotency_key.set(Some(prepared_key.clone()));
@@ -376,6 +401,8 @@ fn Funnels() -> Element {
 
         if let Some(target_id) = delete_target() {
             if let Some(target) = load_state()
+                .response
+                .and_then(|result| result.ok())
                 .and_then(|items| items.into_iter().find(|item| item.id == target_id))
             {
                 dialog {
@@ -445,11 +472,12 @@ fn Funnels() -> Element {
                                     ).await {
                                         Ok(response) if response.status == 200 => {
                                             let _ = clear_idempotency_storage(&prepared_key);
-                                            let current = load_state();
-                                            if let Some(mut items) = current {
-                                                items.retain(|item| item.id != response_funnel_id);
-                                                load_state.set(Some(items));
-                                            }
+                                            let mut current_list = load_state;
+                                            current_list.with_mut(|state| {
+                                                if let Some(Ok(items)) = state.response.as_mut() {
+                                                    items.retain(|item| item.id != response_funnel_id);
+                                                }
+                                            });
                                             delete_target.set(None);
                                             delete_error.set(None);
                                             delete_idempotency_key.set(None);
@@ -678,6 +706,16 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
         .map_err(|_| ())
 }
 
+#[cfg(feature = "browser")]
+async fn refresh_funnel_list(mut load_state: Signal<FunnelListLoad>) {
+    let request_version = load_state.with_mut(FunnelListLoad::begin);
+    let result = load_funnels().await;
+    if load_state.try_peek().is_err() {
+        return;
+    }
+    load_state.with_mut(|state| state.complete(request_version, result));
+}
+
 fn can_create_funnel(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed.len() <= MAX_FUNNEL_NAME_BYTES
@@ -779,6 +817,27 @@ mod tests {
         let html = dioxus::ssr::render(&virtual_dom);
 
         assert!(html.contains("120 UTF-8 bytes or fewer"), "{html}");
+    }
+
+    #[test]
+    fn stale_funnel_responses_do_not_replace_the_newer_list_state() {
+        let mut list_state = FunnelListLoad::default();
+        let initial_load = list_state.begin();
+        let create_refresh = list_state.begin();
+        let created_funnel = FunnelCard {
+            id: "created".to_owned(),
+            name: "Created funnel".to_owned(),
+            slug: "created-funnel".to_owned(),
+            published_revision_id: None,
+            created_at: "2026-10-14T00:00:00Z".to_owned(),
+            updated_at: "2026-10-14T00:00:00Z".to_owned(),
+        };
+
+        list_state.complete(create_refresh, Ok(vec![created_funnel.clone()]));
+        list_state.complete(initial_load, Ok(Vec::new()));
+        list_state.complete(initial_load, Err(()));
+
+        assert_eq!(list_state.response, Some(Ok(vec![created_funnel])));
     }
 
     #[test]
