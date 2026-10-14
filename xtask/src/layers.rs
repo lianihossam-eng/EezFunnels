@@ -9,9 +9,14 @@ enum Role {
     Tool,
 }
 
-const UNITS: [(&str, &str, Role); 8] = [
+const UNITS: [(&str, &str, Role); 9] = [
     ("eez-domain", "crates/domain", Role::Product(0)),
     ("eez-render", "crates/render", Role::Product(1)),
+    (
+        "eez-dashboard-presentation",
+        "crates/dashboard-presentation",
+        Role::Product(1),
+    ),
     ("eez-storage", "crates/storage", Role::Product(2)),
     ("eez-commands", "crates/commands", Role::Product(3)),
     ("eez-api", "apps/api", Role::Product(4)),

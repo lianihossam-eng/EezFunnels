@@ -10,3 +10,21 @@ layer = 4
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eez-dashboard-presentation = { path = "../../crates/dashboard-presentation", default-features = false }
+dioxus = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus-web = { workspace = true, features = ["hydrate", "document"], optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+
+[features]
+default = []
+browser = [
+    "dep:dioxus",
+    "dioxus/web",
+    "eez-dashboard-presentation/browser",
+    "dep:dioxus-web",
+    "dep:wasm-bindgen",
+]

@@ -1,0 +1,35 @@
+PR-008 Dashboard shell verification
+
+Evidence refreshed: 2026-10-14T01:59:32Z
+Branch: feat/008_dashboard
+Base commit: 7ade40e9ed3cb917d380d762beeb5a01916f1e83
+Verified source commit: cf05024e0130185648cb83fadf9fdabd70754d63
+Source fingerprint: 7279f4884bf58d59630c7c724aa41ede31686c51dca725ab483522195fdbbdb3
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in `results.json` source_sha256; generated dist, plan/STATUS.md, and evidence files excluded.
+
+Implementation:
+- `eez-dashboard-presentation` is the L1 shared Dioxus route tree and SSR renderer. It owns the CSS/bootstrap source assets and has no dependency on commands, storage, or the L4 dashboard app. `eez-dashboard` remains the L4 browser/WASM entry point; `eez-api` depends on the L1 presentation crate.
+- Layer validation permits API -> dashboard-presentation and rejects API -> dashboard. A new test first failed because the fixture accepted that same-layer L4 edge (`Ok(())`, expected `L4 -> L4` rejection); final layer checks pass.
+- Worker-time SSR and same-tree browser hydration cover exactly `/`, `/funnels`, and validated `/funnels/:id`. The outer `#main` mount container wraps the Dioxus app tree, which retains its semantic `main` landmark. API, health, MCP, probe, and unmatched routes stay with the Worker router.
+- `ASSETS` serves the browser bundle after the host allowlist. The shell has honest empty states; no CRUD, API, or editor state was added.
+- The original route tests first failed to compile because `render_document` was missing. Codex review #5511881502 later found a hydration root mismatch on `c5d440c`; its regression failed before the wrapper fix in `9e0086371c0b8b15963b47784fb28a6f71b445f7` and passes now.
+- A later architecture review on `1755fd8` found the dashboard app had been classified at L3, conflicting with the frozen L4 boundary. Commit `cf05024e0130185648cb83fadf9fdabd70754d63` moved the shared presentation and restored the browser app to L4. `AGENTS.md` and `plan/production.md` remain unchanged.
+
+Toolchain:
+- Rust/Cargo 1.85.0 for app, Worker, tests and check; auxiliary Rust/Cargo 1.88.0 for pinned wasm-bindgen CLI 0.2.129.
+- Worker build 0.8.3; Wrangler 4.149.0; Node 24.19.0; npm 11.9.0.
+
+Checks:
+- `source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr008-architecture-final-ci cargo +1.85.0 test -p eez-dashboard-presentation --locked`: exit 0; 6 tests. Log SHA-256: `601eebc6736f001e07ca3cfb8dba2beeefa75e161a8f022356f20d9699617c32`.
+- `source .project-tools/env.sh && cargo +1.85.0 xtask check`: exit 0; fmt, warning-denied Clippy, workspace tests, and layer validation passed. Counts: API 11, commands 2, presentation 6, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 5. Final log SHA-256: `9424c6c1b5ee79ab76aa6a4ac39321b9b827c1c8a1b04cd3d0dc6d869195d207`.
+- Fresh-target `cargo xtask ci` at `/workspace/.eezfunnel-pr008-architecture-final-ci`: exit 0 (`CI_EXIT=0`). It passed workspace checks/tests, API WASM, dashboard browser WASM/wasm-bindgen asset generation, and cargo audit. Audit 0.22.2 loaded 1,310 advisories, scanned 345 locked dependencies, and reported zero findings. Log SHA-256: `0958c4e9f5dcf9c44e89154a8c3fd5e6869a8cff806280e27abeac4200cbc1a7`.
+- Raw WASM outputs are distinguished from the browser asset: API debug `eez_api.wasm` is 52,042,835 bytes; dashboard Cargo release `eez_dashboard.wasm` is 1,523,290 bytes; wasm-bindgen output `apps/dashboard/dist/assets/eezfunnel_bg.wasm` is 632,043 bytes. Hashes and paths are listed in results.json.
+- `git diff --check` passed. The no-comments review found no comments, TODO/FIXME markers, or lint suppressions added or removed. `#![forbid(unsafe_code)]` remains in the app and presentation crates; `expect` calls remain test-only.
+
+Local-only Wrangler smoke after the final feature split:
+- `source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr008-architecture-final-ci bash scripts/smoke-pr008.sh`: exit 0 (`SMOKE_EXIT=0`), log SHA-256 `3aeb98b23696fe536beccbe2e40890be1337ffe1418042da0218dbfe6a24bdfd`.
+- `/`, `/funnels`, and `/funnels/demo-1` returned 200 with hydration JSON; CSS, bootstrap, WASM/JS, and generated imports returned 200. Unknown API/MCP/probe/funnel paths returned 404; a disallowed host returned 403. Port 8787 was closed after cleanup; no live Worker remained.
+- The smoke parsed and validated the hydration payload but did not execute browser JavaScript. No headless browser ran, so browser hydration completion remains unverified.
+- Wrangler used local-only bindings. No remote deployment or binding check ran.
+
+Generated JS/WASM/snippet hashes and source file fingerprints are in `results.json`; generated `apps/dashboard/dist/` files are ignored verification artifacts. Hosted CI and Codex/Sol reviews must be clean on the exact pushed evidence head before merge.

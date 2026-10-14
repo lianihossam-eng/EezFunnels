@@ -7,16 +7,17 @@ Self-hosted single-user funnel builder on Cloudflare Workers, D1, R2, KV.
 ## Layering
 
 L0: domain    (types, contracts, invariants)
-L1: render    (HTML generation, sandboxed)
+L1: render, dashboard-presentation (HTML generation, sandboxed)
 L2: storage   (D1, R2, KV bindings)
 L3: commands  (dispatcher, policies)
-L4: api, dashboard, cli
+L4: api, dashboard app, cli
 
 Enforced by cargo xtask layers.
 
 ## Request flow
 
-Browser -> GET / -> serves dashboard WASM
+Browser -> GET /, /funnels, /funnels/:id -> host allowlist -> dashboard SSR
+Browser -> GET /assets/* -> host allowlist -> Worker-first ASSETS binding
 Browser -> GET /api/funnels -> commands -> storage::D1 -> JSON
 Browser -> GET /f/:slug -> storage -> render -> HTML
 Claude  -> POST /mcp (Bearer) -> mcp::handle -> commands::execute -> JSON

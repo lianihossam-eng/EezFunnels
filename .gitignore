@@ -1,6 +1,7 @@
 /target/
 /build/
 /dist/
+/apps/dashboard/dist/
 .wrangler/
 node_modules/
 *.wasm

@@ -10,7 +10,7 @@ fn xtask_unknown_task_and_broken_cargo_exit_nonzero() {
     assert_eq!(unknown.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(unknown.stderr).expect("UTF-8"),
-        "usage: cargo xtask <check|ci|layers|deploy [wrangler-args...]>\n"
+        "usage: cargo xtask <check|ci|dashboard-assets|layers|deploy [wrangler-args...]>\n"
     );
     for task in ["check", "ci", "layers"] {
         let failed = Command::new(binary)
