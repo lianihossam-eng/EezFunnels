@@ -95,6 +95,42 @@ fn preview_blocks_navigation_and_remote_images_with_restrictive_policy() {
 }
 
 #[test]
+fn hero_image_placeholder_styles_do_not_change_published_renderer_v2_bytes() {
+    let mut contents = content_map(&[("hero-id", "hero")]);
+    contents.insert(
+        "hero-id".to_owned(),
+        super::SectionContent::Hero {
+            title: "Title".to_owned(),
+            subtitle: "Subtitle".to_owned(),
+            cta_label: "Go".to_owned(),
+            cta_url: "https://example.com/go".to_owned(),
+            image: Some(super::HeroImage {
+                url: "https://example.com/image.png".to_owned(),
+                alt: "Hero".to_owned(),
+            }),
+        },
+    );
+    let revision = revision_with_contents(vec![("hero-id", "hero", 0)], "renderer-v2", &contents);
+    let theme = safe_theme_tokens();
+    let renderer = Renderer::new();
+    let published = renderer
+        .render(&revision, &theme, &contents)
+        .expect("published revision renders");
+    let preview = renderer
+        .render_preview(&revision, &theme, &contents)
+        .expect("preview renders");
+    let stylesheet = include_str!("../snapshots/theme.css").trim();
+    let expected_published = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Funnel</title><style>{stylesheet}</style></head><body><main id=\"funnel\" data-revision-id=\"revision-1\" data-theme-version=\"{}\" data-renderer-version=\"renderer-v2\" style=\"--color-primary:#112233;--spacing-section:2rem\"><section class=\"section section-hero\" data-section-id=\"hero-id\" data-section-type=\"hero\" data-order=\"0\"><div class=\"hero-content\"><h1>Title</h1><p>Subtitle</p><a class=\"button\" href=\"https://example.com/go\">Go</a></div><img class=\"hero-image\" src=\"https://example.com/image.png\" alt=\"Hero\" loading=\"lazy\"></section></main></body></html>",
+        theme.version()
+    );
+
+    assert_eq!(published, expected_published);
+    assert!(preview.contains(".hero-image-placeholder{display:grid"));
+    assert!(preview.contains("class=\"hero-image-placeholder\""));
+}
+
+#[test]
 fn injects_theme_tokens_as_sorted_css_custom_properties() {
     let revision = revision_with_sections(Vec::new(), "renderer-v1");
     let html = Renderer::new()
