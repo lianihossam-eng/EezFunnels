@@ -129,6 +129,9 @@ key in `sessionStorage`, in a method/route slot keyed by a SHA-256 digest of the
 tuple. The slot value is only the UUID; user-entered form fields are absent. Ambiguous failures
 retain the key for replay; successful responses clear the slot. D13 records this lifecycle. The create
 dialog uses the same 120-byte UTF-8 name limit as commands and blocks oversized multibyte names.
+Create and delete D1 batches remove expired receipts before claiming a fresh key, so expired records
+are reclaimed during ordinary writes. The list uses request generations so a delayed initial load
+cannot replace the result of a newer post-create refresh.
 
 Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
 read the background launch process before `setsid` established the server's own group. The smoke
@@ -137,13 +140,14 @@ and uses only that verified group for shutdown; if isolation cannot be verified,
 the launcher's owned process tree. Cleanup also fails if port 8787 remains open. A regression smoke
 with a 150 ms delay before `setsid` passed, as did the integrated and standalone CRUD smoke runs.
 
-Final source commit `5c0934443316ce4562d9f0dad1531dbc401769ac` passes `cargo +1.85.0 xtask check`
-with API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, and
-CLI tests 2 and 6. Fresh-target `cargo +1.85.0 xtask ci` passes workspace checks/tests, API and
-dashboard browser WASM, asset generation, the corrected local CRUD smoke, and audit of 345 locked
-dependencies against 1,310 advisories with zero findings. A separate delayed-start local Wrangler
-smoke passes the five blueprint snapshots, create replay, payload-mismatch conflict, delete/replay,
-validation, unsupported method, not-found, and host-denial checks; it leaves no live Wrangler or
+Final source commit `92f4dd57d02ae89c9c1a82c9f2cf29223030abcb` passes `cargo +1.85.0 xtask check`
+with API 11, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, and
+CLI tests 2 and 6. A full `cargo +1.85.0 xtask ci` invocation on the existing isolated target passes
+workspace checks/tests, API and dashboard browser WASM, asset generation, local CRUD smoke, and
+audit of 345 locked dependencies against 1,310 advisories with zero findings; this target was not
+empty at invocation start. The standalone local Wrangler smoke passes all five blueprints, create
+replay, payload-mismatch conflict, expired-receipt cleanup after create and delete, delete/replay,
+validation, unsupported method, not-found, and host-denial checks. It leaves no live Wrangler or
 workerd processes and closes port 8787. Fingerprinted evidence is in
 `plan/verification/PR-009/execution.txt` and `results.json`.
 
