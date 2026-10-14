@@ -133,12 +133,22 @@ impl EditorState {
         if self.saving || self.retryable || self.stale {
             return None;
         }
-        let document = self.document.as_mut()?;
-        if from >= document.order.len() || to >= document.order.len() || from == to {
-            return None;
-        }
-        let item = document.order.remove(from);
-        document.order.insert(to, item);
+        let (moved_section_id, position, section_count) = {
+            let document = self.document.as_mut()?;
+            if from >= document.order.len() || to >= document.order.len() || from == to {
+                return None;
+            }
+            let item = document.order.remove(from);
+            let moved_section_id = item.clone();
+            document.order.insert(to, item);
+            (moved_section_id, to.saturating_add(1), document.order.len())
+        };
+        self.announcement = format!(
+            "Moved {} to position {} of {}.",
+            self.section_name(&moved_section_id),
+            position,
+            section_count
+        );
         Some(self.begin_preview())
     }
 
@@ -911,7 +921,7 @@ mod tests {
             .move_section_by_id("features", 1)
             .expect("keyboard reorder");
         assert_eq!(keyboard_capture.section_ids, ["cta", "features", "hero"]);
-        assert!(state.announcement.contains("Picked up Features"));
+        assert_eq!(state.announcement, "Moved Features to position 2 of 3.");
         let restore = state
             .cancel_keyboard_drag()
             .expect("Escape restores the pre-drag order");

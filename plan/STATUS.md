@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-010 Visual editor (`feat/010_editor`; local integration verified, awaiting PR review)
+Current phase: PR-010 Visual editor (`feat/010_editor`; local gates pass, accessibility and RustSec fixes await Sol re-review and hosted CI on the updated head)
 Last updated: 2026-10-14
 
 ## Phases
@@ -28,6 +28,14 @@ Last updated: 2026-10-14
 - [ ] PR-020 Release v0.1.0
 
 ## Verified locally
+
+PR-010's reviewed head `44a62f1a4089b9ea289c225cb696d68e7d102a1a` had a live-region gap during
+keyboard reorder; the current working-tree fix announces the moved section and its 1-based position.
+The locked Rustls dependency was updated from 0.23.45 to 0.23.46, resolving four RustSec advisories
+without adding a manifest dependency or changing contracts. Fresh `cargo xtask check`, `cargo xtask
+ci`, migration, focused state, and browser checks pass. The updated source fingerprint and logs are
+recorded in `plan/verification/PR-010`. PR-010 remains open pending Sol re-review and hosted CI on
+the pushed head. No remote migration, deployment, or merge occurred.
 
 Proof status: PR-001 tooling and PR-002 Worker/storage bindings are merged and locally
 implementation-verified. PR-003's product schema, theme seeds, typed storage, and repository

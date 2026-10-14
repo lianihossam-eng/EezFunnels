@@ -324,6 +324,7 @@ try {
   await page.keyboard.press("Space");
   await page.keyboard.press("ArrowDown");
   await waitForOrder(page, ["features", "hero", "cta"]);
+  assert.equal(await page.locator('[aria-live="polite"]').innerText(), "Moved Hero to position 2 of 3.");
   await page.keyboard.press("Space");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-editor-section")), "hero");
   await page.keyboard.press("Space");

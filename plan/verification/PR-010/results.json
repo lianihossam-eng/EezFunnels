@@ -1,12 +1,12 @@
 {
   "task": "PR-010",
-  "evidence_refreshed_at_utc": "2026-10-14T10:17:38Z",
+  "evidence_refreshed_at_utc": "2026-10-14T14:14:27Z",
   "branch": "feat/010_editor",
   "base_commit": "cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc",
-  "verified_source_commit": "4c4b403a6f4473525a41e8639597aaf325404129",
-  "source_commit_role": "PR-010 visual editor implementation, D15 decision, status update, and local verification checkpoint.",
+  "verified_source_commit": null,
+  "source_commit_role": "Checks ran on the working tree anchored at 44a62f1a4089b9ea289c225cb696d68e7d102a1a; source content is identified by the fingerprint below. The resulting code commit SHA will be recorded in the follow-up evidence commit.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "7a99a75198fed38a93964d8a55cda1b13ffb713863fdcfbbd7b3a604bb6a30cb",
+  "source_fingerprint_sha256": "72887af28e76c0d5f3ca42ff85eb55b60db91b74cbc36bc8ba5a8c8753770da1",
   "source_file_count": 116,
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
@@ -22,7 +22,7 @@
     "CHANGELOG.md": "14af49db6823e7a9fc936c062b69f6abb5baefc304f837ca18ec1123172643bd",
     "CODE_OF_CONDUCT.md": "35837af79068e2ff370903f24f6244b991799e829d0a75dd97df7a42b331ea20",
     "CONTRIBUTING.md": "59abb575b9a2f45ec9af29d4597322d30e8e717ce26d3bffde055bc2a8c75062",
-    "Cargo.lock": "13b3a96b33741150ca3ef9ad3ad9743630d9469433faa7b95139f20bd84fbcd1",
+    "Cargo.lock": "5391576b920a01f7a81656b4196673c846a7537319b98ce6e70f60d0011a5f72",
     "Cargo.toml": "f29e294296e78c4b970be07bab82c0a1210ae8e37973ab6794f641a0116b54cc",
     "GLOSSARY.md": "9c1756e9445854206eeb994ead4fa8ed0836890472a598a534a5a7017cff4819",
     "LICENSE": "256c86ed34a35d3f4e923043b7322f3e54fa050d20875200e489fc5d640f6029",
@@ -49,7 +49,7 @@
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "20a89afe5ddcbfe0d627d79a160532a3cfb302c83264945fd8d83200873b3035",
     "crates/dashboard-presentation/src/routes.rs": "a3900cb44d8999e53624cfb32f6c7ee06261cd139fa30963f2dac964d61527f3",
-    "crates/dashboard-presentation/src/routes/editor.rs": "44b9c07e9609e7ac7e71d1292f203162f96c774f508dfe439c3a8b8fef84e2e0",
+    "crates/dashboard-presentation/src/routes/editor.rs": "6ae7408e60be433a533c906c09042665a9925daa52c5fe28516d6100485383d0",
     "crates/dashboard-presentation/src/ssr.rs": "2731cce4be71bb41a50b4c0d04e1c395a0494c6ee69006569e0ae1984cbbad2e",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
     "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
@@ -116,7 +116,7 @@
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
     "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
-    "scripts/test-pr010-browser.mjs": "5b1c01b543d5b3ce03531565c2a90c8738747c1e20c74e92f499e50cff9bbe96",
+    "scripts/test-pr010-browser.mjs": "eabc060155f722e58c837320a60832ce7217accddfa01def740926958dd614c1",
     "scripts/test-pr010-migration.py": "ac3faaa4f07c2e5d2fb52a2165e1780edb6552b48848d93df406f3ea28ea9fd3",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
@@ -134,10 +134,10 @@
   },
   "checks": {
     "cargo_xtask_check": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr010-check CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo xtask check",
+      "command": "source .project-tools/env.sh && cargo xtask check",
       "exit_code": 0,
-      "log": "/tmp/eezfunnel-pr010-check-final.log",
-      "log_sha256": "13e21e780ac9275c81691819d7ce5212cf04262916e3c0ff2f366b6ddca886e5",
+      "log": "/tmp/eezfunnel-pr010-check-luna-final.log",
+      "log_sha256": "2676706591162601852b050bd4000e93a2396148edf25b7b17d511759c53463f",
       "workspace_test_counts": {
         "api": 12,
         "commands": 10,
@@ -149,36 +149,37 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "outcome": "Formatting, Clippy with warnings denied, all workspace tests, and layer validation passed."
+      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed on the updated source and lockfile."
     },
     "cargo_xtask_ci": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr010-check CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo xtask ci",
+      "command": "source .project-tools/env.sh && cargo xtask ci",
       "exit_code": 0,
-      "isolated_target_dir": "/tmp/eezfunnel-pr010-check",
-      "log": "/tmp/eezfunnel-pr010-ci-final2.log",
-      "log_sha256": "2abea985f766c88989cc3e0f4355dc007937764ea87209d90bbfb382160532b8",
-      "outcome": "Workspace tests, API and dashboard WASM builds, dashboard asset bundling, local PR-009 CRUD smoke, and cargo audit passed.",
+      "log": "/tmp/eezfunnel-pr010-ci-luna-after.log",
+      "log_sha256": "285091caa87721847bf5b4044ccc2dd122a344d0290ef535e232573c9604fc28",
+      "outcome": "Workspace checks, WASM build, dashboard asset generation, local PR-009 CRUD smoke, and cargo audit passed.",
       "audit": {
-        "advisories_loaded": 1310,
+        "advisories_loaded": 1314,
         "locked_crate_dependencies_scanned": 346,
         "findings": 0,
-        "exit_code": 0
+        "exit_code": 0,
+        "yanked_status_lookup_timeouts_reported": 0
       }
     },
     "migration_preflight": {
       "command": "npm run test:pr010:migration",
       "exit_code": 0,
-      "log": "/tmp/eezfunnel-pr010-migration-final.log",
+      "log": "/tmp/eezfunnel-pr010-migration-luna-final.log",
       "log_sha256": "bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192",
       "outcome": "SQLite migration harness proved atomic failure for zero or multiple existing revisions and successful one-revision head backfill."
     },
     "browser_integration": {
       "command": "npm run test:pr010:browser",
       "exit_code": 0,
-      "log": "/tmp/eezfunnel-pr010-browser-final.log",
+      "log": "/tmp/eezfunnel-pr010-browser-luna-final.log",
       "log_sha256": "15f655407383005a67acd8957eb86b66fb5ebda6eaa0c0ec853cb75dc30fc837",
       "checks": [
         "Hydrated funnel navigation and editor load",
+        "Arrow-key reorder announces the moved section and its 1-based position in the polite live region",
         "Pointer and keyboard section reorder",
         "Save disabled during an active keyboard reorder",
         "Preview sandbox, CSP, blocked link destinations, and network tripwire",
@@ -194,9 +195,21 @@
         "exit_code": 0
       },
       "git_diff_check": {
-        "command": "git diff --cached --check before commit; git show --check HEAD",
+        "command": "git diff --check",
         "exit_code": 0
       }
+    },
+    "keyboard_announcement_regression": {
+      "command": "source .project-tools/env.sh && cargo test -p eez-dashboard-presentation --locked editor_pointer_and_keyboard_reordering_share_the_exact_order_transition",
+      "exit_code": 0,
+      "log": "/tmp/eezfunnel-pr010-accessibility-luna-final.log",
+      "log_sha256": "054d7da35a8572d3fb75a86b19449ff189889a5b1d8548a2b73f3b1d5dbadf90",
+      "outcome": "The focused state test asserts the literal announcement `Moved Features to position 2 of 3.`. Before the fix the unit and browser regressions observed only `Picked up Features/Hero at position 1 of 3...`; the post-fix browser assertion verifies `Moved Hero to position 2 of 3.`."
+    },
+    "lockfile_security_update": {
+      "outcome": "Cargo.lock only: rustls 0.23.45 -> 0.23.46, the minimum patched release named by RUSTSEC-2026-0346, -0347, -0348, and -0349. No manifest dependency was added; no API, contract, or source dependency declaration changed.",
+      "resolved_native_dependency_path": "eez-dashboard-presentation -> dioxus -> dioxus-fullstack -> reqwest -> rustls",
+      "earlier_audit_result": "The initial audit reported the four rustls advisories and four crates.io yanked-status lookup timeouts. Those were timeouts, not a confirmed HTTP 403 or evidence that a crate was yanked. The fresh required CI audit after the patch exited 0 with no findings or timeout errors."
     }
   },
   "reviews": {
@@ -211,17 +224,29 @@
       "final_actionable_findings": 0
     },
     "no_comments": {
+      "auditor": "Project-local no-comments skill with independent Comment Sicko scan",
+      "scope": "Current PR-010 diff against main; source and test files.",
       "new_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "final_findings": 0
+      "comment_deletions_or_restorations": 0,
+      "findings": 0
+    },
+    "sol_review_followup": {
+      "finding": "ArrowUp/ArrowDown reorder changed section order but left the polite live-region announcement at the pickup message, contrary to D15.",
+      "fix": "Successful move_section transitions now announce the moved section and its destination position; unit and browser regressions cover the exact text.",
+      "status": "Fixed locally; Sol re-review pending push of the updated PR head."
     }
   },
   "hosted_ci": {
-    "status_at_evidence_capture": "Pending push for this source commit.",
+    "previous_head": "44a62f1a4089b9ea289c225cb696d68e7d102a1a",
+    "previous_head_run": "38548733352",
+    "previous_head_status": "passed",
+    "status_at_evidence_capture": "Pending push and hosted CI on the updated source head.",
     "required_before_merge": true
   },
   "deployment": {
     "remote_migration_run": false,
     "remote_bindings_used": false,
-    "cloudflare_deployment_run": false
+    "cloudflare_deployment_run": false,
+    "merge_run": false
   }
 }
