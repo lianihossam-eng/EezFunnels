@@ -3,6 +3,7 @@
 mod layers;
 
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -11,6 +12,7 @@ use std::process::{Command, ExitCode};
 enum Task {
     Check,
     Ci,
+    DashboardAssets,
     Layers,
     Deploy(Vec<OsString>),
 }
@@ -21,6 +23,7 @@ impl Task {
         let task = match arguments.next().as_deref() {
             Some(argument) if argument == "check" => Self::Check,
             Some(argument) if argument == "ci" => Self::Ci,
+            Some(argument) if argument == "dashboard-assets" => Self::DashboardAssets,
             Some(argument) if argument == "layers" => Self::Layers,
             Some(argument) if argument == "deploy" => {
                 return Ok(Self::Deploy(arguments.collect()));
@@ -37,12 +40,13 @@ impl Task {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
     Cargo(Vec<OsString>),
+    DashboardAssets,
     Layers,
     Wrangler(Vec<OsString>),
 }
 
 fn usage() -> String {
-    "usage: cargo xtask <check|ci|layers|deploy [wrangler-args...]>".to_owned()
+    "usage: cargo xtask <check|ci|dashboard-assets|layers|deploy [wrangler-args...]>".to_owned()
 }
 
 fn cargo_step(arguments: &[&str]) -> Step {
@@ -79,17 +83,11 @@ fn steps(task: &Task) -> Vec<Step> {
                 "wasm32-unknown-unknown",
                 "--locked",
             ]));
-            steps.push(cargo_step(&[
-                "build",
-                "-p",
-                "eez-dashboard",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--locked",
-            ]));
+            steps.push(Step::DashboardAssets);
             steps.push(cargo_step(&["audit"]));
             steps
         }
+        Task::DashboardAssets => vec![Step::DashboardAssets],
         Task::Layers => vec![Step::Layers],
         Task::Deploy(arguments) => {
             let mut wrangler_arguments = vec![OsString::from("deploy")];
@@ -155,10 +153,170 @@ fn run_wrangler(root: &Path, arguments: &[OsString]) -> Result<(), String> {
     )
 }
 
+fn run_dashboard_assets(root: &Path, cargo: &OsStr) -> Result<(), String> {
+    let wasm_bindgen = wasm_bindgen_executable();
+    let wasm_bindgen_version = Command::new(&wasm_bindgen)
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "wasm-bindgen 0.2.129 is required; run scripts/install-wasm-bindgen.sh".to_owned()
+            } else {
+                format!("cannot execute wasm-bindgen: {error}")
+            }
+        })?;
+    let found_version = String::from_utf8_lossy(&wasm_bindgen_version.stdout);
+    if !wasm_bindgen_version.status.success() || found_version.trim() != "wasm-bindgen 0.2.129" {
+        return Err(format!(
+            "wasm-bindgen 0.2.129 is required, found {}; run scripts/install-wasm-bindgen.sh",
+            found_version.trim()
+        ));
+    }
+
+    run_cargo(
+        root,
+        cargo,
+        &[
+            OsString::from("build"),
+            OsString::from("-p"),
+            OsString::from("eez-dashboard"),
+            OsString::from("--target"),
+            OsString::from("wasm32-unknown-unknown"),
+            OsString::from("--no-default-features"),
+            OsString::from("--features"),
+            OsString::from("browser"),
+            OsString::from("--release"),
+            OsString::from("--locked"),
+        ],
+    )?;
+
+    let output_directory = root.join("apps/dashboard/dist/assets");
+    if output_directory.exists() {
+        fs::remove_dir_all(&output_directory)
+            .map_err(|error| format!("cannot clear dashboard assets: {error}"))?;
+    }
+    fs::create_dir_all(&output_directory)
+        .map_err(|error| format!("cannot create dashboard assets directory: {error}"))?;
+
+    let target_directory = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    let target_directory = if target_directory.is_absolute() {
+        target_directory
+    } else {
+        root.join(target_directory)
+    };
+    let input_wasm = target_directory.join("wasm32-unknown-unknown/release/eez_dashboard.wasm");
+    let wasm_bindgen_arguments = [
+        OsString::from("--target"),
+        OsString::from("web"),
+        OsString::from("--no-typescript"),
+        OsString::from("--out-name"),
+        OsString::from("eezfunnel"),
+        OsString::from("--out-dir"),
+        output_directory.clone().into_os_string(),
+        input_wasm.into_os_string(),
+    ];
+    run_command(
+        root,
+        wasm_bindgen.as_os_str(),
+        "wasm-bindgen",
+        "wasm-bindgen dashboard bundle",
+        &wasm_bindgen_arguments,
+    )?;
+
+    for name in ["bootstrap.js", "dashboard.css"] {
+        fs::copy(
+            root.join("apps/dashboard/assets").join(name),
+            output_directory.join(name),
+        )
+        .map_err(|error| format!("cannot copy dashboard asset {name}: {error}"))?;
+    }
+
+    for name in [
+        "bootstrap.js",
+        "dashboard.css",
+        "eezfunnel.js",
+        "eezfunnel_bg.wasm",
+    ] {
+        let path = output_directory.join(name);
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("dashboard asset {name} was not generated: {error}"))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(format!("dashboard asset {name} is empty or not a file"));
+        }
+    }
+
+    validate_module_imports(&output_directory)?;
+
+    writeln!(
+        io::stdout().lock(),
+        "dashboard assets generated at {}",
+        output_directory.display()
+    )
+    .map_err(|error| format!("cannot write output: {error}"))
+}
+
+fn validate_module_imports(output_directory: &Path) -> Result<(), String> {
+    let entry_point = output_directory.join("eezfunnel.js");
+    let source = fs::read_to_string(&entry_point).map_err(|error| {
+        format!(
+            "cannot read dashboard module {}: {error}",
+            entry_point.display()
+        )
+    })?;
+
+    for line in source.lines() {
+        let Some((_, specifier)) = line.split_once("from ") else {
+            continue;
+        };
+        let Some(quote) = specifier.chars().next() else {
+            continue;
+        };
+        if quote != '\'' && quote != '"' {
+            continue;
+        }
+        let Some(after_quote) = specifier.get(quote.len_utf8()..) else {
+            continue;
+        };
+        let Some((module, _)) = after_quote.split_once(quote) else {
+            continue;
+        };
+        let Some(relative_module) = module.strip_prefix("./") else {
+            continue;
+        };
+        if Path::new(relative_module)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(format!("unsafe relative dashboard module import: {module}"));
+        }
+        let module_path = output_directory.join(relative_module);
+        let metadata = fs::metadata(&module_path)
+            .map_err(|error| format!("dashboard module import {module} is missing: {error}"))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(format!(
+                "dashboard module import {module} is empty or not a file"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn wasm_bindgen_executable() -> PathBuf {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+        .map(|directory| directory.join("bin/wasm-bindgen"))
+        .unwrap_or_else(|| PathBuf::from("wasm-bindgen"))
+}
+
 fn run(task: &Task, root: &Path, cargo: &OsStr) -> Result<(), String> {
     let steps = steps(task);
     execute_steps(&steps, |step| match step {
         Step::Cargo(arguments) => run_cargo(root, cargo, arguments),
+        Step::DashboardAssets => run_dashboard_assets(root, cargo),
         Step::Layers => layers::WorkspaceGraph::read(root, cargo)?.verify_layers(),
         Step::Wrangler(arguments) => run_wrangler(root, arguments),
     })?;
@@ -168,11 +326,14 @@ fn run(task: &Task, root: &Path, cargo: &OsStr) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let result = Task::parse(std::env::args_os().skip(1)).and_then(|task| {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = root
-            .parent()
-            .ok_or_else(|| "xtask manifest has no workspace parent".to_owned())?;
-        run(&task, root, &cargo_executable())
+        let root = match std::env::var_os("XTASK_WORKSPACE_ROOT") {
+            Some(root) => PathBuf::from(root),
+            None => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .ok_or_else(|| "xtask manifest has no workspace parent".to_owned())?
+                .to_path_buf(),
+        };
+        run(&task, &root, &cargo_executable())
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -191,6 +352,10 @@ mod tests {
     fn task_arguments_are_closed_except_for_deploy() {
         assert_eq!(Task::parse(["check".into()]), Ok(Task::Check));
         assert_eq!(Task::parse(["ci".into()]), Ok(Task::Ci));
+        assert_eq!(
+            Task::parse(["dashboard-assets".into()]),
+            Ok(Task::DashboardAssets)
+        );
         assert_eq!(Task::parse(["layers".into()]), Ok(Task::Layers));
         assert_eq!(Task::parse(["deploy".into()]), Ok(Task::Deploy(Vec::new())));
         assert_eq!(
@@ -236,14 +401,7 @@ mod tests {
                     "wasm32-unknown-unknown",
                     "--locked",
                 ]),
-                cargo_step(&[
-                    "build",
-                    "-p",
-                    "eez-dashboard",
-                    "--target",
-                    "wasm32-unknown-unknown",
-                    "--locked",
-                ]),
+                Step::DashboardAssets,
                 cargo_step(&["audit"]),
             ]
         );
@@ -343,5 +501,14 @@ mod tests {
         )
         .expect_err("missing Wrangler must fail");
         assert!(error.starts_with("cannot execute Wrangler:"), "{error}");
+    }
+
+    #[test]
+    fn dashboard_assets_task_runs_only_the_asset_bundle_step() {
+        assert_eq!(steps(&Task::DashboardAssets), vec![Step::DashboardAssets]);
+        assert_eq!(
+            Task::parse(["dashboard-assets".into(), "ignored".into()]),
+            Err(usage())
+        );
     }
 }

@@ -15,7 +15,7 @@ const UNITS: [(&str, &str, Role); 8] = [
     ("eez-storage", "crates/storage", Role::Product(2)),
     ("eez-commands", "crates/commands", Role::Product(3)),
     ("eez-api", "apps/api", Role::Product(4)),
-    ("eez-dashboard", "apps/dashboard", Role::Product(4)),
+    ("eez-dashboard", "apps/dashboard", Role::Product(3)),
     ("eez-cli", "apps/cli", Role::Product(4)),
     ("xtask", "xtask", Role::Tool),
 ];

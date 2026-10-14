@@ -162,6 +162,13 @@ fn strictly_descending_graph_and_tool_caller_are_valid() {
 }
 
 #[test]
+fn worker_can_depend_on_the_lower_layer_dashboard_presentation_library() {
+    let mut fixture = Fixture::new();
+    fixture.edge("eez-api", "eez-dashboard");
+    assert_eq!(fixture.validate(), Ok(()));
+}
+
+#[test]
 fn product_cannot_depend_on_tool() {
     let mut fixture = Fixture::new();
     fixture.edge("eez-api", "xtask");
