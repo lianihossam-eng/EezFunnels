@@ -318,6 +318,7 @@ test_worker_fallback_reparent_cleanup_regression() {
   local leader_file="$state_dir/worker-fallback-leader"
   local term_file="$state_dir/worker-fallback-term"
   local test_group test_launcher test_leader test_child test_child_start leader_state child_state
+  local term_child term_parent
 
   cat > "$fixture_file" <<'FIXTURE'
 import os
@@ -328,7 +329,7 @@ import time
 
 ready_file, leader_file, term_file = sys.argv[1:]
 signal.signal(signal.SIGINT, signal.SIG_DFL)
-child_code = "import signal,sys,time\ndef on_term(signum, frame):\n with open(sys.argv[1], 'w', encoding='utf-8') as f: f.write('term')\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nsignal.signal(signal.SIGTERM, on_term)\nwhile True: time.sleep(1)"
+child_code = "import os,signal,sys,time\ndef on_term(signum, frame):\n with open(sys.argv[1], 'w', encoding='utf-8') as f: f.write(f'{os.getpid()}:{os.getppid()}\\n')\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nsignal.signal(signal.SIGTERM, on_term)\nwhile True: time.sleep(1)"
 child = subprocess.Popen([sys.executable, "-c", child_code, term_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 with open(leader_file, "w", encoding="utf-8") as handle:
     handle.write(str(os.getpid()))
@@ -371,10 +372,17 @@ FIXTURE
 
   leader_state="$(ps -o stat= -p "$test_leader" 2>/dev/null | tr -d '[:space:]' || true)"
   child_state="$(ps -o stat= -p "$test_child" 2>/dev/null | tr -d '[:space:]' || true)"
-  if [ ! -s "$term_file" ] || worker_process_is_live "$test_child:$test_child_start" || \
+  term_child=""
+  term_parent=""
+  if [ -s "$term_file" ]; then
+    IFS=: read -r term_child term_parent < "$term_file"
+  fi
+  if [ ! -s "$term_file" ] || [ "$term_child" != "$test_child" ] || \
+    [ "$term_parent" = "$test_leader" ] || worker_process_is_live "$test_child:$test_child_start" || \
     { [ -n "$leader_state" ] && [[ "$leader_state" != Z* ]]; }; then
-    printf 'Fallback cleanup missed a reparented child after launcher exit (launcher=%s child=%s child_state=%s term=%s)\n' \
-      "$test_launcher" "$test_child" "${child_state:-absent}" "$([ -s "$term_file" ] && printf received || printf missing)" >&2
+    printf 'Fallback cleanup missed a reparented child after launcher exit (launcher=%s leader=%s child=%s child_state=%s term=%s term_parent=%s)\n' \
+      "$test_launcher" "$test_leader" "$test_child" "${child_state:-absent}" \
+      "$([ -s "$term_file" ] && printf received || printf missing)" "${term_parent:-unknown}" >&2
     kill -TERM -- "-$test_group" 2>/dev/null || true
     sleep 0.1
     kill -KILL -- "-$test_group" 2>/dev/null || true
