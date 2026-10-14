@@ -361,10 +361,13 @@ fn Funnels() -> Element {
                             Ok(response) => {
                                 create_idempotency_key.set(Some(prepared_key.clone()));
                                 create_error.set(Some(error_message(&response.body)));
+                                create_pending.set(false);
                             }
-                            Err(()) => create_error.set(Some("The funnel could not be created. Try again.".to_owned())),
+                            Err(()) => {
+                                create_error.set(Some("The funnel could not be created. Try again.".to_owned()));
+                                create_pending.set(false);
+                            }
                         }
-                        create_pending.set(false);
                     });
                     #[cfg(not(feature = "browser"))]
                     create_pending.set(false);
@@ -861,7 +864,7 @@ mod tests {
     #[test]
     fn successful_create_closes_and_enables_form_before_unresolved_list_refresh() {
         use std::cell::Cell;
-        use std::future::{pending, Future};
+        use std::future::Future;
         use std::pin::Pin;
         use std::rc::Rc;
         use std::sync::Arc;
@@ -872,6 +875,19 @@ mod tests {
             fn wake(self: Arc<Self>) {}
         }
 
+        struct ManualRefresh(Rc<Cell<bool>>);
+        impl Future for ManualRefresh {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+                if self.0.get() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+
         fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
             let waker = Waker::from(Arc::new(NoopWake));
             let mut context = Context::from_waker(&waker);
@@ -880,6 +896,7 @@ mod tests {
 
         let dialog_open = Rc::new(Cell::new(true));
         let mutation_pending = Rc::new(Cell::new(true));
+        let refresh_ready = Rc::new(Cell::new(false));
         let finished_dialog = Rc::clone(&dialog_open);
         let finished_pending = Rc::clone(&mutation_pending);
         let refresh = finish_create_before_refresh(
@@ -887,7 +904,7 @@ mod tests {
                 finished_dialog.set(false);
                 finished_pending.set(false);
             },
-            pending::<()>(),
+            ManualRefresh(Rc::clone(&refresh_ready)),
         );
         let mut refresh = std::pin::pin!(refresh);
 
@@ -899,6 +916,16 @@ mod tests {
         assert!(
             !mutation_pending.get(),
             "list refresh must not keep the create mutation pending"
+        );
+
+        dialog_open.set(true);
+        mutation_pending.set(true);
+        refresh_ready.set(true);
+        assert!(poll_once(refresh.as_mut()).is_ready());
+        assert!(dialog_open.get(), "a second create can open during refresh");
+        assert!(
+            mutation_pending.get(),
+            "the first refresh completion must not clear the second create's pending state"
         );
     }
 
