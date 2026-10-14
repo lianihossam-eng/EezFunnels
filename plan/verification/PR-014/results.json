@@ -1,12 +1,12 @@
 {
   "task": "PR-014",
-  "evidence_refreshed_at_utc": "2026-10-14T19:27:28Z",
+  "evidence_refreshed_at_utc": "2026-10-14T19:45:15Z",
   "branch": "feat/014_publish",
   "base_commit": "41f0df225650c32878dfb14000f7116784aad765",
-  "verified_source_commit": "5f7e9d10d0b204dad86434da3fa980cbde98a3de",
-  "source_commit_role": "This commit contains the publication implementation, tests, and D18 decision. The evidence/status commit changes only excluded plan/verification metadata and plan/STATUS.md.",
+  "verified_source_commit": "aa15f1b67aef4490f3e758b090207caf493c2c93",
+  "source_commit_role": "This source commit adds the receipt-newly-claimed mutation guard, required-field/schema error mappings, HTTP/Worker regression coverage, and D18 updates. The evidence/status commit contains verification metadata only.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "0a3f0b808578164cb6c634305d1ef83134314bc828455cedb05afe0e044bb85d",
+  "source_fingerprint_sha256": "05e755a2396c3486833786bd5475734b498b5e7afe42ef76c31f70b992a3ee93",
   "source_file_count": 123,
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
@@ -31,7 +31,7 @@
     "apps/api/Cargo.toml": "2cc930112db9a105b4e931f3326d3b04894445618997f2c47f1aa3808a293190",
     "apps/api/src/errors.rs": "71214176afa968ef64fcc3099a5ad94df4ecc786b2fb3657afacfd03b7b0f4e1",
     "apps/api/src/host.rs": "0ebed1f7d4717ff117e60fad9ecc40dd947dbf27c29da61cc087ca5dbf5b403f",
-    "apps/api/src/lib.rs": "6237aaf26d938d0443bade006d9376da4b983d4fcc4a64aa09c4b6d2f66f2213",
+    "apps/api/src/lib.rs": "6f253982883fee05e8b3c6dbb961e890d98fe77158454c3fdfae99dd949db28f",
     "apps/cli/Cargo.toml": "fdf35111e8406b0e3d9418a969eff6bebf510a922a7df519f2cfbfa8bf132a22",
     "apps/cli/src/main.rs": "f90c845d65c6729db5fa87e83ed4d0766a99594b63aedc1b7a5a4f5b65ef9ae7",
     "apps/dashboard/Cargo.toml": "c1f80286d887e68696442b263f0217c05d36b735906b3180bb6fa52fbf7153e4",
@@ -39,11 +39,11 @@
     "apps/dashboard/src/lib.rs": "b4389dae2d8b4988ac0e32b59c5d717e48d73f4fb67e4141a82bb2df404cfe3d",
     "crates/commands/Cargo.toml": "75af996100fc8a922948561a692ba9592ccc29496c421b995a2cbc524500f8f8",
     "crates/commands/src/editor_tests.rs": "5a953e16bbf01c86f5fecf7d86bed300db5fb246d7d5a4a090b9e71c47eb9365",
-    "crates/commands/src/funnel.rs": "224f601fc9cda0839a75cb3585539ece035fb5c52f4c83e2ab455040bad80d5f",
+    "crates/commands/src/funnel.rs": "239ef321de75bd38e9ce9a507ec8d444c10c0adbb136ba03b723e537aab48037",
     "crates/commands/src/funnel/editor_settings.rs": "d1b164d0f9318412589aed39160e560ddbe38e3ae3eab3dab25b32d70672b7c6",
     "crates/commands/src/funnel_create_tests.rs": "aa46fec2e9fdeb183096989faee9f2dced7adbff4cf8e0eeac4e469baf3f8c60",
     "crates/commands/src/lib.rs": "74f5cf8e298d44e4012995fdea26fcee96c0772be7eb5b5a32a20719b173e0c4",
-    "crates/commands/src/publication_tests.rs": "486834e9f23d21adfb9381566c595a827461dca32c41beac7e669e0c30eb9ad7",
+    "crates/commands/src/publication_tests.rs": "3c7f4f8868208c240f28688e3a03fe3fea8c3257ed2757e4948fc8ac56f4aafd",
     "crates/commands/src/theme_set_tests.rs": "03bfdbe4566e595a27440c3cfea097dcd6354a2f0f214e1a74164b0ce3c740b7",
     "crates/dashboard-presentation/Cargo.toml": "e612984a381bd6bee2fe878c75930ce73f27cb2cdd1a6b9d1343d4d38afcc531",
     "crates/dashboard-presentation/assets/bootstrap.js": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110",
@@ -69,8 +69,8 @@
     "crates/render/src/section_content_tests.rs": "e32cf26f27e99ba3d89a989687dce037a3a2baf950c9d5d14b26e172701752df",
     "crates/render/src/test_support.rs": "d80307fa79eeeb13b89de24d04ac5f4956e0967e8103e88de9248579b1039ca5",
     "crates/storage/Cargo.toml": "6d851d3347b1a4453c98f55fe131528e69e75f19d6cebd3803e97a33124b3e53",
-    "crates/storage/src/lib.rs": "69b4562314942ef501d395fc062b43cdad2c6b364ee3ec92e6517abf9fa36263",
-    "crates/storage/src/repository.rs": "5267b8102672f8f12e2f8ebaa0cc80d0bab71629dac2610171ed6af9d41f10fd",
+    "crates/storage/src/lib.rs": "8b70c12844f9af1fcd1c0d13d39df35e8230d48a5d5c0cdbbfdb88f6060856c9",
+    "crates/storage/src/repository.rs": "10e082e65cbc28abe12f46ac0e1d54d49528882c13382b9f6a7d38b72bfbbb4f",
     "crates/storage/src/theme_seed_tests.rs": "042b9c6ba4eb9ca138f76b21f47b269f13a8b3b5ea4c625ce98d0ed59800e5ad",
     "docs/commands.md": "6f8e29b90b3434ae432bf543680c14e3ec41f651c65f23d09d79bbd597e2eb65",
     "docs/deploy.md": "53ad223447c1fe8d5b8881c00f1ef9f0621be33133dfac221519595919a83a77",
@@ -103,7 +103,7 @@
     "plan/decisions/D15_visual_editor.md": "85c06296b35c8fe847554fd71c29b49a2db1ded39fb01e04bdda905bd1756260",
     "plan/decisions/D16_settings_inspector.md": "4497a55412336ba8f6c8c647777bbfef22da6d1e2e54a0f28e42692d25af59e4",
     "plan/decisions/D17_editor_history.md": "37c03580cfbf61338810fd4ade20fdcadfdc539d351873ec945bb0ff73f64b0a",
-    "plan/decisions/D18_publication_routes.md": "96e40279c4c558264feb1775c75282735852abd34621441bb7cfe78548204ebd",
+    "plan/decisions/D18_publication_routes.md": "f877215353bf49ef338ce2c931a35b8cb00b283c8d5e9d3c9b77396cb2718bf3",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -120,9 +120,9 @@
     "scripts/install-wasm-bindgen.sh": "a9a320f79fe0ba10d94e8779e095fdbd3fd69572d15eba4a08bee39aa5134e40",
     "scripts/install-worker-build.sh": "0f11bc26f579eebec040ce42ab8f6645de2d071378635ceaa3f1885e98d3d98d",
     "scripts/smoke-pr002.sh": "e1808bee1fd9e052454c8bdaea7b7e3abd8239821a4a87b1646a788f33c68ba8",
-    "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
+    "scripts/smoke-pr003.sh": "ecb49e2ad085f69c19211898e03b8228c4dd5e7291c144d449cec9e65bd2b011",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
-    "scripts/smoke-pr009.sh": "7c031c63c0da285fe780ea94e40d5754a9e582d38c0bbd45dce69e5bd0775da0",
+    "scripts/smoke-pr009.sh": "189db7042165e6ea6ec0d283d8467a9db9e30d832dd77f47fa1201f19ac80f79",
     "scripts/test-pr010-browser.mjs": "6960c073a3d75a26a883dbb55e6f3ebc5e2ef924b97edb912b81ed0663c6b943",
     "scripts/test-pr010-migration.py": "ac3faaa4f07c2e5d2fb52a2165e1780edb6552b48848d93df406f3ea28ea9fd3",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
@@ -138,32 +138,55 @@
     "crates/commands/src/funnel.rs",
     "crates/commands/src/lib.rs",
     "crates/commands/src/publication_tests.rs",
+    "crates/storage/src/lib.rs",
     "crates/storage/src/repository.rs",
     "plan/STATUS.md",
     "plan/decisions/D18_publication_routes.md",
+    "plan/verification/PR-014/execution.txt",
+    "plan/verification/PR-014/logs/browser-review-fixes.log",
+    "plan/verification/PR-014/logs/browser.log",
+    "plan/verification/PR-014/logs/cargo-check-review-fixes.log",
+    "plan/verification/PR-014/logs/cargo-check.log",
+    "plan/verification/PR-014/logs/cargo-ci-review-fixes.log",
+    "plan/verification/PR-014/logs/cargo-ci.log",
+    "plan/verification/PR-014/logs/focused-publication-tests-review-fixes.log",
+    "plan/verification/PR-014/logs/frozen-diff-review-fixes.log",
+    "plan/verification/PR-014/logs/frozen-diff.log",
+    "plan/verification/PR-014/logs/late-replay-regression-green.log",
+    "plan/verification/PR-014/logs/late-replay-regression-red.log",
+    "plan/verification/PR-014/logs/local-audit-review-fixes.log",
+    "plan/verification/PR-014/logs/local-audit.log",
+    "plan/verification/PR-014/logs/manual-boundary-check.log",
+    "plan/verification/PR-014/logs/manual-review-boundaries-review-fixes.log",
+    "plan/verification/PR-014/logs/migration-review-fixes.log",
+    "plan/verification/PR-014/logs/migration.log",
+    "plan/verification/PR-014/logs/missing-required-fields-green.log",
+    "plan/verification/PR-014/logs/missing-required-fields-red.log",
+    "plan/verification/PR-014/logs/pr003-replay-smoke-review-fixes.log",
+    "plan/verification/PR-014/logs/pr009-publication-findings-smoke.log",
+    "plan/verification/PR-014/logs/process-cleanup-review-fixes.log",
+    "plan/verification/PR-014/logs/process-cleanup.log",
+    "plan/verification/PR-014/logs/repository-discovery.log",
+    "plan/verification/PR-014/results.json",
+    "scripts/smoke-pr003.sh",
     "scripts/smoke-pr009.sh"
   ],
   "implementation": {
-    "publish_unpublish": "Typed publish/unpublish commands use idempotency receipts and a repeated expected-published-revision CAS in one D1 batch.",
-    "public_route": "GET /f/:slug reads the current published immutable revision by slug, validates its stored snapshot and render_manifest, renders HTML, and returns a strong revision ETag with Cache-Control.",
-    "compatibility": "No frozen contract, database migration/schema, renderer, dependency manifest, or lockfile changed.",
-    "local_only": "All Worker and D1 checks used local bindings; no remote D1 operation or deployment ran."
+    "publish_unpublish": "Publish/unpublish receipt claim and expected-pointer CAS remain in a single D1 batch. The pointer UPDATE requires changes() = 1 from this batch receipt insert, preventing an older matching receipt from reapplying a mutation after later state transitions.",
+    "public_route": "GET /f/:slug reads and renders the currently published immutable revision from its stored render_manifest and returns a strong ETag with Cache-Control.",
+    "classification": "Required revision fields are identified before typed decoding; active receipt classification still takes precedence. Unsupported stored public schemas map to validation/schema_version_unsupported. Invalid route IDs cannot mutate state; active keys classify against the route-injected payload and fresh invalid IDs return not_found/funnel.",
+    "compatibility": "No frozen contract, D1 schema/migration, renderer, dependency manifest, or lockfile changed. The request body ceiling and command/idempotency/CAS semantics are unchanged.",
+    "local_only": "Worker/D1 checks used local bindings only; no remote D1 operation or deployment ran."
   },
   "validation": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && cargo xtask check",
       "exit_code": 0,
-      "log": "plan/verification/PR-014/logs/cargo-check.log",
-      "sha256": "3ab4b7f46842d78da16b2b326a4f96016ab5c9ca0ff4a4954921c5343b0ebfe0"
-    },
-    "cargo_xtask_ci": {
-      "command": "source .project-tools/env.sh && cargo xtask ci",
-      "exit_code": 0,
-      "log": "plan/verification/PR-014/logs/cargo-ci.log",
-      "sha256": "86fb2100bbb2f253e9bace836803f7a5511914dd015e025ba6f4c04b19273e24",
+      "log": "plan/verification/PR-014/logs/cargo-check-review-fixes.log.gz",
+      "sha256": "f7a0b40e73ab909763665e2bce97a69e9acbc0a8524065b7274ed387651d4956",
       "nonzero_test_suite_counts": [
         15,
-        21,
+        24,
         34,
         13,
         35,
@@ -172,37 +195,86 @@
         2,
         6
       ],
-      "local_worker_smoke_marker": "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404",
+      "raw_log_sha256": "75a3b8f6b788ff10d29284f5c64d70dcb86bd87488ed2c171327251839f3100c",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "log": "plan/verification/PR-014/logs/cargo-ci-review-fixes.log.gz",
+      "sha256": "769328d42252a61f5a4f18e6c2926e92e1c1fae2a0f90437cde3635c517eb116",
+      "nonzero_test_suite_counts": [
+        15,
+        24,
+        34,
+        13,
+        35,
+        5,
+        26,
+        2,
+        6
+      ],
+      "local_worker_smoke_marker": "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400",
       "audit": {
         "exit_code": 0,
         "advisories_loaded": 1314,
         "locked_dependencies_scanned": 346,
         "findings": 0
-      }
+      },
+      "raw_log_sha256": "00865b76eef7d284847c1a4ba5162aa2544002d72d7354b857e95bae38719516",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "focused_publication_tests": {
+      "command": "source .project-tools/env.sh && cargo test -p eez-commands publication_tests -- --nocapture",
+      "exit_code": 0,
+      "passed": 6,
+      "failed": 0,
+      "log": "plan/verification/PR-014/logs/focused-publication-tests-review-fixes.log.gz",
+      "sha256": "086f7054009c526773e88830044f22021d6580b4285ccc554b786845d7b9e9eb",
+      "raw_log_sha256": "eb709f4f094b6df4c29601190a73e0f5dd81bd0fd809ab5ce80a74876d2ec886",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "worker_publication_smoke": {
+      "command": "source .project-tools/env.sh && bash scripts/smoke-pr009.sh",
+      "exit_code": 0,
+      "log": "plan/verification/PR-014/logs/pr009-publication-findings-smoke.log.gz",
+      "sha256": "85ebb882e4bc63f0418dbd594423c430f46b445f5c74dc7cb4c8a03c5fcaaeeb",
+      "coverage": "Late publish/unpublish retries do not mutate after intervening transitions; fresh and active-key missing fields classify correctly; invalid route fresh key returns 404 and active key mismatch returns 409; unsupported public schema returns 400.",
+      "raw_log_sha256": "d078c4a7c56d2cf96098649555e7b758a397b7139260369bd8a4b5968d2d6085",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "storage_worker_replay_smoke": {
+      "command": "source .project-tools/env.sh && bash scripts/smoke-pr003.sh",
+      "exit_code": 0,
+      "log": "plan/verification/PR-014/logs/pr003-replay-smoke-review-fixes.log.gz",
+      "sha256": "1354a8fecce06dba0b42c0bc9d073d55162babfeb35f7cea05e5f4e370efe194",
+      "observation": "publication_replay_interleavings_safe=true; product_repository_probe=passed; local_mode=only; port_after_cleanup=closed",
+      "raw_log_sha256": "873d0d89110aabdde647520b48684c0ec4ccf0c3d0e8cb054699c59c3b9c9fa1",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
     },
     "migration": {
       "command": "npm run test:pr010:migration",
       "exit_code": 0,
-      "log": "plan/verification/PR-014/logs/migration.log",
-      "sha256": "bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192",
-      "outcome": "PR-010 editor-head zero/multi-revision preflight and valid-backfill harness passed; PR-014 requires no migration."
+      "log": "plan/verification/PR-014/logs/migration-review-fixes.log.gz",
+      "sha256": "bc472ce6d89e316da2f8b148cde030a1df6da13fd4b77b1164fe64ca36a7a0ef",
+      "outcome": "Existing migration preflight and valid-backfill harness passed; PR-014 introduces no migration.",
+      "raw_log_sha256": "bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
     },
     "browser": {
       "command": "npm run test:pr010:browser",
       "exit_code": 0,
-      "log": "plan/verification/PR-014/logs/browser.log",
-      "sha256": "2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250",
-      "responsive_snapshots": [
-        375,
-        768,
-        1280
-      ],
-      "critical_axe_findings": 0
+      "log": "plan/verification/PR-014/logs/browser-review-fixes.log.gz",
+      "sha256": "fbb31c477a0be5a97ee74f9fa013c054c222baf3aac7600dabd96d6d4628dd55",
+      "outcome": "Existing PR-010–013 browser coverage passed, including responsive snapshots and critical axe findings=0; PR-014 has no dashboard/browser behavior.",
+      "raw_log_sha256": "2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
     },
     "diff_and_frozen_surface": {
+      "command": "git diff --check; compare changed paths with origin/main base",
       "exit_code": 0,
-      "log": "plan/verification/PR-014/logs/frozen-diff.log",
-      "sha256": "926493060df3ba1d2422f57e6ff7edd4f5a8faacf33b666e49b05dcff3210270",
+      "log": "plan/verification/PR-014/logs/frozen-diff-review-fixes.log",
+      "sha256": "bdc0319a26d704b039ed9d56d739ae3e6b5f7b4ed3d0f1a71f12fbfc6c5b2d69",
       "frozen_contracts_changed": false,
       "migrations_changed": false,
       "dependencies_changed": false,
@@ -211,31 +283,60 @@
   },
   "local_audit": {
     "no_comments": {
-      "result": "Direct staged-diff scan found zero added source comments, TODO/FIXME markers, or lint suppressions.",
-      "log": "plan/verification/PR-014/logs/local-audit.log",
-      "sha256": "9a250b93cace782dfe62c701ab504918c3be96e8d6343a2067e39fee4b275c29",
-      "full_skill_workflow": "Not run: the project skill requires independent Comment Sicko delegation, prohibited by the PR-014 task instruction."
+      "result": "Direct added-line scan found zero comments, TODO/FIXME markers, or lint suppressions.",
+      "log": "plan/verification/PR-014/logs/local-audit-review-fixes.log",
+      "sha256": "10df2acac4aff9c7766c03b6163eb8c8dbb0c84015cbcfe46cb7bf421016f502",
+      "full_skill_workflow": "Not run because its independent-agent requirement conflicted with the PR-014 no-delegation instruction."
     },
     "interrogate": {
-      "result": "Not run: the project skill requires independent reviewers, prohibited by the PR-014 task instruction.",
-      "manual_boundary_check_log": "plan/verification/PR-014/logs/manual-boundary-check.log",
-      "manual_boundary_check_sha256": "7f6ea43e8bc282dfa18523b7f6c764a3ae5b7cb54faabcbcb5fcddd543b48e4a",
+      "result": "Manual invariant/boundary check covered all four Sol findings; independent multi-agent interrogate workflow was not run because delegation was prohibited.",
+      "manual_boundary_check_log": "plan/verification/PR-014/logs/manual-review-boundaries-review-fixes.log",
+      "manual_boundary_check_sha256": "c1b171b072a960ba221ae814f653e5ef643441d35805a6d9c60d327d527b1ecb",
       "github_review_owner": "GPT-6.1-Sol"
     }
   },
   "workspace_and_cleanup": {
-    "repository_discovery_log": "plan/verification/PR-014/logs/repository-discovery.log",
-    "repository_discovery_sha256": "82d5eef796e51326d08ca463b9efc69d2bd38d3c39591e6c38240f7c6e28f27b",
-    "process_cleanup_log": "plan/verification/PR-014/logs/process-cleanup.log",
-    "process_cleanup_sha256": "c8b80b411a004925587294d43da89d36af26e66fd5762fb56c8107df7861bb82",
+    "process_cleanup_log": "plan/verification/PR-014/logs/process-cleanup-review-fixes.log",
+    "process_cleanup_sha256": "4a93b48f48ba82ec952b51c7f41645ceeeabdb6aed7cfbd6642b46e6ebc00164",
     "active_worker_processes_after_tests": 0,
-    "active_local_worker_listeners_after_tests": 0
+    "active_local_worker_listeners_after_tests": 0,
+    "historical_defunct_workerd_processes_excluded": true
   },
-  "hosted_ci": "Not yet opened; hosted CI will run on the PR head.",
+  "hosted_ci": "Pending rerun on the updated PR head after push; previous run 38623947750 passed on the prior head.",
   "delivery_boundaries": {
     "remote_d1": false,
     "deployment": false,
     "pr_review": false,
     "merge": false
+  },
+  "review_regressions": {
+    "receipt_replay_red": {
+      "log": "plan/verification/PR-014/logs/late-replay-regression-red.log.gz",
+      "sha256": "593744f7e48234177cd320ade89fd9e5a1004b28341d0c8dbdb1e143fc8530d6",
+      "outcome": "Failed before changes with late publication replay reapplied old pointer mutation.",
+      "raw_log_sha256": "98f165eb2978acf8de20a797dd586e5c006cb94a48524043ddda1309b60b77df",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "receipt_replay_green": {
+      "log": "plan/verification/PR-014/logs/late-replay-regression-green.log.gz",
+      "sha256": "be7cc9fa6d74265dbef369329b33ce672578c8508f2f663700e595669de0df93",
+      "outcome": "Passed after the same-batch receipt changes() guard; covers both publish/unpublish interleavings.",
+      "raw_log_sha256": "f82050014e6f6c74a3d1cdb7d847ded56234008fe3ec42420648a99e733d484a",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "missing_required_fields_red": {
+      "log": "plan/verification/PR-014/logs/missing-required-fields-red.log.gz",
+      "sha256": "c94ce1ee572480ff373d6275203eb62b229f4d10218f0443b4f9748aedd7ab4e",
+      "outcome": "Failed before parser ordering fix: missing required fields returned validation/invalid_json.",
+      "raw_log_sha256": "da6e302f3392ae9527008452d97ff4ef01ba256a1c36b7ef719a3c46db67d77f",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    },
+    "missing_required_fields_green": {
+      "log": "plan/verification/PR-014/logs/missing-required-fields-green.log.gz",
+      "sha256": "bba7999dfaf68d5d88a0f7fce72a081fb2832f739e761f60ec8b0808437ca437",
+      "outcome": "Passed after checking required fields before typed deserialization.",
+      "raw_log_sha256": "e2d5935b2f9155619da9c8664699aa58d4a4d05d12413d9058aece9ba8411147",
+      "compression": "gzip -n; `gzip -cd` restores exact captured bytes"
+    }
   }
 }

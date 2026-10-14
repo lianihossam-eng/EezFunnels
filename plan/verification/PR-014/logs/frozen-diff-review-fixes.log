@@ -1,0 +1,4 @@
+source .project-tools/env.sh && git diff --check
+PASS (exit 0)
+
+Changed paths from origin/main 41f0df225650c32878dfb14000f7116784aad765 were enumerated. No changed paths under plan/contracts/ or migrations/ and no Cargo.toml, Cargo.lock, package.json, or package-lock.json changes. No dependency, schema, migration, or frozen-contract changes.

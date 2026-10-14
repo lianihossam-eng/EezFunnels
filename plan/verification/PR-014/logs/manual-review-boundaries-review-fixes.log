@@ -1,0 +1,13 @@
+Manual PR-014 finding check (independent interrogate agents were prohibited)
+
+Receipt/ABA invariant: the D1 batch claims the receipt before the pointer UPDATE. The UPDATE now additionally requires changes() = 1, so it runs only if this same batch inserted the receipt. The actual local D1/Worker regression exercises publish A -> unpublish B -> late replay A and unpublish B -> publish C -> late replay B, asserting the pointer remains in the state set by the distinct operation. Existing same-key result replay is retained.
+
+Classification: publish revision_id and unpublish expected_published_revision_id presence is checked before typed decode, preserving validation/missing_field. Command execution still checks an active receipt after parse failure before returning that validation error. API-level smoke checks fresh requests (400 missing_field) and reused active keys (409 mismatch).
+
+Public schema: storage UnsupportedSchemaVersion maps to validation/schema_version_unsupported; a local Worker/D1 smoke points a public slug at a schema-v2 row and observes HTTP 400 rather than 503, then restores/deletes its fixture.
+
+Invalid route ID: the URL ID is injected into the command parameters before typed parsing. A fresh invalid route is rejected before any receipt or mutation; a reused active key is classified by the command's active-receipt path and mismatches the changed effective payload. PR-009 smoke asserts fresh 404 and reused-key 409 mismatch. The route does not accept client-controlled funnel_id.
+
+Compatibility: existing one-batch receipt/CAS and response behavior, C-01/C-04 constraints, 16 KiB body cap, V1 contracts, migrations, dependencies, and renderer remain unchanged. No remote D1 or deployment ran.
+
+Audit scope: direct diff comment/TODO/FIXME/lint-suppression scan passed. The repository no-comments and interrogate skills require independent-agent workflows; the task explicitly prohibited subagent delegation, so these full workflows were not run. GPT-6.1-Sol owns the GitHub PR review.

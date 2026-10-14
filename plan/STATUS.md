@@ -29,15 +29,9 @@ Last updated: 2026-10-14
 
 ## Verified locally
 
-PR-014 adds atomic, receipt-backed publish/unpublish routes with an explicit published-revision
-CAS baseline and public `GET /f/:slug` rendering from the stored `render_manifest`. The local Worker
-smoke verifies replay and mismatch behavior, cross-funnel isolation, one-winner concurrent publish,
-V2 theme rendering, ETag changes and weak 304 handling, and 404 after unpublish. `cargo xtask check`,
-`cargo xtask ci` (including audit and local D1 smoke), the migration harness, and the browser suite
-pass. No contract, migration, dependency, or renderer changes were made. D18 records the route and
-storage boundary. The diff scan found no added code comments, TODO/FIXME markers, or lint suppressions;
-independent `/no-comments` and `/interrogate` reviewers were not run because this task prohibited
-subagent delegation. Hosted CI and GPT-6.1-Sol review remain pending. No remote D1 or deployment ran.
+PR-014 adds atomic, receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. Sol's four findings are addressed: only a receipt newly claimed in the same D1 batch can authorize the pointer update; missing required fields classify as `validation/missing_field` after active-receipt precedence; unsupported published schemas return `validation/schema_version_unsupported` / HTTP 400; invalid route IDs cannot mutate state and reused keys are classified before the route error. D18 records these boundaries. The 16 KiB API cap and C-01/C-04 receipt/CAS behavior remain intact, with no frozen contract, migration, dependency, lockfile, or renderer changes.
+
+The focused publication command tests pass 6/6. `cargo xtask check`, `cargo xtask ci` (including local Worker/D1 smoke and audit), both publication Worker smokes, migration harness, and browser suite pass. RustSec scanned 346 locked dependencies against 1,314 advisories with zero findings. Both ABA replay interleavings and all four review regressions have captured red/green or positive evidence in `plan/verification/PR-014/`. The direct comment/TODO/FIXME/suppression scan is clean; the full independent-agent no-comments/interrogate workflows were not run because PR-014 prohibited delegation. Source commit `aa15f1b67aef4490f3e758b090207caf493c2c93` has fingerprint `05e755a2396c3486833786bd5475734b498b5e7afe42ef76c31f70b992a3ee93`. Updated hosted CI and GPT-6.1-Sol review are pending push. No remote D1 or deployment ran.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
