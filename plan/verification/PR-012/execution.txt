@@ -1,5 +1,5 @@
 PR-012 editor undo/redo verification
-Evidence refreshed: 2026-10-14T16:23:37Z
+Evidence refreshed: 2026-10-14T16:26:30Z
 Branch: feat/012_history
 Base commit: d783e3f3a9e43ff7c74cb245250852cf74073600 (exact origin/main SHA)
 Verified source commit: 2ec9db155a5767503663e344ab06f41d9f0017f6
@@ -22,5 +22,5 @@ Validation:
 - Fresh interrogate: zero remaining findings after the live-region fix. No-comments audit: zero findings. Reports and hashes are listed in results.json.
 
 Delivery:
-- PR #13 creation is pending; hosted CI state will be updated after opening. GPT-6.1-Sol owns PR review and merge.
+- PR #13 is open at https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`. Hosted CI run `38598037415` was pending on initial PR head `6e747af3ce0367e798afc8831f140eff782eb6e2` at evidence capture; the status/evidence follow-up will trigger a fresh run. GPT-6.1-Sol owns PR review and merge.
 - No remote D1 operation, Cloudflare deployment, publication, or merge was run.

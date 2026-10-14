@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-012 Undo/redo (`feat/012_history`; implementation and local gates pass; PR #13 creation pending)
+Current phase: PR-012 Undo/redo (`feat/012_history`; PR #13 open; local gates pass; hosted CI pending)
 Last updated: 2026-10-14
 
 ## Phases
@@ -17,7 +17,7 @@ Last updated: 2026-10-14
 - [x] PR-009 Funnel list + creation (final reviewed head `61cbfd519b9a5efb55709ae4cf816f5e9a00a042`; hosted CI run `38535569606` passed; Sol/@codex reviews clean, 12 threads resolved; merged as PR #10 at `cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc`)
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
-- [ ] PR-012 Undo/redo (`feat/012_history`; local implementation and integration checks pass; awaiting PR creation, hosted CI, and Sol re-review)
+- [ ] PR-012 Undo/redo (`feat/012_history`; PR #13 open; local implementation and integration checks pass; hosted CI and Sol re-review pending)
 - [ ] PR-013 Responsive preview
 - [ ] PR-014 Publication /f/:slug
 - [ ] PR-015 Command registry
@@ -181,7 +181,7 @@ captures, idempotency, editor-head CAS, and frozen contracts are unchanged. The 
 edits are retained; successful saves and route loads establish a new history boundary. Decision D17
 records these semantics. `cargo xtask check`, `cargo xtask ci`, the local migration harness, and the
 hydrated Worker/browser suite pass, including the 100 edits / undo 50 / redo 50 regression and
-shortcut preview checks. Detailed logs and hashes are in `plan/verification/PR-012/`.
+shortcut preview checks. PR #13 is open at https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`; the initial hosted CI run `38598037415` was pending on initial head `6e747af3ce0367e798afc8831f140eff782eb6e2` when captured. Sol review is pending. Detailed logs and hashes are in `plan/verification/PR-012/`.
 
 The hosted-runner `rg` dependency was replaced with standard `grep` in `dbca0f012e2d2305c4d4219124e6901c3a567773`.
 Source commit `350b399` restores C-01 and C-04 to their frozen base content and keeps the 100-funnel

@@ -1,6 +1,6 @@
 {
   "task": "PR-012",
-  "evidence_refreshed_at_utc": "2026-10-14T16:23:37Z",
+  "evidence_refreshed_at_utc": "2026-10-14T16:26:30Z",
   "branch": "feat/012_history",
   "base_commit": "d783e3f3a9e43ff7c74cb245250852cf74073600",
   "verified_source_commit": "2ec9db155a5767503663e344ab06f41d9f0017f6",
@@ -240,7 +240,11 @@
   },
   "hosted_ci": {
     "pull_request": 13,
-    "status_at_evidence_capture": "PR creation pending; hosted CI runs only after opening.",
+    "url": "https://github.com/lianihossam-eng/EezFunnels/pull/13",
+    "base": "main",
+    "status_at_evidence_capture": "pending",
+    "head_at_evidence_capture": "6e747af3ce0367e798afc8831f140eff782eb6e2",
+    "run_id": "38598037415",
     "required_before_merge": true,
     "review_handoff": "GPT-6.1-Sol handles PR review and merge. This work did not review or merge a PR."
   },
