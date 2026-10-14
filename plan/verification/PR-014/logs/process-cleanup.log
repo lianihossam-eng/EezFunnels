@@ -1,0 +1,4 @@
+After final cargo xtask ci and browser harness exit:
+- No active workerd, wrangler, or curl process remained.
+- No local Worker listener remained; `ss -ltnp` showed only the environment proxy listener on 0.0.0.0:1040.
+- Previously existing defunct workerd entries were excluded from active-process reporting.

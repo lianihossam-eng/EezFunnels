@@ -52,6 +52,7 @@ struct ProductProbeResponse {
     current_revision_noop_accepted: bool,
     publication_baseline_cas_successes: usize,
     distinct_candidate_cas_successes: usize,
+    publication_replay_interleavings_safe: bool,
     publication_race_funnel_id: &'static str,
     publication_race_revision_ids: Vec<String>,
     correlation_id: String,
@@ -96,10 +97,30 @@ pub async fn fetch(
         error_response(&error, correlation_id.clone())
     } else if request_path == "/api/funnels" {
         funnel_collection_response(&env, request, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/publish") {
+        funnel_publication_mutation_response(
+            &env,
+            request,
+            funnel_id,
+            "funnel.publish",
+            correlation_id.clone(),
+        )
+        .await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/unpublish") {
+        funnel_publication_mutation_response(
+            &env,
+            request,
+            funnel_id,
+            "funnel.unpublish",
+            correlation_id.clone(),
+        )
+        .await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/preview") {
         funnel_editor_preview_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/revisions") {
         funnel_editor_save_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(slug) = public_slug_from_path(&request_path) {
+        public_funnel_response(&env, request, slug, correlation_id.clone()).await
     } else if let Some(funnel_id) = request_path.strip_prefix("/api/funnels/") {
         funnel_item_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
@@ -178,6 +199,245 @@ fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
 
 const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_EDITOR_REQUEST_BYTES: usize = 16 * 1_024;
+
+fn public_slug_from_path(path: &str) -> Option<&str> {
+    let slug = path.strip_prefix("/f/")?;
+    (!slug.is_empty() && !slug.contains('/')).then_some(slug)
+}
+
+fn valid_public_slug(slug: &str) -> bool {
+    (1..=128).contains(&slug.len())
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+}
+
+async fn funnel_publication_mutation_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    command_id: &'static str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::POST {
+        return method_not_allowed_for(&correlation_id, "POST");
+    }
+    let valid_route_id = valid_funnel_route_id(funnel_id);
+    let idempotency_key = match request_idempotency_key(request.headers()) {
+        Err(_) if !valid_route_id => return funnel_route_not_found_response(&correlation_id),
+        Ok(key) => key,
+        Err(code) => {
+            let error = ApiError::from_code(code);
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
+    };
+    let body = match to_bytes(
+        axum::body::Body::new(request.into_body()),
+        MAX_EDITOR_REQUEST_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(_) => {
+            return unreadable_mutation_payload_response(
+                env,
+                command_id,
+                &idempotency_key,
+                &correlation_id,
+                "validation/invalid_json",
+                valid_route_id,
+            )
+            .await
+        }
+    };
+    let body = match std::str::from_utf8(&body) {
+        Ok(body) => body,
+        Err(_) => {
+            return unreadable_mutation_payload_response(
+                env,
+                command_id,
+                &idempotency_key,
+                &correlation_id,
+                "validation/invalid_json",
+                valid_route_id,
+            )
+            .await
+        }
+    };
+    let parameters = match publication_command_parameters(funnel_id, command_id, body) {
+        Ok(parameters) => parameters,
+        Err(
+            EditorCommandParametersError::DuplicateObjectKey
+            | EditorCommandParametersError::InvalidJson,
+        ) => {
+            return unreadable_mutation_payload_response(
+                env,
+                command_id,
+                &idempotency_key,
+                &correlation_id,
+                "validation/invalid_json",
+                valid_route_id,
+            )
+            .await
+        }
+    };
+    match execute_funnel_command(env, command_id, &parameters, Some(&idempotency_key)).await {
+        Ok(result) if valid_route_id => {
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
+        Ok(_) => funnel_route_not_found_response(&correlation_id),
+        Err(error)
+            if !valid_route_id
+                && matches!(
+                    error.code(),
+                    "validation/invalid_json" | "validation/missing_field"
+                ) =>
+        {
+            funnel_route_not_found_response(&correlation_id)
+        }
+        Err(error) => funnel_command_error_response(error, &correlation_id),
+    }
+}
+
+async fn unreadable_mutation_payload_response(
+    env: &Env,
+    command_id: &str,
+    idempotency_key: &str,
+    correlation_id: &str,
+    fresh_error_code: &'static str,
+    valid_route_id: bool,
+) -> Response<axum::body::Body> {
+    match execute_funnel_command(env, command_id, "null", Some(idempotency_key)).await {
+        Err(error)
+            if !valid_route_id
+                && matches!(
+                    error.code(),
+                    "validation/invalid_json" | "validation/missing_field"
+                ) =>
+        {
+            funnel_route_not_found_response(correlation_id)
+        }
+        Err(error) => funnel_command_error_response(error, correlation_id),
+        Ok(_) => editor_payload_error_response(correlation_id, fresh_error_code),
+    }
+}
+
+fn publication_command_parameters(
+    funnel_id: &str,
+    command_id: &str,
+    body: &str,
+) -> Result<String, EditorCommandParametersError> {
+    let duplicate_object_key = Cell::new(false);
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    if UniqueJsonValue(&duplicate_object_key)
+        .deserialize(&mut deserializer)
+        .is_err()
+    {
+        return Err(if duplicate_object_key.get() {
+            EditorCommandParametersError::DuplicateObjectKey
+        } else {
+            EditorCommandParametersError::InvalidJson
+        });
+    }
+    deserializer
+        .end()
+        .map_err(|_| EditorCommandParametersError::InvalidJson)?;
+    let mut value: Value =
+        serde_json::from_str(body).map_err(|_| EditorCommandParametersError::InvalidJson)?;
+    let object = value
+        .as_object_mut()
+        .ok_or(EditorCommandParametersError::InvalidJson)?;
+    let allowed_fields: &[&str] = match command_id {
+        "funnel.publish" => &["revision_id", "expected_published_revision_id"],
+        "funnel.unpublish" => &["expected_published_revision_id"],
+        _ => return Err(EditorCommandParametersError::InvalidJson),
+    };
+    if object
+        .keys()
+        .any(|key| !allowed_fields.contains(&key.as_str()))
+    {
+        return Err(EditorCommandParametersError::InvalidJson);
+    }
+    object.insert("funnel_id".to_owned(), Value::String(funnel_id.to_owned()));
+    serde_json::to_string(&value).map_err(|_| EditorCommandParametersError::InvalidJson)
+}
+
+async fn public_funnel_response(
+    env: &Env,
+    request: HttpRequest,
+    slug: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    if !valid_public_slug(slug) {
+        return funnel_slug_not_found_response(&correlation_id);
+    }
+    let parameters = serde_json::json!({ "slug": slug }).to_string();
+    let result = match execute_funnel_command(env, "funnel.public.read", &parameters, None).await {
+        Ok(result) => result,
+        Err(error) => return funnel_command_error_response(error, &correlation_id),
+    };
+    let (Some(revision_id), Some(html)) = (
+        result.get("revision_id").and_then(Value::as_str),
+        result.get("html").and_then(Value::as_str),
+    ) else {
+        let error = ApiError::from_code("internal/unexpected");
+        log_api_error(&error, &correlation_id, error.code());
+        return error_response(&error, correlation_id);
+    };
+    let etag = format!("\"{revision_id}\"");
+    let etag_header = match HeaderValue::from_str(&etag) {
+        Ok(etag_header) => etag_header,
+        Err(_) => {
+            let error = ApiError::from_code("internal/unexpected");
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
+    };
+    let not_modified = request_if_none_match(request.headers(), &etag);
+    let mut response = Response::new(axum::body::Body::empty());
+    response.headers_mut().insert("etag", etag_header);
+    response.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static("public, max-age=0, must-revalidate"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    if not_modified {
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        return response;
+    }
+    *response.body_mut() = axum::body::Body::from(html.to_owned());
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+}
+
+fn request_if_none_match(headers: &HeaderMap<HeaderValue>, etag: &str) -> bool {
+    headers
+        .get_all(axum::http::header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
+        })
+}
+
+fn funnel_slug_not_found_response(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("not_found/slug");
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
+}
 
 async fn funnel_collection_response(
     env: &Env,
@@ -779,6 +1039,8 @@ async fn local_product_probe(
                     .publication_baseline_cas_successes,
                 distinct_candidate_cas_successes: publication_regressions
                     .distinct_candidate_cas_successes,
+                publication_replay_interleavings_safe: publication_regressions
+                    .publication_replay_interleavings_safe,
                 publication_race_funnel_id: "pr003-race-funnel",
                 publication_race_revision_ids,
                 correlation_id,
@@ -992,7 +1254,11 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{correlation_id, normalize_correlation_id};
+    use super::{
+        correlation_id, normalize_correlation_id, public_slug_from_path,
+        publication_command_parameters, request_if_none_match, valid_public_slug,
+        EditorCommandParametersError,
+    };
     use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
@@ -1037,5 +1303,75 @@ mod tests {
 
         assert_eq!(normalize_correlation_id(&mut headers), "request-123");
         assert_eq!(correlation_id(&headers), "request-123");
+    }
+
+    #[test]
+    fn publication_adapter_rejects_duplicate_keys_before_normalization() {
+        assert_eq!(
+            publication_command_parameters(
+                "funnel-a",
+                "funnel.publish",
+                r#"{"revision_id":"revision-a","expected_published_revision_id":null,"expected_published_revision_id":"revision-a"}"#,
+            ),
+            Err(EditorCommandParametersError::DuplicateObjectKey)
+        );
+        assert_eq!(
+            publication_command_parameters(
+                "funnel-a",
+                "funnel.unpublish",
+                r#"{"expected_published_revision_id":"revision-a","nested":{"x":1,"x":2}}"#,
+            ),
+            Err(EditorCommandParametersError::DuplicateObjectKey)
+        );
+    }
+
+    #[test]
+    fn publication_adapter_owns_route_identity_and_rejects_extra_fields() {
+        assert_eq!(
+            publication_command_parameters(
+                "funnel-route",
+                "funnel.publish",
+                r#"{"revision_id":"revision-a","expected_published_revision_id":null}"#,
+            )
+            .expect("closed publish request"),
+            r#"{"expected_published_revision_id":null,"funnel_id":"funnel-route","revision_id":"revision-a"}"#
+        );
+        assert_eq!(
+            publication_command_parameters(
+                "funnel-route",
+                "funnel.publish",
+                r#"{"funnel_id":"client-chosen","revision_id":"revision-a","expected_published_revision_id":null}"#,
+            ),
+            Err(EditorCommandParametersError::InvalidJson)
+        );
+        assert_eq!(
+            publication_command_parameters(
+                "funnel-route",
+                "funnel.unpublish",
+                r#"{"expected_published_revision_id":"revision-a","html":"unsafe"}"#,
+            ),
+            Err(EditorCommandParametersError::InvalidJson)
+        );
+    }
+
+    #[test]
+    fn public_slug_routing_and_etag_comparison_are_strict_and_support_weak_get_validators() {
+        let mut headers = HeaderMap::new();
+        let etag = "\"revision-a\"";
+        headers.insert(
+            "if-none-match",
+            HeaderValue::from_static("\"older\", W/\"revision-a\""),
+        );
+        assert!(request_if_none_match(&headers, etag));
+        headers.insert("if-none-match", HeaderValue::from_static("*"));
+        assert!(request_if_none_match(&headers, etag));
+        headers.insert("if-none-match", HeaderValue::from_static("\"older\""));
+        assert!(!request_if_none_match(&headers, etag));
+
+        assert_eq!(public_slug_from_path("/f/quick-offer"), Some("quick-offer"));
+        assert_eq!(public_slug_from_path("/f/quick-offer/extra"), None);
+        assert!(valid_public_slug("quick-offer-123"));
+        assert!(!valid_public_slug("../private"));
+        assert!(!valid_public_slug("quick_offer"));
     }
 }

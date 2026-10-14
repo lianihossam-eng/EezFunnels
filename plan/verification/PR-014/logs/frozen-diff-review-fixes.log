@@ -1,0 +1,4 @@
+source .project-tools/env.sh && git diff --check
+PASS (exit 0)
+
+Compared changed paths with origin/main 41f0df225650c32878dfb14000f7116784aad765. No changes under plan/contracts/ or migrations/ and no Cargo.toml, Cargo.lock, package.json, package-lock.json, or crates/render/src/lib.rs changes. No dependency, schema, migration, renderer, or frozen-contract changes.

@@ -1,0 +1,6 @@
+base=41f0df225650c32878dfb14000f7116784aad765
+added_source_comment_lines=0
+added_todo_fixme_or_suppression_markers=0
+comment_details=[]
+marker_details=[]
+Note: the project no-comments skill requires an independent Comment Sicko agent. This task prohibited subagent delegation, so this is a direct staged-diff scan, not the full skill workflow.

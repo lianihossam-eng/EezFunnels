@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use eez_domain::ThemePreset;
-use repository::{NewFunnel, NewRevision, NewTheme, RepositoryError};
+use repository::{
+    MutationResult, NewFunnel, NewRevision, NewTheme, PublicationMutation, RepositoryError,
+};
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
@@ -15,6 +17,7 @@ pub struct PublicationRegressionObservations {
     pub current_revision_noop_accepted: bool,
     pub publication_baseline_cas_successes: usize,
     pub distinct_candidate_cas_successes: usize,
+    pub publication_replay_interleavings_safe: bool,
 }
 
 pub struct Bindings {
@@ -53,12 +56,20 @@ impl Bindings {
         let repository = self.repository();
         let funnel_cleanup = repository.delete_funnel("pr003-smoke-funnel").await;
         let theme_cleanup = repository.delete_theme("pr003-smoke-theme").await;
+        let receipt_cleanup = self
+            .database
+            .prepare(
+                "DELETE FROM command_receipts WHERE idempotency_key IN ('pr003-replay-publish','pr003-replay-unpublish','pr003-replay-publish-later')",
+            )
+            .run()
+            .await;
 
         match result {
             Err(error) => Err(error),
             Ok(observations) => {
                 funnel_cleanup?;
                 theme_cleanup?;
+                receipt_cleanup?;
                 Ok(observations)
             }
         }
@@ -416,6 +427,128 @@ impl Bindings {
             usize::from(first_candidate_won) + usize::from(second_candidate_won);
         let publication_baseline_cas_successes =
             usize::from(current_revision_noop_accepted) + distinct_candidate_cas_successes;
+
+        let funnel_id = D1Type::Text(&created_funnel.id);
+        self.database
+            .prepare("UPDATE funnels SET published_revision_id = NULL WHERE id = ?")
+            .bind_refs([&funnel_id])?
+            .run()
+            .await?;
+        let publish_payload = serde_json::json!({
+            "funnel_id": created_funnel.id,
+            "revision_id": second_revision.id,
+            "expected_published_revision_id": null,
+        })
+        .to_string();
+        let publish_result = serde_json::json!({
+            "command_id": "funnel.publish",
+            "funnel_id": created_funnel.id,
+            "published_revision_id": second_revision.id,
+        })
+        .to_string();
+        let unpublish_payload = serde_json::json!({
+            "funnel_id": created_funnel.id,
+            "expected_published_revision_id": second_revision.id,
+        })
+        .to_string();
+        let unpublish_result = serde_json::json!({
+            "command_id": "funnel.unpublish",
+            "funnel_id": created_funnel.id,
+            "published_revision_id": null,
+            "unpublished": true,
+        })
+        .to_string();
+        let publish = PublicationMutation {
+            funnel_id: &created_funnel.id,
+            published_revision_id: Some(&second_revision.id),
+            expected_published_revision_id: None,
+            command_id: "funnel.publish",
+            idempotency_key: "pr003-replay-publish",
+            payload_json: &publish_payload,
+            result_json: &publish_result,
+        };
+        if !matches!(
+            repository.set_published_revision_idempotently(&publish).await?,
+            MutationResult::Stored(result) if result == publish_result
+        ) {
+            return Err(Error::RustError(
+                "initial idempotent publication did not store its receipt".to_owned(),
+            ));
+        }
+        let unpublish = PublicationMutation {
+            funnel_id: &created_funnel.id,
+            published_revision_id: None,
+            expected_published_revision_id: Some(&second_revision.id),
+            command_id: "funnel.unpublish",
+            idempotency_key: "pr003-replay-unpublish",
+            payload_json: &unpublish_payload,
+            result_json: &unpublish_result,
+        };
+        if !matches!(
+            repository
+                .set_published_revision_idempotently(&unpublish)
+                .await?,
+            MutationResult::Stored(result) if result == unpublish_result
+        ) {
+            return Err(Error::RustError(
+                "initial idempotent unpublication did not store its receipt".to_owned(),
+            ));
+        }
+        let late_publish_replay = repository
+            .set_published_revision_idempotently(&publish)
+            .await?;
+        let pointer_after_late_publish = repository
+            .get_funnel(&created_funnel.id)
+            .await?
+            .and_then(|funnel| funnel.published_revision_id);
+        if !matches!(late_publish_replay, MutationResult::Stored(result) if result == publish_result)
+            || pointer_after_late_publish.is_some()
+        {
+            return Err(Error::RustError(
+                "late publication replay reapplied an old pointer mutation".to_owned(),
+            ));
+        }
+        let later_publish_payload = serde_json::json!({
+            "funnel_id": created_funnel.id,
+            "revision_id": second_revision.id,
+            "expected_published_revision_id": null,
+        })
+        .to_string();
+        let later_publish = PublicationMutation {
+            funnel_id: &created_funnel.id,
+            published_revision_id: Some(&second_revision.id),
+            expected_published_revision_id: None,
+            command_id: "funnel.publish",
+            idempotency_key: "pr003-replay-publish-later",
+            payload_json: &later_publish_payload,
+            result_json: &publish_result,
+        };
+        if !matches!(
+            repository
+                .set_published_revision_idempotently(&later_publish)
+                .await?,
+            MutationResult::Stored(result) if result == publish_result
+        ) {
+            return Err(Error::RustError(
+                "later publication after replay test did not succeed".to_owned(),
+            ));
+        }
+        let late_unpublish_replay = repository
+            .set_published_revision_idempotently(&unpublish)
+            .await?;
+        let pointer_after_late_unpublish = repository
+            .get_funnel(&created_funnel.id)
+            .await?
+            .and_then(|funnel| funnel.published_revision_id);
+        if !matches!(late_unpublish_replay, MutationResult::Stored(result) if result == unpublish_result)
+            || pointer_after_late_unpublish.as_deref() != Some(&second_revision.id)
+        {
+            return Err(Error::RustError(
+                "late unpublication replay reapplied an old pointer mutation".to_owned(),
+            ));
+        }
+        let publication_replay_interleavings_safe = true;
+
         if repository.get_revision(&first_revision.id).await?.is_none()
             || !repository.delete_revision(&first_revision.id).await?
         {
@@ -502,6 +635,7 @@ impl Bindings {
             current_revision_noop_accepted,
             publication_baseline_cas_successes,
             distinct_candidate_cas_successes,
+            publication_replay_interleavings_safe,
         })
     }
 

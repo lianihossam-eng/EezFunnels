@@ -1,0 +1,16 @@
+base=41f0df225650c32878dfb14000f7116784aad765
+merge_base=41f0df225650c32878dfb14000f7116784aad765
+tracked_and_untracked_changed_paths:
+apps/api/src/lib.rs
+crates/commands/src/funnel.rs
+crates/commands/src/lib.rs
+crates/commands/src/publication_tests.rs
+crates/storage/src/repository.rs
+plan/STATUS.md
+plan/decisions/D18_publication_routes.md
+scripts/smoke-pr009.sh
+frozen_contracts_changed=0
+schema_migrations_changed=0
+dependency_manifests_or_lockfiles_changed=0
+renderer_changed=0
+diff_check=PASS

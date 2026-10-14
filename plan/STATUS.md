@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-013 Responsive preview (`feat/013_responsive`; based on merged main `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`)
+Current phase: PR-014 Publication `/f/:slug` (`feat/014_publish`; based on merged main `41f0df225650c32878dfb14000f7116784aad765`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -18,8 +18,8 @@ Last updated: 2026-10-14
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
 - [x] PR-012 Undo/redo (PR #13 merged at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`; hosted CI run `38611264446` passed on reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27`)
-- [ ] PR-013 Responsive preview (`feat/013_responsive`; implementation in progress)
-- [ ] PR-014 Publication /f/:slug
+- [x] PR-013 Responsive preview (merged into `main` at `41f0df225650c32878dfb14000f7116784aad765`)
+- [ ] PR-014 Publication /f/:slug (`feat/014_publish`; implementation in progress)
 - [ ] PR-015 Command registry
 - [ ] PR-016 CLI
 - [ ] PR-017 MCP server
@@ -28,6 +28,10 @@ Last updated: 2026-10-14
 - [ ] PR-020 Release v0.1.0
 
 ## Verified locally
+
+PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. The local publication fixes require a newly claimed receipt in the exact D1 batch before pointer mutation, classify missing publish/unpublish fields and public-read slug before typed decode, map unsupported stored schema to HTTP 400, and classify an invalid route against active receipts before returning its route error. D18 records these boundaries; the 16 KiB request cap and C-01/C-04 receipt/CAS behavior remain unchanged. No frozen contract, migration, dependency, lockfile, or renderer changed.
+
+The focused publication command suite passes 7/7, including the new empty-public-read-input regression. `cargo xtask check` and `cargo xtask ci` pass on source commit `07a02418eed6e111d1aa221bb07739b4da4df697`; CI's local Worker/D1 smoke covers the publication findings, and RustSec found zero advisories across 346 locked dependencies. Both repository-level ABA replay scenarios pass in `scripts/smoke-pr003.sh`. Migration and browser suites pass; browser critical axe findings are zero. Fingerprint is `7b85f4311c5e28118eda715ab65483d3b81d73653d72260127cb3722d3bb3840` across 123 files. Direct comment/TODO/FIXME/suppression scans and manual boundary audit are clean; full independent-agent no-comments/interrogate workflows were not run because PR-014 prohibited delegation. Fresh hosted CI and GPT-6.1-Sol re-review are pending push. No remote D1 or deployment ran.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
