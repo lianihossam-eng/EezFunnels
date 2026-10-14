@@ -173,7 +173,7 @@ fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
 }
 
 const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
-const MAX_EDITOR_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_EDITOR_REQUEST_BYTES: usize = 16 * 1_024;
 
 async fn funnel_collection_response(
     env: &Env,
@@ -382,7 +382,7 @@ fn editor_command_parameters(funnel_id: &str, body: &str) -> Result<String, &'st
     let object = value.as_object_mut().ok_or("validation/invalid_json")?;
     if object
         .keys()
-        .any(|key| key != "base_revision_id" && key != "section_ids")
+        .any(|key| key != "base_revision_id" && key != "section_ids" && key != "settings")
     {
         return Err("validation/invalid_json");
     }

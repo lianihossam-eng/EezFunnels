@@ -129,6 +129,15 @@ async function waitForOrder(page, expected) {
   );
 }
 
+function editorPreviewResponse(page, funnelId) {
+  return page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/api/funnels/${funnelId}/preview`),
+    { timeout: 10000 },
+  );
+}
+
 async function clickWithPointer(page, locator) {
   const box = await locator.boundingBox();
   assert(box, "Navigation link must be visible for pointer click");
@@ -365,6 +374,90 @@ try {
   });
   assert(previewRequests.length >= 1, "Reorder must call the editor preview API");
 
+  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  const setting = (id) => page.locator(`[id="${id}"]`);
+  let nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-section.hero.title").fill("PR-011 inspector headline");
+  let settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  await frameDocument.getByRole("heading", { name: "PR-011 inspector headline" }).waitFor();
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-theme.preset").selectOption("bold");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  assert.equal(await setting("setting-theme.primary_color").inputValue(), "#f97316");
+  await page.waitForFunction(() =>
+    document.querySelector("iframe")?.getAttribute("srcdoc")?.includes("--color-background:#111113"),
+  );
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-theme.primary_color").fill("#334155");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  await page.waitForFunction(() =>
+    document.querySelector("iframe")?.getAttribute("srcdoc")?.includes("--color-primary:#334155"),
+  );
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await page.getByRole("button", { name: "Reset to preset" }).click();
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  assert.equal(await setting("setting-theme.primary_color").inputValue(), "#f97316");
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-theme.primary_color").fill("#123456");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  await page.waitForFunction(() =>
+    document.querySelector("iframe")?.getAttribute("srcdoc")?.includes("--color-primary:#123456"),
+  );
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-theme.square_buttons").check();
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  await page.waitForFunction(() =>
+    document.querySelector("iframe")?.getAttribute("srcdoc")?.includes("--radius-button:0"),
+  );
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-section.hero.image-url").fill("https://example.test/pr011-image.png");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await setting("setting-section.hero.image-alt").fill("PR-011 preview image");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+  await frameDocument.getByText("PR-011 preview image", { exact: true }).waitFor();
+  await frameDocument.getByText("https://example.test/pr011-image.png", { exact: true }).waitFor();
+  assert.equal(await frameDocument.locator("img").count(), 0, "Image edits stay inert in preview");
+
+  await clickWithPointer(page, page.locator('[data-editor-section="cta"]'));
+  const ctaDestination = setting("setting-section.cta.cta_url");
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await ctaDestination.fill("javascript:alert(1)");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 400, await settingPreview.text());
+  const rejectedSaveRequest = page.waitForRequest(
+    (request) => request.method() === "PUT" && request.url().endsWith(`/api/funnels/${primaryId}/revisions`),
+  );
+  const rejectedSaveResponse = page.waitForResponse(
+    (response) => response.request().method() === "PUT" && response.url().endsWith(`/api/funnels/${primaryId}/revisions`),
+  );
+  await page.getByRole("button", { name: "Save revision" }).click();
+  const rejectedSave = await rejectedSaveResponse;
+  const rejectedSaveText = await rejectedSave.text();
+  const rejectedSaveHeaders = (await rejectedSaveRequest).headers();
+  assert.equal(rejectedSave.status(), 400, rejectedSaveText);
+  assert(rejectedSaveHeaders["idempotency-key"], "Rejected validation save carries its own key");
+  assert.equal(await ctaDestination.isDisabled(), false, "A definitive validation error unlocks the editor");
+
+  nextPreview = editorPreviewResponse(page, primaryId);
+  await ctaDestination.fill("https://example.test/repaired");
+  settingPreview = await nextPreview;
+  assert.equal(settingPreview.status(), 200, await settingPreview.text());
+
   const fixture = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script>document.body.dataset.scriptRan="yes";fetch("${probeOrigin}/__pr010_probe/script").catch(()=>{});</script><img src="${probeOrigin}/__pr010_probe/image"><a href="${probeOrigin}/__pr010_probe/navigation">inert link</a></body></html>`;
   await frame.evaluate((iframe, srcdoc) => {
     iframe.setAttribute("srcdoc", srcdoc);
@@ -393,7 +486,14 @@ try {
   const firstSavePayload = JSON.parse(firstSaveRequest.postData() ?? "{}");
   const firstSaveKey = firstSaveRequest.headers()["idempotency-key"];
   assert(firstSaveKey, "Save request must carry an idempotency key");
+  assert.notEqual(firstSaveKey, rejectedSaveHeaders["idempotency-key"], "Corrected save uses a fresh idempotency key");
   const firstSaveResult = JSON.parse(firstSaveText);
+  assert.equal(firstSavePayload.settings?.schema_version, 1);
+  assert.deepEqual(
+    [...new Set(firstSavePayload.settings.changes.map(({ value }) => value.kind))].sort(),
+    ["color", "image", "select", "text", "toggle"],
+    "Save must persist all five planned setting control types",
+  );
   await page.getByText("All changes saved").waitFor();
   const replay = await fetch(`${origin}/api/funnels/${primaryId}/revisions`, {
     method: "PUT",
@@ -403,6 +503,18 @@ try {
   const replayText = await replay.text();
   assert.equal(replay.status, 200, replayText);
   assert.equal(JSON.parse(replayText).revision_id, firstSaveResult.revision_id);
+
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-010 browser editor" }).waitFor();
+  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  assert.equal(await setting("setting-section.hero.title").inputValue(), "PR-011 inspector headline");
+  assert.equal(await setting("setting-theme.preset").inputValue(), "bold");
+  assert.equal(await setting("setting-theme.primary_color").inputValue(), "#123456");
+  assert.equal(await setting("setting-theme.square_buttons").isChecked(), true);
+  assert.equal(await setting("setting-section.hero.image-url").inputValue(), "https://example.test/pr011-image.png");
+  assert.equal(await setting("setting-section.hero.image-alt").inputValue(), "PR-011 preview image");
+  await page.frameLocator("iframe").getByText("PR-011 preview image", { exact: true }).waitFor();
+  assert.equal(await page.frameLocator("iframe").locator("img").count(), 0);
 
   const idempotencyRaceFunnels = await Promise.all([
     apiCreate(origin, "PR-010 shared key first funnel"),
@@ -512,7 +624,7 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010 browser: navigation, keyboard, pointer, preview, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  console.log(`PR-010/011 browser: navigation, keyboard, pointer, five inspector controls, live preview, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,
