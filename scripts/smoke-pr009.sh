@@ -474,8 +474,9 @@ request() {
 
 seed_expired_receipt() {
   local key="$1"
+  local command_id="${2:-funnel.create}"
   ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
-    --command "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) VALUES ('$key', 'funnel.create', '{}', '{}', 0);" >/dev/null
+    --command "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) VALUES ('$key', '$command_id', '{}', '{}', 0);" >/dev/null
 }
 
 assert_no_expired_receipts() {
@@ -569,6 +570,49 @@ assert sys.argv[2] == "409", (sys.argv[2], response)
 assert response["code"] == "conflict/idempotency_payload_mismatch", response
 PY
 
+invalid_blueprint_replay_status="$(request POST /api/funnels "$state_dir/invalid-blueprint-replay.json" \
+  "$state_dir/invalid-blueprint-replay.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-1' \
+  --data '{"name":"Changed offer","blueprint":"unknown"}')"
+python3 - "$state_dir/invalid-blueprint-replay.json" "$invalid_blueprint_replay_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "409", (sys.argv[2], response)
+assert response["code"] == "conflict/idempotency_payload_mismatch", response
+PY
+
+invalid_blueprint_new_key_status="$(request POST /api/funnels "$state_dir/invalid-blueprint-new-key.json" \
+  "$state_dir/invalid-blueprint-new-key.headers" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: pr009-create-invalid-blueprint' \
+  --data '{"name":"Changed offer","blueprint":"unknown"}')"
+python3 - "$state_dir/invalid-blueprint-new-key.json" "$invalid_blueprint_new_key_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "400", (sys.argv[2], response)
+assert response["code"] == "validation/invalid_json", response
+PY
+
+seed_expired_receipt pr009-create-expired-invalid-blueprint
+invalid_blueprint_expired_key_status="$(request POST /api/funnels \
+  "$state_dir/invalid-blueprint-expired-key.json" "$state_dir/invalid-blueprint-expired-key.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr009-create-expired-invalid-blueprint' \
+  --data '{"name":"Changed offer","blueprint":"unknown"}')"
+python3 - "$state_dir/invalid-blueprint-expired-key.json" "$invalid_blueprint_expired_key_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "400", (sys.argv[2], response)
+assert response["code"] == "validation/invalid_json", response
+PY
+
 for blueprint in vsl webinar launch lead_gen; do
   blueprint_payload="{\"name\":\"Blueprint $blueprint\",\"blueprint\":\"$blueprint\"}"
   blueprint_status="$(request POST /api/funnels "$state_dir/$blueprint.json" "$state_dir/$blueprint.headers" \
@@ -649,6 +693,46 @@ with open(sys.argv[2], encoding="utf-8") as replay_file:
 assert first["deleted"] is True, first
 assert replay["deleted"] is True, replay
 assert first["funnel_id"] == replay["funnel_id"], (first, replay)
+PY
+
+invalid_delete_replay_status="$(request DELETE /api/funnels/invalid! \
+  "$state_dir/invalid-delete-replay.json" "$state_dir/invalid-delete-replay.headers" \
+  -H 'Idempotency-Key: pr009-delete-1')"
+python3 - "$state_dir/invalid-delete-replay.json" "$invalid_delete_replay_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "409", (sys.argv[2], response)
+assert response["code"] == "conflict/idempotency_payload_mismatch", response
+PY
+
+invalid_delete_new_key_status="$(request DELETE /api/funnels/invalid! \
+  "$state_dir/invalid-delete-new-key.json" "$state_dir/invalid-delete-new-key.headers" \
+  -H 'Idempotency-Key: pr009-delete-invalid-route')"
+python3 - "$state_dir/invalid-delete-new-key.json" "$invalid_delete_new_key_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "404", (sys.argv[2], response)
+assert response["code"] == "not_found/funnel", response
+PY
+
+seed_expired_receipt pr009-delete-expired-invalid-route funnel.delete
+invalid_delete_expired_key_status="$(request DELETE /api/funnels/invalid! \
+  "$state_dir/invalid-delete-expired-key.json" "$state_dir/invalid-delete-expired-key.headers" \
+  -H 'Idempotency-Key: pr009-delete-expired-invalid-route')"
+python3 - "$state_dir/invalid-delete-expired-key.json" "$invalid_delete_expired_key_status" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+assert sys.argv[2] == "404", (sys.argv[2], response)
+assert response["code"] == "not_found/funnel", response
 PY
 
 delete_index=0

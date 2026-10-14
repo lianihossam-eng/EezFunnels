@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
 use sha2::{Digest, Sha256};
+#[cfg(any(feature = "browser", test))]
+use std::future::Future;
 #[cfg(feature = "browser")]
 use uuid::Uuid;
 
@@ -343,12 +345,18 @@ fn Funnels() -> Element {
                             Ok(response) if response.status == 201 => {
                                 let message = created_summary(&response.body, &request_name);
                                 let _ = clear_idempotency_storage(&prepared_key);
-                                create_success.set(Some(message));
-                                create_open.set(false);
-                                funnel_name.set(String::new());
-                                blueprint.set(FunnelBlueprint::Tripwire);
-                                create_idempotency_key.set(None);
-                                refresh_funnel_list(load_state).await;
+                                finish_create_before_refresh(
+                                    move || {
+                                        create_success.set(Some(message));
+                                        create_open.set(false);
+                                        funnel_name.set(String::new());
+                                        blueprint.set(FunnelBlueprint::Tripwire);
+                                        create_idempotency_key.set(None);
+                                        create_pending.set(false);
+                                    },
+                                    refresh_funnel_list(load_state),
+                                )
+                                .await;
                             }
                             Ok(response) => {
                                 create_idempotency_key.set(Some(prepared_key.clone()));
@@ -716,6 +724,16 @@ async fn refresh_funnel_list(mut load_state: Signal<FunnelListLoad>) {
     load_state.with_mut(|state| state.complete(request_version, result));
 }
 
+#[cfg(any(feature = "browser", test))]
+async fn finish_create_before_refresh<F, R>(finish_create: F, refresh: R)
+where
+    F: FnOnce(),
+    R: Future<Output = ()>,
+{
+    finish_create();
+    refresh.await;
+}
+
 fn can_create_funnel(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed.len() <= MAX_FUNNEL_NAME_BYTES
@@ -838,6 +856,50 @@ mod tests {
         list_state.complete(initial_load, Err(()));
 
         assert_eq!(list_state.response, Some(Ok(vec![created_funnel])));
+    }
+
+    #[test]
+    fn successful_create_closes_and_enables_form_before_unresolved_list_refresh() {
+        use std::cell::Cell;
+        use std::future::{pending, Future};
+        use std::pin::Pin;
+        use std::rc::Rc;
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct NoopWake;
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
+
+        fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+            let waker = Waker::from(Arc::new(NoopWake));
+            let mut context = Context::from_waker(&waker);
+            future.as_mut().poll(&mut context)
+        }
+
+        let dialog_open = Rc::new(Cell::new(true));
+        let mutation_pending = Rc::new(Cell::new(true));
+        let finished_dialog = Rc::clone(&dialog_open);
+        let finished_pending = Rc::clone(&mutation_pending);
+        let refresh = finish_create_before_refresh(
+            move || {
+                finished_dialog.set(false);
+                finished_pending.set(false);
+            },
+            pending::<()>(),
+        );
+        let mut refresh = std::pin::pin!(refresh);
+
+        assert!(poll_once(refresh.as_mut()).is_pending());
+        assert!(
+            !dialog_open.get(),
+            "success closes the create dialog immediately"
+        );
+        assert!(
+            !mutation_pending.get(),
+            "list refresh must not keep the create mutation pending"
+        );
     }
 
     #[test]

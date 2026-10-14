@@ -221,9 +221,33 @@ impl<'repo, 'database> Session<'repo, 'database> {
         parameters: &str,
         idempotency_key: &str,
     ) -> Result<Value, FunnelCommandError> {
-        let command = FunnelCreateCommand::from_json(parameters)?;
+        let command = match FunnelCreateCommand::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, FunnelCreateCommand::ID, None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
         let canonical_parameters =
             serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                FunnelCreateCommand::ID,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
         let prepared = command.prepare(
             uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
@@ -240,7 +264,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         };
         let result_json =
             serde_json::to_string(&result).map_err(|_| FunnelCommandError::Internal)?;
-        match self
+        let result = self
             .repository
             .create_funnel_with_revision(
                 &prepared.funnel,
@@ -250,13 +274,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 &canonical_parameters,
                 &result_json,
             )
-            .await?
-        {
-            MutationResult::Stored(result) => {
-                serde_json::from_str(&result).map_err(|_| FunnelCommandError::Internal)
-            }
-            MutationResult::PayloadMismatch => Err(FunnelCommandError::IdempotencyPayloadMismatch),
-        }
+            .await?;
+        mutation_result_to_value(result)
     }
 
     async fn execute_delete(
@@ -264,9 +283,33 @@ impl<'repo, 'database> Session<'repo, 'database> {
         parameters: &str,
         idempotency_key: &str,
     ) -> Result<Value, FunnelCommandError> {
-        let command = FunnelDeleteCommand::from_json(parameters)?;
+        let command = match FunnelDeleteCommand::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, FunnelDeleteCommand::ID, None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
         let canonical_parameters =
             serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                FunnelDeleteCommand::ID,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
         let result = FunnelDeleteResult {
             command_id: FunnelDeleteCommand::ID,
             funnel_id: command.funnel_id(),
@@ -274,7 +317,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         };
         let result_json =
             serde_json::to_string(&result).map_err(|_| FunnelCommandError::Internal)?;
-        match self
+        let result = self
             .repository
             .delete_funnel_idempotently(
                 command.funnel_id(),
@@ -283,13 +326,17 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 &canonical_parameters,
                 &result_json,
             )
-            .await?
-        {
-            MutationResult::Stored(result) => {
-                serde_json::from_str(&result).map_err(|_| FunnelCommandError::Internal)
-            }
-            MutationResult::PayloadMismatch => Err(FunnelCommandError::IdempotencyPayloadMismatch),
+            .await?;
+        mutation_result_to_value(result)
+    }
+}
+
+fn mutation_result_to_value(result: MutationResult) -> Result<Value, FunnelCommandError> {
+    match result {
+        MutationResult::Stored(result) => {
+            serde_json::from_str(&result).map_err(|_| FunnelCommandError::Internal)
         }
+        MutationResult::PayloadMismatch => Err(FunnelCommandError::IdempotencyPayloadMismatch),
     }
 }
 

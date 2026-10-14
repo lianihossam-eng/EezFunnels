@@ -237,13 +237,12 @@ async fn funnel_item_response(
     if request.method() != Method::DELETE {
         return method_not_allowed_for(&correlation_id, "DELETE");
     }
-    if !valid_funnel_route_id(funnel_id) {
-        let error = ApiError::from_code("not_found/funnel");
-        log_api_error(&error, &correlation_id, error.code());
-        return error_response(&error, correlation_id);
-    }
+    let valid_route_id = valid_funnel_route_id(funnel_id);
     let idempotency_key = match request_idempotency_key(request.headers()) {
         Ok(key) => key,
+        Err(_) if !valid_route_id => {
+            return funnel_route_not_found_response(&correlation_id);
+        }
         Err(code) => {
             let error = ApiError::from_code(code);
             log_api_error(&error, &correlation_id, error.code());
@@ -259,9 +258,21 @@ async fn funnel_item_response(
         }
     };
     match execute_funnel_command(env, "funnel.delete", &parameters, Some(&idempotency_key)).await {
-        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Ok(result) if valid_route_id => {
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
+        Ok(_) => funnel_route_not_found_response(&correlation_id),
+        Err(error) if !valid_route_id && error.code() == "validation/invalid_json" => {
+            funnel_route_not_found_response(&correlation_id)
+        }
         Err(error) => funnel_command_error_response(error, &correlation_id),
     }
+}
+
+fn funnel_route_not_found_response(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("not_found/funnel");
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
 }
 
 async fn execute_funnel_command(
