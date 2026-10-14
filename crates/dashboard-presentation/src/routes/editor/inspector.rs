@@ -53,6 +53,7 @@ impl EditorState {
         if self.saving || self.retryable || self.stale {
             return None;
         }
+        let before = self.history_snapshot()?;
         let document = self.document.as_mut()?;
         let field = document
             .settings_schema
@@ -84,6 +85,7 @@ impl EditorState {
         } else {
             document.settings_changes.insert(field_id.to_owned(), value);
         }
+        self.record_history_from(before, None);
         Some(self.begin_preview())
     }
 
