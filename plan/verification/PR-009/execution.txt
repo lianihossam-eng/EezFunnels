@@ -1,10 +1,10 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T08:16:23Z
+Evidence refreshed: 2026-10-14T08:28:31Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b
-Source fingerprint: 0d1910b11351978f5122399beb37eae56bef46f9c1419459000c124ca79e46b3 (110 source files)
+Verified source commit: ca4ceada2dd090a423bb85ac12b4f13abfc0d118
+Source fingerprint: 876b3284afb31d47d0a9cac6333ff4b22ce5b82ca07dcd8ba347da29365dc337 (110 source files)
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, Rust toolchain files, and .project-tools are excluded.
 
 Final-gate pending-state fix:
@@ -20,3 +20,13 @@ Validation on source commit `5c6c939ddf8f35b52e90087c8e5f6159bfe8780b`:
 - `git show --check`, `cargo fmt --check` through `cargo xtask check`, and diff checks pass. The source diff adds no comments, TODO/FIXME markers, or lint suppressions; the independent read-only Luna review found no actionable issue.
 
 The UI response continuation is covered by native tests; no headless browser ran, so browser hydration completion and native Escape behavior remain unverified. Wrangler used local bindings only; no remote migration or deployment ran. Hosted CI for the eventual source/evidence head is pending push; no new Codex review request or merge occurred.
+
+
+Follow-up: stale pre-delete list response
+- Codex P2 on prior head `654cd3f` identified that a GET begun before a successful DELETE could complete after the local `retain` and restore the deleted funnel.
+- Source commit `ca4ceada2dd090a423bb85ac12b4f13abfc0d118` adds `FunnelListLoad::delete_succeeded`, which advances the request generation and removes the card. The route invokes it on HTTP 200 and starts a new authoritative list request in the background.
+- Regression `a_list_response_started_before_delete_cannot_restore_the_deleted_funnel`: red exit 101 before the reducer change because the stale completion restored the deleted item; green exit 0 afterward. Red log `/tmp/eezfunnel-pr009-stale-delete-red.log` SHA-256 `437780278b6f21a38a0ee520f814ef47b4472d8ccb63b6b1151c67adbdea79eb`; green log `/tmp/eezfunnel-pr009-stale-delete-green.log` SHA-256 `b03b838580b34dae31a950f835e63570230980ddf275a1966fbb64b853841578`.
+- `cargo xtask check`: CHECK_EXIT=0, dashboard presentation 16 tests. Log `/tmp/eezfunnel-pr009-delete-stale-check.log` SHA-256 `eae090e7e5cef54534c7f6d2671239574d0e69e7192ac582374f780ec418c6bf`.
+- Full `cargo xtask ci`: CI_EXIT=0 using the existing isolated target `/workspace/.eezfunnel-pr009-name-limit-ci`; API/dashboard WASM, generated assets, worker cleanup regressions, CRUD/idempotency/capacity smoke, and audit of 345 dependencies against 1,310 advisories with zero findings passed. Log `/tmp/eezfunnel-pr009-delete-stale-ci.log` SHA-256 `7c9e77857ba17cbac4833b904be3586569970244aff507fc02e1631179c62bb6`.
+- Independent local Wrangler smoke: SMOKE_EXIT=0. Log `/tmp/eezfunnel-pr009-delete-stale-smoke.log` SHA-256 `a8312a7032b27d1aa307432aaecb12e84f0063cdff849ca673e569743c7cea94`; Wrangler log SHA-256 `d8cfcf07c23d024dde01c3945b5ce45d366f53490b345509430e171fb2d1158a`. Port 8787 closed, no live Wrangler/workerd process, smoke temporary directory removed.
+- Hosted CI on the previous head `654cd3f` passed as run `38534210556`; hosted CI for the source/evidence head is pending after push. No merge or deployment occurred. Browser hydration remains unverified.
