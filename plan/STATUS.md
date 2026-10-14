@@ -1,7 +1,7 @@
 # Eez Funnel - Status
 
-Current phase: PR-007 5 themes (`feat/007_themes`)
-Last updated: 2026-10-13
+Current phase: PR-008 Dashboard shell (`feat/008_dashboard`)
+Last updated: 2026-10-14
 
 ## Phases
 
@@ -12,8 +12,8 @@ Last updated: 2026-10-13
 - [x] PR-004 Domain model (merged as PR #5; merge commit `c5961dfc77fb60198882fdd7f5909d4e0326933f`)
 - [x] PR-005 Render engine (merged as PR #6; merge commit `2c67843b61c0eb266dee1219565d4e55d59738da`)
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
-- [ ] PR-007 5 themes (implementation complete; local verification passed)
-- [ ] PR-008 Dashboard shell
+- [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
+- [ ] PR-008 Dashboard shell (implementation complete; local verification passed)
 - [ ] PR-009 Funnel list + creation
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
@@ -71,7 +71,7 @@ passes with 113 audited dependencies and zero findings. PR #7 merged at
 CI green and Sol/@codex reviews clean. Refreshed evidence is in
 `plan/verification/PR-006/execution.txt` and `results.json`.
 
-PR-007 adds five closed, typed preset themes with stable IDs and JSON token maps, a migration that
+PR-007 added five closed, typed preset themes with stable IDs and JSON token maps, a migration that
 updates the existing D1 seed rows, and a storage probe that checks exact catalog parity. `theme.set`
 creates an immutable revision with a validated theme digest and renderer-v2; it rejects reuse of the
 source revision ID. Renderer-v2 emits a trusted stylesheet that consumes the token set, while
@@ -83,10 +83,30 @@ suites pass 13, 2, 33, and 5 tests. `cargo xtask check`, fresh-target `cargo xta
 commit `c4751dd9e7519c3c80b3cf136685d49673fbdd52`, and the local-only
 `scripts/smoke-pr003.sh` all pass. RustSec scanned 113 locked dependencies against 1,310 advisories
 with zero findings. Fingerprinted output is in `plan/verification/PR-007/execution.txt` and
-`results.json`. The fix addresses Sol's review finding that `.footer-links` matched no emitted
-footer elements; it styles the existing `.section-footer nav ul` and anchor markup without changing
-renderer-v1 bytes. Hosted CI and fresh @codex/Sol review are required on PR #8's final head; do not
-merge before they are clean on that exact SHA. No remote deployment was run.
+`results.json`. PR #8 merged this work at `7ade40e9ed3cb917d380d762beeb5a01916f1e83`. The fix
+addresses Sol's review finding that `.footer-links` matched no emitted footer elements; it styles
+the existing `.section-footer nav ul` and anchor markup without changing renderer-v1 bytes.
+
+PR-008 adds a Dioxus 0.7.10 shell with Worker-time SSR and same-tree browser hydration for exactly
+`/`, `/funnels`, and validated `/funnels/:id` paths. D12 records the presentation-layer boundary,
+hydration payload format, pinned CLI, and Rust 1.85/1.88 build split. Unknown API, health, MCP,
+probe, and unmatched funnel paths remain with the existing Worker router. `ASSETS` serves the
+generated browser bundle through Worker-first routing after the host allowlist; the shell contains
+honest empty states until funnel APIs arrive. Five dashboard regressions cover the rendered routes,
+invalid and unowned paths, and the nonempty base64 hydration data plus browser bootstrap globals.
+`cargo +1.85.0 test -p eez-dashboard --locked` passes 5 tests, `cargo xtask check` passes, and a
+fresh-target `cargo xtask ci` passes workspace checks/tests, the API wasm build, the browser wasm
+and asset bundle, and audit (344 locked dependencies, 1,310 advisories, zero findings). The local
+Wrangler smoke verifies SSR routes, parses the hydration payload, serves all bundle and generated
+module assets, checks existing 404 fallback behavior and host denial, and confirms port cleanup.
+The browser wasm builds and hydration payload is present, but no headless browser has verified
+hydration end to end. Fingerprinted evidence is in
+`plan/verification/PR-008/execution.txt` and `results.json`. The first test-first run failed because
+`render_document` was not yet implemented; that exact failure is recorded in the execution log.
+The final local smoke left no live Wrangler or Worker process; this executor may retain adopted
+defunct `workerd` entries because PID 1 does not reap children, as documented in D7. No commit,
+push, hosted CI, review request, or remote deployment was made. Hosted CI and @codex/Sol reviews
+remain required on the final pushed PR head.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -138,6 +158,6 @@ merge before they are clean on that exact SHA. No remote deployment was run.
 
 ## Next action
 
-Push the PR-007 source and refreshed evidence, verify hosted CI on the final PR #8 head, then request
+Push the PR-008 source and refreshed evidence, verify hosted CI on the final PR #9 head, then request
 one @codex review and Sol review on that same head. Do not merge until both reviews and hosted CI
 are clean on the exact SHA. Do not deploy remotely.

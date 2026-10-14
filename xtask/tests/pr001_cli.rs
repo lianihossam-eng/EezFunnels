@@ -18,7 +18,35 @@ mod unix {
             let root = std::env::temp_dir()
                 .join(format!("eez-xtask-pr001-{}-{sequence}", std::process::id()));
             fs::create_dir_all(root.join("bin")).expect("create fixture");
+            let workspace = root.join("workspace");
+            for package_directory in [
+                "crates/domain",
+                "crates/render",
+                "crates/storage",
+                "crates/commands",
+                "apps/api",
+                "apps/dashboard/assets",
+                "apps/cli",
+                "xtask",
+            ] {
+                fs::create_dir_all(workspace.join(package_directory))
+                    .expect("create workspace fixture package");
+            }
+            fs::write(
+                workspace.join("apps/dashboard/assets/bootstrap.js"),
+                "export {};\n",
+            )
+            .expect("write fixture bootstrap");
+            fs::write(
+                workspace.join("apps/dashboard/assets/dashboard.css"),
+                "body {}\n",
+            )
+            .expect("write fixture stylesheet");
             Self { root }
+        }
+
+        fn workspace(&self) -> PathBuf {
+            self.root.join("workspace")
         }
 
         fn wrangler(&self, body: &str) -> PathBuf {
@@ -36,6 +64,21 @@ mod unix {
             let mut permissions = fs::metadata(&path).expect("read permissions").permissions();
             permissions.set_mode(0o755);
             fs::set_permissions(&path, permissions).expect("make fake cargo executable");
+            path
+        }
+
+        fn wasm_bindgen(&self) -> PathBuf {
+            let cargo_home = self.root.join("cargo-home");
+            fs::create_dir_all(cargo_home.join("bin")).expect("create fake cargo home");
+            let path = cargo_home.join("bin/wasm-bindgen");
+            fs::write(
+                &path,
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'wasm-bindgen 0.2.129'; exit 0; fi\nout_dir=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --out-dir ]; then out_dir=$2; shift 2; else shift; fi\ndone\nmkdir -p \"$out_dir\"\nprintf '%s\\n' 'export {};' > \"$out_dir/eezfunnel.js\"\nprintf '\\0' > \"$out_dir/eezfunnel_bg.wasm\"\n",
+            )
+            .expect("write fake wasm-bindgen");
+            let mut permissions = fs::metadata(&path).expect("read permissions").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).expect("make fake wasm-bindgen executable");
             path
         }
 
@@ -69,8 +112,7 @@ mod unix {
             .expect("workspace root")
     }
 
-    fn cargo_metadata() -> serde_json::Value {
-        let root = workspace_root();
+    fn cargo_metadata(root: &PathBuf) -> serde_json::Value {
         let units = [
             (
                 "eez-domain",
@@ -96,7 +138,7 @@ mod unix {
             (
                 "eez-dashboard",
                 "apps/dashboard",
-                serde_json::json!({"layer": 4}),
+                serde_json::json!({"layer": 3}),
             ),
             ("eez-cli", "apps/cli", serde_json::json!({"layer": 4})),
             ("xtask", "xtask", serde_json::json!({"role": "tool"})),
@@ -120,10 +162,12 @@ mod unix {
 
     fn run_ci_with_cargo(fixture: &Fixture, cargo_body: &str) -> std::process::Output {
         let cargo = fixture.cargo(cargo_body);
+        fixture.wasm_bindgen();
         let metadata = fixture.root.join("metadata.json");
         fs::write(
             &metadata,
-            serde_json::to_vec(&cargo_metadata()).expect("serialize Cargo metadata"),
+            serde_json::to_vec(&cargo_metadata(&fixture.workspace()))
+                .expect("serialize Cargo metadata"),
         )
         .expect("write Cargo metadata");
         let capture = fixture.root.join("cargo-arguments.txt");
@@ -136,6 +180,9 @@ mod unix {
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .arg("ci")
             .env("CARGO", cargo)
+            .env("CARGO_HOME", fixture.root.join("cargo-home"))
+            .env("CARGO_TARGET_DIR", fixture.root.join("target"))
+            .env("XTASK_WORKSPACE_ROOT", fixture.workspace())
             .env("PATH", path)
             .env("XTASK_CAPTURE", &capture)
             .env("XTASK_METADATA", metadata)
@@ -191,7 +238,7 @@ mod unix {
         let fixture = Fixture::new();
         let output = run_ci_with_cargo(
             &fixture,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = audit ]; then exit 19; fi\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\nif [ \"$1\" = audit ]; then exit 19; fi\n",
         );
 
         assert!(!output.status.success());
@@ -204,7 +251,7 @@ mod unix {
             .expect("read Cargo invocations");
         assert_eq!(
             actual,
-            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --locked\naudit\n"
+            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --release --locked\naudit\n"
         );
     }
 
