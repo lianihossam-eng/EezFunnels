@@ -1,14 +1,14 @@
 {
   "task": "PR-016",
-  "evidence_refreshed_at_utc": "2026-10-14T21:32:55Z",
+  "evidence_refreshed_at_utc": "2026-10-14T21:34:25Z",
   "branch": "feat/016_cli",
   "base_commit": "af25dec5e0469e796016906e9210e85f86ca2fd9",
-  "verified_source_commit": "baef16e5673eb016ffc057a39173842669a58bfe",
+  "verified_source_commit": "d21b59647e055cb9ad8b281a2517d05a3168b898",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for the source files listed in source_sha256; plan/STATUS.md and verification artifacts are excluded.",
-  "source_fingerprint_sha256": "0cf422b2db3bfbd8b59a39c9978c36c204b78328b2859584e97cb1e54e43348a",
+  "source_fingerprint_sha256": "467dbe21257ddd3a68109c6f90861e73d2d6b907e70d842134e426471c0404df",
   "source_file_count": 14,
   "source_sha256": {
-    ".github/workflows/release.yml": "829c53351fa8335e38698dfe5a5f76825c3d1e219dbbfb74f0dce9b14e1253a6",
+    ".github/workflows/release.yml": "3757f2328c11977285f6e26d311b72149c93a71f42a7d52b05ab0b2457ae6b79",
     "Cargo.lock": "9bf2e6451ce0bd43e201ba51aa4515b66b859790d9cffb43294e7077731590f8",
     "apps/cli/Cargo.toml": "81ee00813d642e02d7dec8cf7bbb6fa002e4ccaf369d1d49251a2e0dd470dc30",
     "apps/cli/README.md": "8a26edd8a202dce99900b56fdcf9c26f60ee7714d0906138520ed67c7bdd55b6",
@@ -38,16 +38,20 @@
       "editor_read_success": 8388608,
       "errors": 16384
     },
-    "release_matrix": "PRs build and test the CLI natively on Linux, macOS, and Windows; artifact upload remains tag-only.",
+    "release_matrix": "PRs build and test natively on Linux, Apple Silicon macOS (aarch64-apple-darwin), and Windows; artifact upload remains tag-only.",
     "review_findings_resolved": [
       "editor response bound",
       "endpoint raw/normalized and serialized size bounds",
       "native platform tests",
       "expired ticket cleanup",
       "plan status handoff",
-      "OS-native path comparison in Windows launcher test"
+      "OS-native path comparison in Windows launcher test",
+      "macOS runner target matches arm64 architecture"
     ],
-    "hosted_failure_fix": "Initial native matrix exposed a test assertion that compared platform-specific path separators; the test now compares canonicalized paths."
+    "hosted_failure_fixes": [
+      "Windows/macOS test expected path separators rather than canonical paths; corrected.",
+      "macos-latest runner architecture is ARM; target changed to aarch64-apple-darwin."
+    ]
   },
   "validation": {
     "cargo_xtask_check": {
@@ -82,7 +86,7 @@
         "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400",
         "list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403"
       ],
-      "registry_note": "The final exact-source run completed without yanked-status 403 responses. An earlier run had four such 403 responses; a successful rerun is retained in the initial log.",
+      "registry_note": "Final exact-source local run completed without yanked-status 403 responses; an earlier run with four 403 responses is retained in initial_registry_retry.",
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-ci-final.log.gz",
         "sha256": "3a3f70d45bbbec9f46aa26e9d0bda54d5c69134ab46bd50bed6c74f49c4f6f7c",
@@ -131,8 +135,8 @@
       "TODO_FIXME_HACK": 0,
       "log": {
         "path": "plan/verification/PR-016/logs/static-audit.log.gz",
-        "sha256": "89e303bc84aa7abc379c127262153c1e01159183d1606f1e253c89575f245851",
-        "raw_sha256": "92138b0d747cf04a158a983208ee274be4da058fe705fd27c394e6e173675d38",
+        "sha256": "ecd3ddc6c017955510e342c3107af46331a930c249fab43eedf2c59fa81805f4",
+        "raw_sha256": "bac63d7017fcf6d521c5b8051f9cd75b18477f102464f50e2c7a382f9e925380",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -142,7 +146,7 @@
     },
     "initial_audit_retry": {
       "exit_code": 0,
-      "note": "Earlier full CI captured four transient yanked-status 403 responses; final exact-source CI and standalone audit passed.",
+      "note": "An earlier full CI run had four transient yanked-status 403 responses; final exact-source CI and standalone audit passed.",
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-ci-initial-registry-403.log.gz",
         "sha256": "923fc6079589cf1dfe3c20e20b8e940b42dc8376439714fb66f5208b505cbe82",
@@ -152,8 +156,8 @@
     }
   },
   "delivery": {
-    "hosted_ci": "Pending on the updated PR exact head.",
-    "codex_review": "Request @codex review on the final exact head; user requested @codex tagging for review/edit/question requests.",
+    "hosted_ci": "Pending on updated PR exact head.",
+    "codex_review": "Request @codex review on the final exact head after resolving the path and runner-architecture findings.",
     "remote_database_or_deployment": false,
     "cloud_environment_published": false
   }
