@@ -1,9 +1,9 @@
 PR-016 native CLI verification
-Evidence refreshed: 2026-10-14T21:34:25Z
+Evidence refreshed: 2026-10-14T21:39:24Z
 Branch: feat/016_cli
 Base commit: af25dec5e0469e796016906e9210e85f86ca2fd9
-Verified source commit: d21b59647e055cb9ad8b281a2517d05a3168b898
-Source fingerprint: 467dbe21257ddd3a68109c6f90861e73d2d6b907e70d842134e426471c0404df (14 files)
+Verified source commit: 9d5922001c5160673bfb56c76e22a1b856173e2d
+Source fingerprint: f527cacba0997e3f6c7f376b21ec7c13bf16a221623309148affd9ca06041edc (14 files)
 Fingerprint inputs and compressed/raw log hashes are recorded in results.json.
 
 Implementation:
@@ -11,18 +11,18 @@ Implementation:
 - Create and publish save exact idempotent requests before sending; tickets pin endpoint/body/key and expire at 23 hours.
 - Bounds ordinary success bodies at 2 MiB, editor reads at 8 MiB, and error bodies at 16 KiB.
 - The release matrix builds and tests natively on Linux, Apple Silicon macOS, and Windows for PRs; release artifact upload remains tag-only.
-- Independent review findings for response bounds, endpoint limits, test coverage, ticket cleanup, status handoff, and native runner behavior were resolved.
-- Hosted review found path-separator-sensitive test expectations and an x86 target on the ARM macOS runner; both are corrected.
+- Independent review findings for response bounds, endpoint limits, test coverage, ticket cleanup, status handoff, and runner behavior were resolved.
+- Hosted runs identified Windows path separators, the macOS ARM target, and macOS /private/var temp path aliases; each was corrected.
 
 Validation (all listed commands exited 0):
 - `source .project-tools/env.sh && cargo xtask check`: workspace tests, formatting, Clippy, and layer checks passed. Log: `plan/verification/PR-016/logs/cargo-check-final.log.gz`.
-- `source .project-tools/env.sh && cargo xtask ci`: full local checks, WASM/assets, Worker/D1 smoke, and audit passed. RustSec loaded 1,329 advisories and scanned 355 dependencies; no yanked-status lookup errors occurred. Log: `plan/verification/PR-016/logs/cargo-ci-final.log.gz`.
+- `source .project-tools/env.sh && cargo xtask ci`: final exact-source checks, WASM/assets, local Worker/D1 smoke, and audit passed. RustSec loaded 1,329 advisories and scanned 355 dependencies; this run had no yanked-status 403 errors. Log: `plan/verification/PR-016/logs/cargo-ci-final.log.gz`.
 - `source .project-tools/env.sh && cargo +1.88.0 audit`: 355 dependencies, zero findings. Log: `plan/verification/PR-016/logs/audit-final.log.gz`.
 - `source .project-tools/env.sh && cargo +1.85.0 test --locked -p eez-cli`: 6 unit and 11 process tests passed. Log: `plan/verification/PR-016/logs/rust-1.85-cli-tests.log.gz`.
 - `bash scripts/smoke-pr016.sh`: isolated local Worker/D1 integration passed from outside the checkout and verified cleanup. Log: `plan/verification/PR-016/logs/smoke-pr016.log.gz`.
 - `git diff --check`, shell syntax, and added-line audit passed with no comments or TODO/FIXME/HACK markers. Log: `plan/verification/PR-016/logs/static-audit.log.gz`.
-- An earlier full CI run had four yanked-status 403 responses; a successful exact-source rerun is recorded at `plan/verification/PR-016/logs/cargo-ci-final.log.gz`. The earlier log remains at `plan/verification/PR-016/logs/cargo-ci-initial-registry-403.log.gz`.
+- An earlier full CI run had four yanked-status 403 responses; a successful exact-source rerun is recorded at `plan/verification/PR-016/logs/cargo-ci-final.log.gz`. Earlier log: `plan/verification/PR-016/logs/cargo-ci-initial-registry-403.log.gz`.
 
 Delivery:
-- Hosted CI and @codex exact-head review are pending the updated PR head. The next review request will name the final SHA and ask about the corrected macOS target.
+- Hosted CI and @codex exact-head review are pending the updated PR head. The review comment will identify the final SHA and request confirmation of the portability fixes.
 - No remote D1 operation, production deployment, or cloud environment publication ran.

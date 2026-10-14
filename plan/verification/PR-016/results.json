@@ -1,11 +1,11 @@
 {
   "task": "PR-016",
-  "evidence_refreshed_at_utc": "2026-10-14T21:34:25Z",
+  "evidence_refreshed_at_utc": "2026-10-14T21:39:24Z",
   "branch": "feat/016_cli",
   "base_commit": "af25dec5e0469e796016906e9210e85f86ca2fd9",
-  "verified_source_commit": "d21b59647e055cb9ad8b281a2517d05a3168b898",
+  "verified_source_commit": "9d5922001c5160673bfb56c76e22a1b856173e2d",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for the source files listed in source_sha256; plan/STATUS.md and verification artifacts are excluded.",
-  "source_fingerprint_sha256": "467dbe21257ddd3a68109c6f90861e73d2d6b907e70d842134e426471c0404df",
+  "source_fingerprint_sha256": "f527cacba0997e3f6c7f376b21ec7c13bf16a221623309148affd9ca06041edc",
   "source_file_count": 14,
   "source_sha256": {
     ".github/workflows/release.yml": "3757f2328c11977285f6e26d311b72149c93a71f42a7d52b05ab0b2457ae6b79",
@@ -17,7 +17,7 @@
     "apps/cli/src/funnels.rs": "da9a7e9419adbba964cbc8ed3c095e6b8394ce2583a2d67148472ead11f8fbd9",
     "apps/cli/src/state.rs": "93c854f028ba7dc2ab5a2cb7aeb849779dcf3f5e1224a6fb82a733bb3979edfe",
     "apps/cli/src/types.rs": "583d36c3762613b8c65a0735e80682b150915d3f020b177f344adcdef6c2b966",
-    "apps/cli/tests/process.rs": "d59b3788c6cce15fd01f6a7b009ef10951faad70ef958cfe384a2405c1ea7bcb",
+    "apps/cli/tests/process.rs": "6f9bdcfc0f7546ae902e0a6339ec617bad36ea8427014bb60dd731dfdae8c10b",
     "xtask/tests/bootstrap_cli.rs": "d11b8c7b09f93a413997189da8b10921f82bd1213449c478a5a5cc0389459511",
     "scripts/smoke-pr016.sh": "66893708c73651173636c2c6ced6a885ca06b521d6c3ea7c90d545bc9a01958f",
     "plan/decisions/D20_native_cli.md": "6514f8d6b3e7e494d53fc443ec7c41b63b3d877fcdae73c8d65949c3c9357439",
@@ -45,12 +45,14 @@
       "native platform tests",
       "expired ticket cleanup",
       "plan status handoff",
-      "OS-native path comparison in Windows launcher test",
+      "Windows path comparison",
+      "macOS /private/var cwd alias",
       "macOS runner target matches arm64 architecture"
     ],
     "hosted_failure_fixes": [
-      "Windows/macOS test expected path separators rather than canonical paths; corrected.",
-      "macos-latest runner architecture is ARM; target changed to aarch64-apple-darwin."
+      "Windows path assertion now compares canonical paths.",
+      "macOS runner target is aarch64-apple-darwin.",
+      "deploy cwd process test compares canonical paths to account for /var and /private/var aliases."
     ]
   },
   "validation": {
@@ -72,8 +74,8 @@
       ],
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-check-final.log.gz",
-        "sha256": "8bd6d3a74b69012a0de7d9043fcc47c8cbd6ff0f37109469170b4db2ab58ab62",
-        "raw_sha256": "4a54b926a5e235699bd3a7d98e802338478312f873bbb9e4933b70d8b0cbfbb5",
+        "sha256": "ebb33d636379d134c3dec388d903142df9c1b5b98968ec7258bcae8aabf94b06",
+        "raw_sha256": "d2f33b290529781c63f411c759a0b47b5fdf0bf837993d9abf0ab3e5eda61550",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -86,11 +88,11 @@
         "PR-014=publish-replay,cross-funnel-rejected,cas-race-one-winner,v2-render,etag-change,weak-304,unpublish-404,late-replay-no-reapply,missing-field-classification,route-receipt-precedence,unsupported-schema-400",
         "list=200 five-blueprints=created replay=201 payload-mismatch=409 receipt-cleanup=create,delete delete=200 replay-delete=200 workspace-cap=100 list-bound=100 over-cap-list-bound=100 create-at-cap=409 direct-insert=rejected host-denial=403"
       ],
-      "registry_note": "Final exact-source local run completed without yanked-status 403 responses; an earlier run with four 403 responses is retained in initial_registry_retry.",
+      "registry_note": "Final exact-source local run completed without yanked-status 403 responses. An earlier run with four 403 responses is retained in initial_registry_retry.",
       "log": {
         "path": "plan/verification/PR-016/logs/cargo-ci-final.log.gz",
-        "sha256": "3a3f70d45bbbec9f46aa26e9d0bda54d5c69134ab46bd50bed6c74f49c4f6f7c",
-        "raw_sha256": "5d74da26484ef7eb70c3d4bf3b358b316fbc7fc496f3f3d73fc3276171c5301b",
+        "sha256": "94438ac3e54e85afc6a5a6ee3cac26be47a6b437ece29a1cda07766b432c1145",
+        "raw_sha256": "052b2ba54f5ae4f2cd8ffdf771f29dca9fc8bc14db16bcad179246d963b87f76",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -113,8 +115,8 @@
       "process_tests": 11,
       "log": {
         "path": "plan/verification/PR-016/logs/rust-1.85-cli-tests.log.gz",
-        "sha256": "0c8ac0d47a1608c4c07df49922ad553e2d02700ee814e3d3d338201ffc3b2560",
-        "raw_sha256": "664761e6b01e6514b66446ad5394b1d3eff98d6f54fd3b37cc476621e7532f97",
+        "sha256": "6df0f7f3bf27fa2220cd4b3203e9bbace5d699c5de16ff8bbf2922e04bc7ecc1",
+        "raw_sha256": "08d153c6401fd2eb5a565e1707959530dcabcd0822d53d6566c5a5967f02f558",
         "compression": "gzip -n; gzip -cd restores captured output"
       }
     },
@@ -157,7 +159,7 @@
   },
   "delivery": {
     "hosted_ci": "Pending on updated PR exact head.",
-    "codex_review": "Request @codex review on the final exact head after resolving the path and runner-architecture findings.",
+    "codex_review": "Request @codex review on the final exact head after the Windows and macOS portability fixes.",
     "remote_database_or_deployment": false,
     "cloud_environment_published": false
   }
