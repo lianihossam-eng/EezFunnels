@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T07:58:11Z",
+  "evidence_refreshed_at_utc": "2026-10-14T08:16:23Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
-  "source_commit_role": "PR-009 final-gate follow-up: successful create releases pending state before list refresh and no longer clears a newer create mutation when the earlier refresh completes; error paths still clear pending state.",
+  "verified_source_commit": "5c6c939ddf8f35b52e90087c8e5f6159bfe8780b",
+  "source_commit_role": "PR-009 final-gate follow-up: the route delegates the API response future to one completion helper that classifies the response, closes/resets the create UI, clears mutation-pending state before the independent list refresh, and has no pending-state write after that refresh. Non-201 and transport failures also clear pending.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "ae4360768ab3f9d05c1be601ab45f260d97567ed409fae34c3a1bb16f7bbf88f",
+  "source_fingerprint_sha256": "0d1910b11351978f5122399beb37eae56bef46f9c1419459000c124ca79e46b3",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -46,7 +46,7 @@
     "crates/dashboard-presentation/assets/dashboard.css": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b",
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "bf13826b697575d8f57e6479187d10ca3bb843243cbf86c1f43e623bad5374d7",
-    "crates/dashboard-presentation/src/routes.rs": "958dcacc3bd19ce0960debf25778eab2038ea0d33eaa0c2de853d5f96f567058",
+    "crates/dashboard-presentation/src/routes.rs": "fbe306e23be0bdb2a473a158bfeb8ff11b16356efb477a9d64419201f4336121",
     "crates/dashboard-presentation/src/ssr.rs": "adc4e1eb07f0aac7b6e3edffd79887945fc3ee54d19c17acac1152b7980b9495",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
     "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
@@ -121,7 +121,7 @@
   },
   "first_red": {
     "observed": true,
-    "capture_status": "The final review regressions were first observed before fixes. The transient red outputs were not retained: invalid-blueprint replay returned HTTP 400 instead of the expected 409; malformed DELETE replay stopped at the route guard with 404 instead of receipt conflict; and the dashboard test observed the form still pending while refresh was unresolved. Focused green evidence is retained in the direct smoke and final check/CI logs. The latest review also found that oversized and invalid-UTF-8 POST bodies were rejected by the HTTP adapter before receipt lookup; transient red responses were not retained. The Sol final-gate regression also first failed (exit 101) after a second create started while the first refresh was unresolved; the first refresh completion cleared the second mutation pending state. The red output was observed in the focused test run but not saved to a separate log.",
+    "capture_status": "Earlier regressions for receipt precedence, malformed routes, and unreadable POST bodies were observed before fixes but their transient red outputs were not retained. The stale-pending red is now saved: the same production completion helper/test was applied to a parent-592d050 source archive while retaining the old pending clear before and after refresh; it failed at the final second-create pending assertion with exit 101. The current helper version passes both focused tests.",
     "modal_cancel_regression": {
       "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
       "pre_fix_exit_code": 101,
@@ -212,11 +212,14 @@
     },
     "successful_create_before_refresh": {
       "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
-      "pre_fix_observation": "With list refresh unresolved, the create dialog remained open and mutation-pending remained true; transient red output was not retained.",
+      "pre_fix_observation": "The parent-592d050 continuation, with its post-refresh pending clear retained inside the extracted production helper, cleared a second create after the first refresh completed.",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
-      "post_fix_log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
-      "diagnostic": "The test verifies success closes the first dialog and clears pending before refresh, then starts a second create before completing the first refresh and confirms the old completion leaves the second mutation pending."
+      "post_fix_log": "/tmp/eezfunnel-pr009-finalization-focused.log",
+      "post_fix_log_sha256": "86e2708e9afe534cd3e20ec610fa973f4c4f20eee3e4633e8f170a6a930bbb0d",
+      "diagnostic": "The regression passes an HTTP 201 BrowserResponse future to the same response-completion helper used by the route. It clears pending before an unresolved refresh, starts a second pending create, resolves the first refresh, and verifies the second create stays pending. The helper owns response classification, all pending writes, and refresh; the route has no pending-state mutation after its await. A second focused test checks non-201 and transport errors clear pending without polling refresh.",
+      "pre_fix_exit_code": 101,
+      "pre_fix_log": "/tmp/eezfunnel-pr009-parent-full-path-stale-pending-red.log",
+      "pre_fix_log_sha256": "4be8142352f5b4720ec5ed3f885d6b4ac45bf71baeaade3ee8a5c45d25182331"
     },
     "unreadable_create_body_precedence": {
       "pre_fix_observation": "The API adapter returned 400 validation/invalid_json for oversized and invalid-UTF-8 POST bodies before Session::execute could inspect an active receipt; transient red output was not retained.",
@@ -228,23 +231,24 @@
     "create_pending_stale_refresh": {
       "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
       "pre_fix_exit_code": 101,
-      "pre_fix_observation": "After the first create released pending state and its list refresh remained unresolved, a second create set pending=true; resolving the first refresh incorrectly cleared it.",
-      "pre_fix_log": null,
+      "pre_fix_observation": "The parent-592d050 continuation, with its post-refresh pending clear retained inside the extracted production helper, cleared a second create after the first refresh completed.",
+      "pre_fix_log": "/tmp/eezfunnel-pr009-parent-full-path-stale-pending-red.log",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
-      "post_fix_log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
-      "diagnostic": "The regression uses a manually resolved refresh future, starts a second create while the first refresh is pending, resolves the old refresh, and asserts the second dialog remains open and pending. The production success branch now has no post-refresh reset; non-201 and transport-error branches clear pending explicitly."
+      "post_fix_log": "/tmp/eezfunnel-pr009-finalization-focused.log",
+      "post_fix_log_sha256": "86e2708e9afe534cd3e20ec610fa973f4c4f20eee3e4633e8f170a6a930bbb0d",
+      "diagnostic": "The regression passes an HTTP 201 BrowserResponse future to the same response-completion helper used by the route. It clears pending before an unresolved refresh, starts a second pending create, resolves the first refresh, and verifies the second create stays pending. The helper owns response classification, all pending writes, and refresh; the route has no pending-state mutation after its await. A second focused test checks non-201 and transport errors clear pending without polling refresh.",
+      "pre_fix_log_sha256": "4be8142352f5b4720ec5ed3f885d6b4ac45bf71baeaade3ee8a5c45d25182331"
     }
   },
   "checks": {
     "cargo_xtask_check": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask check",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b.",
       "workspace_test_counts": {
         "api": 12,
         "commands": 7,
-        "dashboard_presentation": 14,
+        "dashboard_presentation": 15,
         "domain": 13,
         "render": 33,
         "storage": 5,
@@ -252,19 +256,19 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
-      "log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
+      "log": "/tmp/eezfunnel-pr009-finalization-check.log",
+      "log_sha256": "d274c299e2d8ca00759d8be4a1d4ce4e4ff0341efd55b6939292ecabee561c55",
       "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
-      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask ci",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo xtask ci",
       "exit_code": 0,
       "fresh_isolated_target": false,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Full cargo xtask ci passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe, including workspace checks/tests, API and dashboard browser WASM, asset generation, process cleanup regressions, local CRUD/idempotency/capacity smoke, and cargo audit.",
-      "log": "/tmp/eezfunnel-pr009-stale-pending-ci.log",
-      "log_sha256": "7b5b61c319a1b48de18b2806fb33f85f22b3eb35f3a5e70bc2adca97e66a18e8",
+      "outcome": "Full cargo xtask ci passed on source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b: workspace tests, API and dashboard browser WASM, generated assets, process-cleanup regressions, local CRUD/idempotency/capacity smoke, and cargo audit.",
+      "log": "/tmp/eezfunnel-pr009-finalization-ci.log",
+      "log_sha256": "19dd33bc5b825ce89ed0732641be48172d53b755b9cff0bf7d0288a08f9a6c3c",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -275,18 +279,18 @@
       "wasm_outputs": {
         "eez_api.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
-          "bytes": 59515759,
-          "sha256": "76c35f6e6acda3139fbb4514094640d60b9b79553a604c0aee5c3476c635bbff"
+          "bytes": 59515765,
+          "sha256": "39c57a24977a9f236a4b7db36d9a10999cc9abfded452227043841ed42bf36f1"
         },
         "eez_dashboard.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
-          "bytes": 1696931,
-          "sha256": "1501d56b5e8fc81387d90a12a3e3fd4667e874f98eae7cfc3c0b0c1c9e0b7edf"
+          "bytes": 1697547,
+          "sha256": "1af8259a06fdab0c9c1b2105f193b6079d892ea7773dc055b1c0578c60a7ec53"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
-          "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 785554,
-          "sha256": "6d020b49c7b6b7e7de8f8d99a45e36391fa7a2d2e4fe50f535885e108235fe36"
+          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/eezfunnel_bg.wasm",
+          "bytes": 786103,
+          "sha256": "ac1a1d2eb2b9b038b1c608e97880836a3f6c63fbd22f77079c30e9d05fe797a1"
         }
       },
       "generated_bundle_sha256": {
@@ -303,12 +307,12 @@
         "apps/dashboard/dist/assets/eezfunnel.js": {
           "path": "apps/dashboard/dist/assets/eezfunnel.js",
           "bytes": 74916,
-          "sha256": "3118fca0988c2111e8088d1b64b76bd99fb12968f021464904e46e977e815be9"
+          "sha256": "5068033899522c15e28d41dff0580690f558bda8f044ebc1a968baded5ad8b9b"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
           "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 785554,
-          "sha256": "6d020b49c7b6b7e7de8f8d99a45e36391fa7a2d2e4fe50f535885e108235fe36"
+          "bytes": 786103,
+          "sha256": "ac1a1d2eb2b9b038b1c608e97880836a3f6c63fbd22f77079c30e9d05fe797a1"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
           "path": "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
@@ -356,10 +360,10 @@
     "local_wrangler_smoke": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-stale-pending-smoke.log",
-      "smoke_stdout_sha256": "061a91b8ef0359e5d977fd8e552d18ff8508826b901e3ca3664e5c4f2e099500",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-finalization-smoke.log",
+      "smoke_stdout_sha256": "c3445fbdfb5bf9a271d17f6f67bc379cb1e48722720c06882c098ae788bbeea5",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "3977667136082f28aabd8ce3824b1635e0fe353ba7b5121856ccb384f1b0880c",
+      "wrangler_log_sha256": "e23c3e53e60b39e157a8bafd7ff1deb9f5255f50bfd612618ebbef5322f1be57",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -387,7 +391,7 @@
         "invalid_utf8_create_new_or_expired_key": "HTTP 400 validation/invalid_json."
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The full cargo xtask ci smoke passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe.",
+      "ci_smoke_integration": "The full cargo xtask ci smoke passed on source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b.",
       "process_group_race_regression": {
         "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
         "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
@@ -401,7 +405,7 @@
         "observed_after": "The direct standalone smoke exited 0; port 8787 was closed and no live Wrangler/workerd process remained."
       },
       "exit_marker": "SMOKE_EXIT=0",
-      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the final standalone local CRUD smoke; the captured stdout log ends with SMOKE_EXIT=0.",
+      "wrangler_log_capture_scope": "The fixed Wrangler log path contains the direct standalone local CRUD smoke; captured stdout ends with SMOKE_EXIT=0.",
       "process_group_shutdown_escalation_regression": {
         "test": "test_worker_group_cleanup_regression",
         "pre_fix_exit_code": 1,
@@ -425,11 +429,11 @@
       "capture_note": "An earlier exec wrapper printed SMOKE_EXIT=0 while its returned session status was 1 and was excluded. The evidence here is the direct bash invocation with captured DIRECT_SMOKE_EXIT=0."
     },
     "source_format_and_comment_checks": {
-      "cargo_fmt_check": "passed as part of cargo xtask check on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
+      "cargo_fmt_check": "passed as part of cargo xtask check on source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
-      "no_comments_review": "The source diff adds no comments, TODO/FIXME markers, or lint suppressions.",
-      "source_commit_check": "git show --check passed for source commit 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
+      "no_comments_review": "The independent read-only Luna review found no comments or suppressions; the source diff adds none.",
+      "source_commit_check": "git show --check passed for source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b",
       "bash_n_check": "passed for scripts/smoke-pr009.sh"
     }
   },
@@ -458,11 +462,11 @@
     "Frozen contracts C-01 and C-04 are byte-identical to base commit 13472d2; the 100-funnel cap and decision-scoped conflict/funnel_limit_reached (HTTP 409) exist only in D14 and implementation/evidence.",
     "For create and delete, command handling classifies any active receipt before returning parse or semantic validation errors, so C-03 payload mismatch takes precedence for reused keys. New or expired keys preserve normal validation behavior.",
     "A malformed DELETE route with an active receipt can return 409 mismatch; without an active receipt, the existing 404 not_found/funnel response is preserved.",
-    "After a successful create POST, the dashboard closes and resets the dialog and clears mutation-pending state before awaiting the independent funnel-list refresh.",
-    "After successful create releases pending state and closes the dialog, its independent list refresh cannot reset a newer create mutation; non-201 and transport-error branches clear pending explicitly."
+    "After successful create releases pending state and closes the dialog, its independent list refresh cannot reset a newer create mutation; non-201 and transport-error branches clear pending explicitly.",
+    "After a successful create POST, finish_create_response awaits and classifies the HTTP result, closes and resets the dialog, and clears mutation-pending before awaiting the independent list refresh. It is the sole owner of response-completion pending writes; the route performs no pending-state reset after the helper returns, so an old refresh cannot affect a newer create."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Local validation is green on exact source 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe; hosted CI for this new source/evidence head is pending. The last green hosted run verifies only the prior head 592d050.",
+    "status_at_evidence_capture": "Local validation is green on source commit 5c6c939ddf8f35b52e90087c8e5f6159bfe8780b; hosted CI for the eventual source/evidence head is pending after push. The previous hosted green runs verify only earlier PR heads.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
@@ -487,8 +491,8 @@
     }
   },
   "reviews": {
-    "codex": "The active-receipt and unreadable-body findings remain addressed. This final-gate pending-reset fix is pushed for parent inspection; no fresh review request was posted.",
-    "sol": "Sol final-gate P2 about a stale post-refresh pending reset is fixed in source; do not merge. Await parent direction for any follow-up review request."
+    "codex": "Earlier Codex findings remain addressed. The strengthened stale-pending follow-up is locally verified and has not been sent for a fresh Codex review; no merge occurred.",
+    "sol": "Sol final-gate P2 is addressed in source. An independent read-only Luna review of the final source diff was clean. No Sol merge or new review request occurred."
   },
   "deployment": {
     "remote_deployment_run": false,
