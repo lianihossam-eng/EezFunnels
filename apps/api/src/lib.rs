@@ -197,17 +197,23 @@ async fn funnel_collection_response(
             {
                 Ok(body) => body,
                 Err(_) => {
-                    let error = ApiError::from_code("validation/invalid_json");
-                    log_api_error(&error, &correlation_id, error.code());
-                    return error_response(&error, correlation_id);
+                    return unreadable_create_payload_response(
+                        env,
+                        &idempotency_key,
+                        &correlation_id,
+                    )
+                    .await;
                 }
             };
             let parameters = match std::str::from_utf8(&body) {
                 Ok(parameters) => parameters,
                 Err(_) => {
-                    let error = ApiError::from_code("validation/invalid_json");
-                    log_api_error(&error, &correlation_id, error.code());
-                    return error_response(&error, correlation_id);
+                    return unreadable_create_payload_response(
+                        env,
+                        &idempotency_key,
+                        &correlation_id,
+                    )
+                    .await;
                 }
             };
             match execute_funnel_command(env, "funnel.create", parameters, Some(&idempotency_key))
@@ -225,6 +231,20 @@ async fn funnel_collection_response(
             }
         }
         _ => method_not_allowed_for(&correlation_id, "GET,POST"),
+    }
+}
+
+async fn unreadable_create_payload_response(
+    env: &Env,
+    idempotency_key: &str,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    match execute_funnel_command(env, "funnel.create", "null", Some(idempotency_key)).await {
+        Err(error) => funnel_command_error_response(error, correlation_id),
+        Ok(_) => funnel_command_error_response(
+            ApiError::from_code("validation/invalid_json"),
+            correlation_id,
+        ),
     }
 }
 
