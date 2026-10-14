@@ -19,9 +19,11 @@ pub enum RepositoryError {
     PayloadTooLarge,
     InvalidField(&'static str),
     FunnelNotFound,
+    RevisionNotFound,
     FunnelLimitReached,
     RevisionLimitReached,
     StaleEditorRevision,
+    StalePublishedRevision,
     EditorRevisionLimitReached,
 }
 
@@ -39,9 +41,11 @@ impl Display for RepositoryError {
             Self::PayloadTooLarge => formatter.write_str("validation/payload_too_large"),
             Self::InvalidField(field) => write!(formatter, "validation/field_invalid: {field}"),
             Self::FunnelNotFound => formatter.write_str("not_found/funnel"),
+            Self::RevisionNotFound => formatter.write_str("not_found/revision"),
             Self::FunnelLimitReached => formatter.write_str("conflict/funnel_limit_reached"),
             Self::RevisionLimitReached => formatter.write_str("validation/revision_limit_reached"),
             Self::StaleEditorRevision => formatter.write_str("conflict/edit_stale_revision"),
+            Self::StalePublishedRevision => formatter.write_str("conflict/publish_stale_revision"),
             Self::EditorRevisionLimitReached => {
                 formatter.write_str("conflict/revision_limit_reached")
             }
@@ -130,6 +134,16 @@ pub struct NewRevision {
     pub schema_version: i64,
     pub data_json: String,
     pub render_manifest_json: String,
+}
+
+pub struct PublicationMutation<'a> {
+    pub funnel_id: &'a str,
+    pub published_revision_id: Option<&'a str>,
+    pub expected_published_revision_id: Option<&'a str>,
+    pub command_id: &'a str,
+    pub idempotency_key: &'a str,
+    pub payload_json: &'a str,
+    pub result_json: &'a str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -840,6 +854,170 @@ impl<'a> Repository<'a> {
             .first::<String>(Some("id"))
             .await?;
         Ok(published.is_some())
+    }
+
+    pub async fn set_published_revision_idempotently(
+        &self,
+        mutation: &PublicationMutation<'_>,
+    ) -> RepositoryResult<MutationResult> {
+        validate_required_field(mutation.funnel_id, "funnel_id")?;
+        validate_required_field(mutation.command_id, "command_id")?;
+        validate_idempotency_key(mutation.idempotency_key)?;
+        if let Some(revision_id) = mutation.published_revision_id {
+            validate_required_field(revision_id, "revision_id")?;
+        }
+        self.validate_json(mutation.payload_json).await?;
+        self.validate_json(mutation.result_json).await?;
+
+        if let Some(receipt) = self.active_receipt(mutation.idempotency_key).await? {
+            return Ok(classify_receipt(
+                receipt,
+                mutation.command_id,
+                mutation.payload_json,
+            ));
+        }
+
+        let funnel = D1Type::Text(mutation.funnel_id);
+        let target = mutation
+            .published_revision_id
+            .map(D1Type::Text)
+            .unwrap_or(D1Type::Null);
+        let expected = mutation
+            .expected_published_revision_id
+            .map(D1Type::Text)
+            .unwrap_or(D1Type::Null);
+        let target_schema = D1Type::Integer(SUPPORTED_SCHEMA_VERSION);
+        let key = D1Type::Text(mutation.idempotency_key);
+        let command = D1Type::Text(mutation.command_id);
+        let payload = D1Type::Text(mutation.payload_json);
+        let result = D1Type::Text(mutation.result_json);
+        let delete_expired_receipts = self.database.prepare(
+            "DELETE FROM command_receipts WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+        );
+        let insert_receipt = self
+            .database
+            .prepare(
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnels WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ?) AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+            )
+            .bind_refs([
+                &key,
+                &command,
+                &payload,
+                &result,
+                &funnel,
+                &expected,
+                &target,
+                &target,
+                &target,
+                &funnel,
+                &target_schema,
+            ])?;
+        let update_funnel = self
+            .database
+            .prepare(
+                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER))",
+            )
+            .bind_refs([
+                &target,
+                &funnel,
+                &expected,
+                &target,
+                &target,
+                &target,
+                &funnel,
+                &target_schema,
+                &key,
+                &command,
+                &payload,
+                &result,
+            ])?;
+
+        if let Err(error) = self
+            .database
+            .batch(vec![delete_expired_receipts, insert_receipt, update_funnel])
+            .await
+        {
+            if let Some(receipt) = self.active_receipt(mutation.idempotency_key).await? {
+                return Ok(classify_receipt(
+                    receipt,
+                    mutation.command_id,
+                    mutation.payload_json,
+                ));
+            }
+            self.classify_publication_failure(
+                mutation.funnel_id,
+                mutation.published_revision_id,
+                mutation.expected_published_revision_id,
+            )
+            .await?;
+            return Err(error.into());
+        }
+
+        match self.active_receipt(mutation.idempotency_key).await? {
+            Some(receipt) => Ok(classify_receipt(
+                receipt,
+                mutation.command_id,
+                mutation.payload_json,
+            )),
+            None => {
+                self.classify_publication_failure(
+                    mutation.funnel_id,
+                    mutation.published_revision_id,
+                    mutation.expected_published_revision_id,
+                )
+                .await?;
+                Err(Error::RustError("publication receipt was not committed".to_owned()).into())
+            }
+        }
+    }
+
+    async fn classify_publication_failure(
+        &self,
+        funnel_id: &str,
+        published_revision_id: Option<&str>,
+        expected_published_revision_id: Option<&str>,
+    ) -> RepositoryResult<()> {
+        let funnel = self
+            .get_funnel(funnel_id)
+            .await?
+            .ok_or(RepositoryError::FunnelNotFound)?;
+        if let Some(revision_id) = published_revision_id {
+            if self
+                .get_owned_revision(funnel_id, revision_id)
+                .await?
+                .is_none()
+            {
+                return Err(RepositoryError::RevisionNotFound);
+            }
+        }
+        if funnel.published_revision_id.as_deref() != expected_published_revision_id
+            || funnel.published_revision_id.as_deref() == published_revision_id
+        {
+            return Err(RepositoryError::StalePublishedRevision);
+        }
+        Ok(())
+    }
+
+    pub async fn get_published_revision_by_slug(
+        &self,
+        slug: &str,
+    ) -> RepositoryResult<Option<RevisionRecord>> {
+        validate_required_field(slug, "slug")?;
+        let slug = D1Type::Text(slug);
+        let revision = self
+            .database
+            .prepare(
+                "SELECT revisions.id, revisions.funnel_id, revisions.schema_version, revisions.data_json, revisions.render_manifest_json, revisions.created_at FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.slug = ? AND funnels.published_revision_id IS NOT NULL",
+            )
+            .bind_refs([&slug])?
+            .first::<RevisionRecord>(None)
+            .await?;
+        if let Some(revision) = revision {
+            validate_schema_version(revision.schema_version)?;
+            Ok(Some(revision))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn create_theme(&self, input: &NewTheme) -> RepositoryResult<ThemeRecord> {
