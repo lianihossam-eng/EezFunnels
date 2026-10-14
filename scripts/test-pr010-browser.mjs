@@ -427,6 +427,67 @@ try {
   await waitForOrder(page, ["features", "hero", "cta"]);
   assert.match(await page.locator('[aria-live="polite"]').innerText(), /original order was restored/);
 
+  {
+    const historyTitle = page.locator('[id="setting-section.hero.title"]');
+    const savedTitle = await historyTitle.inputValue();
+    let historyPreview = editorPreviewResponse(page, primaryId);
+    await historyTitle.fill("PR-012 consecutive edit first");
+    assert.equal((await historyPreview).status(), 200);
+    historyPreview = editorPreviewResponse(page, primaryId);
+    await historyTitle.fill("PR-012 consecutive edit second");
+    assert.equal((await historyPreview).status(), 200);
+
+    await page.evaluate(() => {
+      const region = document.querySelector('[aria-live="polite"]');
+      if (!region) throw new Error("Editor history live region is missing");
+      window.__historyLiveAnnouncements = [];
+      window.__historyLiveObserver = new MutationObserver(() => {
+        const text = region.textContent?.trim();
+        if (text) window.__historyLiveAnnouncements.push(text);
+      });
+      window.__historyLiveObserver.observe(region, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+    });
+
+    const transition = async (shortcut, expectedValue, expectedCount) => {
+      historyPreview = editorPreviewResponse(page, primaryId);
+      await page.keyboard.press(shortcut);
+      assert.equal((await historyPreview).status(), 200);
+      await page.waitForFunction(
+        ({ id, value }) => document.getElementById(id)?.value === value,
+        { id: "setting-section.hero.title", value: expectedValue },
+      );
+      assert.equal(
+        await page.evaluate(() => window.__historyLiveAnnouncements.length),
+        expectedCount,
+        `${shortcut} should produce a new live-region mutation`,
+      );
+    };
+
+    await transition("Control+z", "PR-012 consecutive edit first", 1);
+    await transition("Control+z", savedTitle, 2);
+    await transition("Control+y", "PR-012 consecutive edit first", 3);
+    await transition("Control+y", "PR-012 consecutive edit second", 4);
+    await transition("Control+z", "PR-012 consecutive edit first", 5);
+    await transition("Control+z", savedTitle, 6);
+    assert.deepEqual(
+      await page.evaluate(() => window.__historyLiveAnnouncements),
+      [
+        "Undid change to Headline.",
+        "Undid change to Headline.",
+        "Redid change to Headline.",
+        "Redid change to Headline.",
+        "Undid change to Headline.",
+        "Undid change to Headline.",
+      ],
+    );
+    await page.evaluate(() => window.__historyLiveObserver.disconnect());
+    assert.equal(await historyTitle.inputValue(), savedTitle);
+  }
+
   const editorSaveButton = page.getByRole("button", { name: "Save revision" });
   await page.locator('[data-editor-section="hero"]').focus();
   await page.keyboard.press("Space");
