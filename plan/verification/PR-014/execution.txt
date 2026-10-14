@@ -1,0 +1,25 @@
+PR-014 publication routes verification
+Evidence refreshed: 2026-10-14T19:27:28Z
+Branch: feat/014_publish
+Base commit: 41f0df225650c32878dfb14000f7116784aad765 (exact origin/main SHA)
+Verified source commit: 5f7e9d10d0b204dad86434da3fa980cbde98a3de
+Source fingerprint: 0a3f0b808578164cb6c634305d1ef83134314bc828455cedb05afe0e044bb85d (123 files)
+Fingerprint inputs and exact log hashes are recorded in results.json.
+
+Implementation:
+- Publish and unpublish accept closed typed payloads, require Idempotency-Key, and use one D1 batch for receipt claim plus expected-pointer CAS.
+- GET /f/:slug renders the published immutable revision from its stored render_manifest and returns a strong ETag with Cache-Control.
+- Duplicate JSON keys are rejected before adapter normalization. Public HTML, theme values, or renderer metadata are not accepted from clients.
+- No migration, frozen contract, schema, renderer, dependency, or lockfile changed.
+
+Validation:
+- `source .project-tools/env.sh && cargo xtask check`: PASS (exit 0). Log `logs/cargo-check.log`; SHA-256 `3ab4b7f46842d78da16b2b326a4f96016ab5c9ca0ff4a4954921c5343b0ebfe0`.
+- `source .project-tools/env.sh && cargo xtask ci`: PASS (exit 0), including workspace tests, dashboard WASM/assets, local Worker/D1 smoke, and cargo-audit. RustSec loaded 1,314 advisories and scanned 346 locked dependencies with zero findings. Log `logs/cargo-ci.log`; SHA-256 `86fb2100bbb2f253e9bace836803f7a5511914dd015e025ba6f4c04b19273e24`.
+- `npm run test:pr010:migration`: PASS; migration preflight and valid backfill harness. Log `logs/migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
+- `npm run test:pr010:browser`: PASS; responsive snapshots at 375, 768, and 1280 px and axe critical findings 0. Log `logs/browser.log`; SHA-256 `2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250`.
+- `git diff --check` and frozen-surface checks: PASS. The project dependency manifests, lockfile, migration list, renderer, and frozen contracts are unchanged.
+
+Audit and delivery limits:
+- The direct staged-diff scan found no added comments, TODO/FIXME markers, or suppressions. The full pstack no-comments and interrogate workflows were not run because this task prohibited subagent delegation; their skills require independent agents. GPT-6.1-Sol remains the required PR reviewer.
+- The smoke, D1 operations, and browser tests were local. No remote database action, deployment, PR review, or merge ran.
+- Hosted CI will run after PR creation.

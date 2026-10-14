@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-013 Responsive preview (`feat/013_responsive`; based on merged main `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`)
+Current phase: PR-014 Publication `/f/:slug` (`feat/014_publish`; based on merged main `41f0df225650c32878dfb14000f7116784aad765`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -18,8 +18,8 @@ Last updated: 2026-10-14
 - [x] PR-010 Visual editor (merged as PR #11 at `883ee7b98f0203d38654f15d2633010da9e420ee`)
 - [x] PR-011 Inspector (merged as PR #12 at `d783e3f3a9e43ff7c74cb245250852cf74073600`)
 - [x] PR-012 Undo/redo (PR #13 merged at `a71b1520d86358e38ed84a1ad6cc0b0ea20cd4d8`; hosted CI run `38611264446` passed on reviewed head `9a7944bf81ed66e183ed42369fd0ede7a06cba27`)
-- [ ] PR-013 Responsive preview (`feat/013_responsive`; implementation in progress)
-- [ ] PR-014 Publication /f/:slug
+- [x] PR-013 Responsive preview (merged into `main` at `41f0df225650c32878dfb14000f7116784aad765`)
+- [ ] PR-014 Publication /f/:slug (`feat/014_publish`; implementation in progress)
 - [ ] PR-015 Command registry
 - [ ] PR-016 CLI
 - [ ] PR-017 MCP server
@@ -28,6 +28,16 @@ Last updated: 2026-10-14
 - [ ] PR-020 Release v0.1.0
 
 ## Verified locally
+
+PR-014 adds atomic, receipt-backed publish/unpublish routes with an explicit published-revision
+CAS baseline and public `GET /f/:slug` rendering from the stored `render_manifest`. The local Worker
+smoke verifies replay and mismatch behavior, cross-funnel isolation, one-winner concurrent publish,
+V2 theme rendering, ETag changes and weak 304 handling, and 404 after unpublish. `cargo xtask check`,
+`cargo xtask ci` (including audit and local D1 smoke), the migration harness, and the browser suite
+pass. No contract, migration, dependency, or renderer changes were made. D18 records the route and
+storage boundary. The diff scan found no added code comments, TODO/FIXME markers, or lint suppressions;
+independent `/no-comments` and `/interrogate` reviewers were not run because this task prohibited
+subagent delegation. Hosted CI and GPT-6.1-Sol review remain pending. No remote D1 or deployment ran.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`

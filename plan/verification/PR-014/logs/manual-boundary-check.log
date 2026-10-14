@@ -1,0 +1,8 @@
+Manual implementation boundary check (not an independent PR review):
+- Publish/unpublish payloads are typed and reject unknown fields; the HTTP adapter rejects duplicate JSON keys before Value normalization.
+- Funnel identity comes from the route. Storage checks same-funnel revision ownership in the receipt insert and repeats the expected-pointer CAS on the update.
+- Receipt claim and pointer update run in one D1 batch. Replays return the stored result; stale/racing requests leave no receipt. The local Worker smoke covers one-winner concurrency, active-key replay/mismatch, and zero rejected receipts.
+- Public requests accept only a generated slug. HTML, theme values, and renderer metadata are not accepted from clients; rendering decodes the stored snapshot and manifest.
+- The public read checks current publication state before ETag matching, so an old validator cannot return 304 after unpublish. The smoke checks V2 output, ETag change, weak 304, and unpublish 404.
+- No database migration, frozen contract, renderer output, dependency, or lockfile change appears in the diff.
+- No unresolved local counterexample was found. This checklist does not replace GPT-6.1-Sol's required PR review.

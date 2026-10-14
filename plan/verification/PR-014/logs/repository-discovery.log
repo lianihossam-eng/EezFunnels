@@ -1,0 +1,7 @@
+Workspace checkout discovery before saved cloud repository-list update:
+- Project checkout: /workspace/EezFunnels; relative mount path EezFunnels; sanitized origin identity lianihossam-eng/EezFunnels; HTTPS GitHub remote; nonempty HEAD on feat/014_publish.
+- Remote main exactly matches requested base 41f0df225650c32878dfb14000f7116784aad765.
+- Only registered worktree is /workspace/EezFunnels. No submodules are registered.
+- Nested .project-skills/cursor-plugins and .project-skills/mattpocock checkouts are pinned skill-source dependencies, not project checkouts. .project-tools/cargo/advisory-db is the RustSec advisory cache, not a project checkout.
+- /workspace/.git is an empty sandbox placeholder directory: no Git metadata or HEAD. Other workspace entries include Cargo build caches and attachment/library/scratch/shared directories; recursive .git discovery found no other Git metadata.
+- No overlapping project checkout roots or duplicate project remotes were found.
