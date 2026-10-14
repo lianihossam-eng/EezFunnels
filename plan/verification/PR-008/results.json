@@ -1,0 +1,247 @@
+{
+  "task": "PR-008",
+  "evidence_refreshed_at_utc": "2026-10-14T00:53:46Z",
+  "branch": "feat/008_dashboard",
+  "base_commit": "7ade40e9ed3cb917d380d762beeb5a01916f1e83",
+  "verified_source_commit": "1d0b741e48c0b637ab33b917d85dfb561b604b2f",
+  "source_commit_role": "PR-008 implementation commit; contains application, D12, STATUS, and CI/tooling changes. Evidence is finalized in a follow-up documentation commit.",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; generated dist, plan/STATUS.md, and evidence files excluded.",
+  "source_fingerprint_sha256": "e235303c073aa6931d5fbdb1eef45adde401222483c75580841933c1fcef3d29",
+  "source_sha256": {
+    ".github/workflows/ci.yml": "1d4d2babe2ad10934a1e4d4bc14992f3de09693989112e27d16b32717f41b223",
+    ".gitignore": "50c255fa42cdae47d1a5fbdbdea283521b7fe4a084dbcd10ddf58fb024bdbf52",
+    "Cargo.lock": "82bbcf755fba2ac8fdf2b734ff5444015250e102ce932efb0a76b31b641d4582",
+    "Cargo.toml": "90b1b0c72c4f3f0d2ea6ac04c878d04d21731806e6706ba2acb1fc04a508ff2e",
+    "apps/api/Cargo.toml": "72eb7ca79685625cc1c298aa75449f864edab67d2952ce944bba2cf369dbb5cc",
+    "apps/api/src/lib.rs": "e19bb2618c76163bae79945961565976b4dc31ecdc906d20fa8d2af306453758",
+    "apps/dashboard/Cargo.toml": "2d902c0af6ef4702fc1abd6d899b87d9c80965d684b099f3827ca06414dd168a",
+    "apps/dashboard/assets/bootstrap.js": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110",
+    "apps/dashboard/assets/dashboard.css": "4c287b361d8b6f3c4627deaad12e9eb6fd56660a1b66f3ff53e92c1eab0196bb",
+    "apps/dashboard/src/app.rs": "935f24a123ce34b539bc5d5fee7949e46fa6ac4a709f7e67e0a512ce7ae574c4",
+    "apps/dashboard/src/browser.rs": "23821b0787efb805076794b64381012f5ed47c50c876c75e6a96d5f2b66a125e",
+    "apps/dashboard/src/lib.rs": "f7ed794f198681ebeb63a4216d7d75ac23f3dad0b4a184258c64b9d64e7531b3",
+    "apps/dashboard/src/routes.rs": "ac60df9f83605f2be3956a02ddda7c0335dc21e39a2bc829eddab42e6a5e1715",
+    "apps/dashboard/src/ssr.rs": "470b527829a59d037e82e8f94a11619d64b628af0ad3bd90e9209375710af000",
+    "plan/architecture.md": "7442d16863093d4aa3591cbe063086c22c9e0d077a01445ae4bc5aa8e3753595",
+    "plan/decisions/D12_dashboard_rendering.md": "07e383ebda9bdd05772fc3a2a494740b6c8889a30e2e9eb78d70e5e7afb27716",
+    "scripts/install-wasm-bindgen.sh": "a9a320f79fe0ba10d94e8779e095fdbd3fd69572d15eba4a08bee39aa5134e40",
+    "scripts/install-worker-build.sh": "0f11bc26f579eebec040ce42ab8f6645de2d071378635ceaa3f1885e98d3d98d",
+    "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
+    "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
+    "xtask/src/layers.rs": "fe7f85b909b52b9c79df519fa70aea3053bfb73c4e77546b8f6e40499f22c8b6",
+    "xtask/src/layers/tests.rs": "888b72ec944e9b3b226af70e63483ccf51339c3f0797be5d800a417006505898",
+    "xtask/src/main.rs": "995615268b5ccac3233494b3d80be1ecd4fd14791d7fa69cdf4d64795f6fe177",
+    "xtask/tests/bootstrap_cli.rs": "8eba713206f3d721c804cc0b0f6f27076f803a2eba74674dac89a0883ad1a143",
+    "xtask/tests/pr001_cli.rs": "ecdf8bd6156305e5373495723bd63295bc1722072739e8986395bf88c81c7f3c"
+  },
+  "first_red": {
+    "command": "source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked",
+    "exit_code": 101,
+    "observation": "The new route and hydration regression module did not compile before implementation: error[E0432], unresolved import `super::render_document`; no `render_document` in the root. The failure occurred before the route assertions ran.",
+    "final_command": "source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked",
+    "final_exit_code": 0,
+    "tests_passed": 5,
+    "red_output_capture": "The compiler output was captured in the initial tool result and is transcribed exactly in execution.txt; no standalone red-run logfile was persisted.",
+    "final_log_sha256": "4727758216ecb5348778aa23b0250a16052da8f35047a738935e3aaa60f47ca5"
+  },
+  "resolved_browser_build_failure": {
+    "initial_fresh_target": "/tmp/eezfunnel-pr008-ci",
+    "initial_exit_code": 101,
+    "diagnosis": "The first browser wasm build called `dioxus_web::launch_cfg`, which is not exported at crate root; rustc suggested `dioxus_web::launch::launch_cfg`. It also reported an unused MemoryHistory import for wasm.",
+    "fix": "Import launch_cfg through dioxus_web::launch and cfg-scope MemoryHistory to non-wasm targets.",
+    "verification": "The final fresh-target CI built the browser wasm and assets successfully; see final_ci.",
+    "initial_log_sha256": "3191f364456db1805e0de4ed38aad7889f76153abacd837529ef17de7df9c7d5"
+  },
+  "checks": {
+    "dashboard_tests": {
+      "command": "source .project-tools/env.sh && cargo +1.85.0 test -p eez-dashboard --locked",
+      "exit_code": 0,
+      "test_count": 5,
+      "log": "/tmp/eezfunnel-pr008-dashboard-test-final3.log",
+      "log_sha256": "4727758216ecb5348778aa23b0250a16052da8f35047a738935e3aaa60f47ca5"
+    },
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo +1.85.0 xtask check",
+      "exit_code": 0,
+      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed.",
+      "workspace_test_counts": {
+        "api": 11,
+        "commands": 2,
+        "dashboard": 5,
+        "domain": 13,
+        "render": 33,
+        "storage": 5,
+        "xtask": 25,
+        "bootstrap_cli": 2,
+        "pr001_cli": 5
+      },
+      "log": "/tmp/eezfunnel-pr008-check-final3.log",
+      "log_sha256": "a71362506c5d0eea325ada1f34b8cfa6e84a744c1b53d0e366bf9a36e7397ca8"
+    },
+    "final_ci": {
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/tmp/eezfunnel-pr008-ci-final3 cargo +1.85.0 xtask ci",
+      "exit_code": 0,
+      "fresh_isolated_target": true,
+      "target_was_empty_at_start": true,
+      "target_dir": "/tmp/eezfunnel-pr008-ci-final3",
+      "log": "/tmp/eezfunnel-pr008-ci-final3.log",
+      "log_sha256": "993455ff41e8557f39c56339d683d03a762ce1e68cf1a253c8eed63e97b51442",
+      "outcome": "Workspace checks and tests, layer validation, API wasm build, dashboard browser wasm/wasm-bindgen asset bundle, and cargo audit all passed.",
+      "wasm_sha256": {
+        "eez_api.wasm": {
+          "bytes": 52044102,
+          "sha256": "7e5e30cdc8af0bded0bcee88ecfbd4a78c2edd73759f1a883ade880e34e1bc32"
+        },
+        "eez_dashboard.wasm": {
+          "bytes": 1522574,
+          "sha256": "c2d1af524ea718766020cb6607658154302a1437cbb255bc06b96eecd61a47b9"
+        }
+      },
+      "audit": {
+        "cargo_audit_version": "0.22.2",
+        "advisories_loaded": 1310,
+        "locked_crate_dependencies_scanned": 344,
+        "findings": 0,
+        "exit_code": 0
+      }
+    },
+    "local_wrangler_smoke": {
+      "command": "bash scripts/smoke-pr008.sh",
+      "exit_code": 0,
+      "smoke_stdout_log": "/tmp/eezfunnel-pr008-smoke-final.log",
+      "smoke_stdout_sha256": "3aeb98b23696fe536beccbe2e40890be1337ffe1418042da0218dbfe6a24bdfd",
+      "wrangler_log": "/tmp/eezfunnel-pr008-wrangler.log",
+      "wrangler_log_sha256": "d36d0d904da559c408353264f8a360c2e45248221fbde36b08783469b6efa95d",
+      "routes": {
+        "GET /": 200,
+        "GET /funnels": 200,
+        "GET /funnels/demo-1": 200
+      },
+      "hydration": "Each SSR page contained the root, JSON hydration script, bootstrap reference, and nonempty valid base64 payload; the smoke decoded the payload and checked debug arrays when present.",
+      "assets": {
+        "core_get_statuses": {
+          "/assets/dashboard.css": 200,
+          "/assets/bootstrap.js": 200,
+          "/assets/eezfunnel.js": 200,
+          "/assets/eezfunnel_bg.wasm": 200
+        },
+        "generated_relative_module_imports": 6,
+        "all_imports_returned_200": true,
+        "HEAD /assets/dashboard.css": 200
+      },
+      "unknown_routes": {
+        "GET /api/funnels": 404,
+        "GET /mcp": 404,
+        "GET /__local/probe": 404,
+        "GET /funnels/demo-1/extra": 404,
+        "POST /__local/probe": 404,
+        "disallowed_host GET /": 403
+      },
+      "port_8787_closed_after_cleanup": true,
+      "live_wrangler_worker_build_or_workerd_after_cleanup": false,
+      "new_adopted_defunct_workerd_pids": [
+        133523,
+        133528
+      ],
+      "defunct_process_note": "These two workerd entries are adopted zombies because this executor PID 1 does not reap children; no live Worker process remains.",
+      "remote_bindings_used": false,
+      "hydration_payload_check": "The smoke parsed the SSR JSON script, required a nonempty valid base64 value, and verified the bootstrap reference. It did not execute browser JS or verify hydration completion; no headless browser was used.",
+      "browser_hydration_end_to_end_verified": false
+    }
+  },
+  "wasm_bindgen_cli": {
+    "install_command": "bash scripts/install-wasm-bindgen.sh",
+    "install_exit_code": 0,
+    "idempotent_rerun": true,
+    "installed_path": ".project-tools/cargo/bin/wasm-bindgen",
+    "version": "0.2.129",
+    "build_toolchain": "Rust/Cargo 1.88.0",
+    "application_toolchain": "Rust/Cargo 1.85.0"
+  },
+  "tool_versions": {
+    "rustc_1_85": "1.85.0",
+    "cargo_1_85": "1.85.0",
+    "rustc_1_88": "1.88.0",
+    "cargo_1_88": "1.88.0",
+    "wasm_bindgen": "0.2.129",
+    "worker_build": "0.8.3",
+    "wrangler": "4.149.0",
+    "node": "24.19.0",
+    "npm": "11.9.0"
+  },
+  "generated_bundle_sha256": {
+    "apps/dashboard/dist/assets/bootstrap.js": {
+      "bytes": 883,
+      "sha256": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110"
+    },
+    "apps/dashboard/dist/assets/dashboard.css": {
+      "bytes": 6381,
+      "sha256": "4c287b361d8b6f3c4627deaad12e9eb6fd56660a1b66f3ff53e92c1eab0196bb"
+    },
+    "apps/dashboard/dist/assets/eezfunnel.js": {
+      "bytes": 73511,
+      "sha256": "099b8485af7da3de77773496cd4340ec8eb8089d69cc5eb7b0f4723cb4e530d2"
+    },
+    "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
+      "bytes": 631375,
+      "sha256": "273bf0344d46964cdaa419fdec9e15ccac2084e37c3c8a72da8cbe95dd080b90"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
+      "bytes": 259,
+      "sha256": "07027f8ccbb9ba3619deeb861233594ccab582d7eb3da34ca86559c932a09e6b"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js": {
+      "bytes": 20855,
+      "sha256": "cd533b7b9f2192fa535f92f4f266d03d47c23105cf500498d0bc8d6cc90dc6cf"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js": {
+      "bytes": 488,
+      "sha256": "0659b58e105fbc8e7e97feb8aa123f455520333ae10c326fa37ec0eb4b08e833"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js": {
+      "bytes": 937,
+      "sha256": "9ef1d21e8c05e91f5dd9e46c8f47ae574185a64497527b687f8fdb9b98045f83"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js": {
+      "bytes": 1887,
+      "sha256": "5b56995f71fe629934f4ab5eb292d5cfccd9d99037eb9a39ede5078c78db88df"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js": {
+      "bytes": 267,
+      "sha256": "853d44dbc9d2696e80d66c056e21d69e77b2bf68f9636826becd029f67c884a5"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js": {
+      "bytes": 578,
+      "sha256": "b70ad6fba9bf230286fad838d4620c302980502f5af12ea602005d7b8f6af9b0"
+    },
+    "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js": {
+      "bytes": 1278,
+      "sha256": "2cd20723c2c3cc52d648d1f5670df929733b359036044d3fd6c9507d929f28b6"
+    }
+  },
+  "no_comments_review": {
+    "result": "No source comments, TODO/FIXME markers, or lint suppressions were added. Production dashboard paths contain no unwrap/expect/panic or unsafe; test assertions use expect only inside cfg(test).",
+    "git_diff_check_exit_code": 0
+  },
+  "scope_notes": [
+    "The shared Dioxus tree renders exactly `/`, `/funnels`, and `/funnels/:id`; the route ID is limited to 64 ASCII letters, digits, underscore, or hyphen.",
+    "Dioxus escapes rendered route content. SSR includes its serialized hydration data in a JSON script with `<` escaped; browser bootstrap validates base64 before setting the globals expected by dioxus-web.",
+    "The root route uses an honest empty state; no metrics, CRUD, editor state, or data API were added.",
+    "The worker keeps the existing host allowlist, API/health/probe/MCP, and not-found route ownership. ASSETS handles the generated bundle via Worker-first routing.",
+    "The xtask pipeline integration tests run against a temporary workspace and emit a valid minimal JS module, so fake wasm-bindgen output does not modify the real ignored dist directory.",
+    "Final fresh CI, standalone check, and dashboard tests passed after test-fixture isolation. The local smoke was rerun after workspace isolation and before the later fixture-only JS placeholder change from a comment string to `export {};`; final CI and check covered that last fixture change. No Worker runtime files changed afterward.",
+    "Implementation commit 1d0b741 exists locally; push, hosted CI, and independent @codex/Sol reviews remain pending on the final pushed head. No remote deployment was run.",
+    "The browser wasm build and SSR hydration payload were verified, but browser hydration was not executed in a headless browser; end-to-end hydration remains unverified."
+  ],
+  "hosted_ci": {
+    "status_at_evidence_capture": "Pending; branch was not pushed."
+  },
+  "reviews": {
+    "codex": "Pending",
+    "sol": "Pending"
+  },
+  "deployment": {
+    "remote_deployment_run": false,
+    "remote_bindings_used": false
+  }
+}
