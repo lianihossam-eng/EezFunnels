@@ -130,6 +130,24 @@ impl<'a> Repository<'a> {
         Self { database }
     }
 
+    pub async fn classify_active_receipt(
+        &self,
+        idempotency_key: &str,
+        command_id: &str,
+        payload_json: Option<&str>,
+    ) -> RepositoryResult<Option<MutationResult>> {
+        validate_required_field(command_id, "command_id")?;
+        validate_idempotency_key(idempotency_key)?;
+
+        Ok(self
+            .active_receipt(idempotency_key)
+            .await?
+            .map(|receipt| match payload_json {
+                Some(payload_json) => classify_receipt(receipt, command_id, payload_json),
+                None => MutationResult::PayloadMismatch,
+            }))
+    }
+
     pub async fn create_funnel(&self, input: &NewFunnel) -> RepositoryResult<FunnelRecord> {
         validate_required_field(&input.id, "id")?;
         validate_required_field(&input.name, "name")?;
