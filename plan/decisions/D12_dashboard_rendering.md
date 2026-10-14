@@ -13,8 +13,9 @@ letters, digits, underscores, or hyphens. Dioxus owns HTML escaping for route co
 The browser bundle hydrates that same tree. The Worker emits Dioxus's serialized hydration data in
 a JSON script element, and the bootstrap validates the base64 data before assigning the globals
 read by `dioxus-web`. Development responses include Dioxus's debug hydration arrays; release
-responses include only the serialized data. The dashboard root remains `id="main"` for hydration
-and the page content uses a semantic `main` landmark.
+responses include only the serialized data. SSR places the rendered app tree inside an outer
+`<div id="main">` mount container, matching `dioxus-web`'s `rootname("main")` behavior. The app
+tree itself is the container's child, and page content uses a semantic `main` landmark.
 
 Dioxus 0.7.10 is pinned with default features disabled and only `minimal`, `router`, and `document`
 enabled in the workspace dependency. SSR is an explicit dashboard feature, while browser support is
