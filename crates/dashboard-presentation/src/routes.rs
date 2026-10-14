@@ -13,6 +13,9 @@ type IdempotencyKeyState = PreparedIdempotencyKey;
 #[cfg(not(feature = "browser"))]
 type IdempotencyKeyState = String;
 
+const MAX_FUNNEL_NAME_BYTES: usize = 120;
+const FUNNEL_NAME_LIMIT_MESSAGE: &str = "Funnel name must be 120 UTF-8 bytes or fewer.";
+
 #[derive(Clone, PartialEq, Routable)]
 #[rustfmt::skip]
 pub(crate) enum RouteView {
@@ -271,7 +274,7 @@ fn Funnels() -> Element {
             form {
                 onsubmit: move |event| {
                     event.prevent_default();
-                    if create_pending() || funnel_name().trim().is_empty() { return; }
+                    if create_pending() || !can_create_funnel(&funnel_name()) { return; }
                     create_pending.set(true);
                     create_error.set(None);
                     #[cfg(feature = "browser")]
@@ -364,7 +367,7 @@ fn Funnels() -> Element {
                     button {
                         class: "primary-button",
                         r#type: "submit",
-                        disabled: create_pending() || funnel_name().trim().is_empty(),
+                        disabled: create_pending() || !can_create_funnel(&funnel_name()),
                         if create_pending() { "Creating…" } else { "Create funnel" }
                     }
                 }
@@ -675,6 +678,11 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
         .map_err(|_| ())
 }
 
+fn can_create_funnel(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty() && trimmed.len() <= MAX_FUNNEL_NAME_BYTES
+}
+
 #[component]
 fn CreateFields(
     name: String,
@@ -694,6 +702,9 @@ fn CreateFields(
                 value: "{name}",
                 oninput: move |event| on_name_change.call(event.value()),
             }
+        }
+        if !name.trim().is_empty() && name.trim().len() > MAX_FUNNEL_NAME_BYTES {
+            p { class: "error-message", role: "alert", "{FUNNEL_NAME_LIMIT_MESSAGE}" }
         }
         fieldset { class: "blueprint-options",
             legend { "Choose a blueprint" }
@@ -741,6 +752,33 @@ mod tests {
 
         assert_eq!(html.matches("<input").count(), 6, "{html}");
         assert_eq!(html.matches("disabled").count(), 6, "{html}");
+    }
+
+    #[test]
+    fn create_name_limit_matches_the_command_utf8_byte_limit() {
+        assert!(can_create_funnel(&"x".repeat(120)));
+        assert!(!can_create_funnel(&"x".repeat(121)));
+        assert!(can_create_funnel(&"😀".repeat(30)));
+        assert!(!can_create_funnel(&"😀".repeat(31)));
+    }
+
+    #[test]
+    fn create_fields_explain_when_multibyte_name_exceeds_command_byte_limit() {
+        let mut virtual_dom = VirtualDom::new(|| {
+            rsx! {
+                CreateFields {
+                    name: "😀".repeat(31),
+                    blueprint: FunnelBlueprint::Tripwire,
+                    pending: false,
+                    on_name_change: move |_| {},
+                    on_blueprint_change: move |_| {},
+                }
+            }
+        });
+        virtual_dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&virtual_dom);
+
+        assert!(html.contains("120 UTF-8 bytes or fewer"), "{html}");
     }
 
     #[test]
