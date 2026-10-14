@@ -19,7 +19,7 @@ pub(crate) enum RouteView {
 #[component]
 fn DashboardShell() -> Element {
     rsx! {
-        div { id: "main", class: "app-shell",
+        div { class: "app-shell",
             aside { class: "sidebar",
                 Link { to: RouteView::Dashboard {}, class: "brand",
                     span { class: "brand-mark", "E" }

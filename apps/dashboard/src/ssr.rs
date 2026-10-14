@@ -25,7 +25,7 @@ pub fn render_document(path: &str) -> Option<String> {
         .replace('<', "\\u003c");
 
     Some(format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#f5f7fb\"><title>Eez Funnel</title><link rel=\"stylesheet\" href=\"/assets/dashboard.css\"></head><body>{rendered_app}<script id=\"dioxus-hydration-data\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"/assets/bootstrap.js\"></script></body></html>"
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#f5f7fb\"><title>Eez Funnel</title><link rel=\"stylesheet\" href=\"/assets/dashboard.css\"></head><body><div id=\"main\">{rendered_app}</div><script id=\"dioxus-hydration-data\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"/assets/bootstrap.js\"></script></body></html>"
     ))
 }
 

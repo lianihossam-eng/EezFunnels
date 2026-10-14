@@ -76,6 +76,14 @@ mod tests {
     }
 
     #[test]
+    fn hydration_mount_wraps_the_server_rendered_app_root() {
+        let html = render_document("/").expect("root dashboard route");
+
+        assert!(html.contains("<body><div id=\"main\"><div class=\"app-shell\""));
+        assert_eq!(html.matches("id=\"main\"").count(), 1);
+    }
+
+    #[test]
     fn funnels_route_renders_its_page_inside_the_shared_shell() {
         let html = render_document("/funnels").expect("funnel list route");
 
