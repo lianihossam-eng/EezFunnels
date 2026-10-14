@@ -1,14 +1,7 @@
-PR-012 local interrogate record
+Fresh independent interrogation after the repeated-announcement fix:
 
-First pass:
-- Reviewer A found a P2: order undo/redo restored the draft without updating the polite live-region message.
-- Reviewer B found no findings.
+Reviewer A: No actionable findings. Each announcement advances the revision and moves text into the alternate persistent span. The browser regression verifies DOM mutations and restored values.
 
-Fix and regression:
-- Added failing-first assertions for undo/redo order messages and setting-only messages.
-- Updated order history metadata to retain the moved section ID and announce action/position; setting diffs announce the schema field label.
-- The first focused test failed with the stale dropped-position message before the fix; the same tests pass after the fix.
+Reviewer B: No code finding requiring a change. The alternating slots produce distinct DOM insertions in the existing atomic polite region. The test observes MutationObserver callbacks and textContent, not screen-reader speech; assistive-technology delivery remains unverified.
 
-Fresh pass on the complete diff:
-- Reviewer A: no findings.
-- Reviewer B: no findings.
+Synthesis: No remaining actionable code findings. Report the test as DOM-level verification only.

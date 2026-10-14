@@ -1,12 +1,12 @@
 {
   "task": "PR-012",
-  "evidence_refreshed_at_utc": "2026-10-14T16:26:30Z",
+  "evidence_refreshed_at_utc": "2026-10-14T17:43:30Z",
   "branch": "feat/012_history",
   "base_commit": "d783e3f3a9e43ff7c74cb245250852cf74073600",
-  "verified_source_commit": "2ec9db155a5767503663e344ab06f41d9f0017f6",
-  "source_commit_role": "The implementation and D17 decision are committed in the verified source commit. The following evidence/status commit changes only plan/verification metadata and plan/STATUS.md, which are excluded from the source fingerprint.",
+  "verified_source_commit": "1c7b40b41779a3e57756182818c7de31fcacec50",
+  "source_commit_role": "The implementation, browser regression, and D17 announcement behavior are committed in the verified source commit. The following evidence/status commit changes only plan/verification metadata and plan/STATUS.md; those are excluded from the source fingerprint.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "e552c94336b0ed0b7ca15e04e62f6bb6f052d40cb9a6e3a92bbac7ab47a198d7",
+  "source_fingerprint_sha256": "2b94facbc8cffa1441c4d5d25171a8a2bac6c5b322241959f4a96e6715587a20",
   "source_file_count": 121,
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
@@ -50,7 +50,7 @@
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "20a89afe5ddcbfe0d627d79a160532a3cfb302c83264945fd8d83200873b3035",
     "crates/dashboard-presentation/src/routes.rs": "a3900cb44d8999e53624cfb32f6c7ee06261cd139fa30963f2dac964d61527f3",
-    "crates/dashboard-presentation/src/routes/editor.rs": "f473c1ed8bf406a60eda8980a11bbce96610f0faf4b61858455f575a9585b93f",
+    "crates/dashboard-presentation/src/routes/editor.rs": "d64d382f539150d5f05c0b6b353ad93ecb47b70979253fe46f538960da2579cc",
     "crates/dashboard-presentation/src/routes/editor/inspector.rs": "900b53a992d84ea5364ec8fd7183b7851dd199255244bd3e3416701e7222e9e9",
     "crates/dashboard-presentation/src/ssr.rs": "2731cce4be71bb41a50b4c0d04e1c395a0494c6ee69006569e0ae1984cbbad2e",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
@@ -101,7 +101,7 @@
     "plan/decisions/D14_workspace_funnel_limit.md": "36e7cc5c2b6cc7aa1af3264d56c8d7aa2104a417669d01e49e0bb5cf63a92207",
     "plan/decisions/D15_visual_editor.md": "85c06296b35c8fe847554fd71c29b49a2db1ded39fb01e04bdda905bd1756260",
     "plan/decisions/D16_settings_inspector.md": "4497a55412336ba8f6c8c647777bbfef22da6d1e2e54a0f28e42692d25af59e4",
-    "plan/decisions/D17_editor_history.md": "462e43edab1eba74c88022d9aac79b1c799b3f572ebb02b1744337dd15e30d55",
+    "plan/decisions/D17_editor_history.md": "d744bb57b93acec8012bbbc38d0232d2f112eb790e71c0e8893ac3fffd380e54",
     "plan/decisions/D1_gates.md": "c93423f9aee4860ce1e24dd9225f24fc04c82688cdcbd104205936cbcf44eae3",
     "plan/decisions/D2_contracts_vs_mechanisms.md": "f14e4e1b4093b54882db89007c688e570a409628ed2f23a19d2624da58317999",
     "plan/decisions/D3_proof_statuses.md": "23a961fa9512148c2a9107b3c813be0ebb0f6e598d9fbea0bc897871fabf459a",
@@ -121,7 +121,7 @@
     "scripts/smoke-pr003.sh": "eaafba0d9c1bbac0c85909b446e1792fa840142cfd27eae51215e90a61745ff9",
     "scripts/smoke-pr008.sh": "127ff58bfd46acfcf37fedc5c002ee541fb23af4b50af1ca93168f920553dd76",
     "scripts/smoke-pr009.sh": "59a154ae768c77efad7bdd716252cbf83668187330119bc61fa48400ea5c289a",
-    "scripts/test-pr010-browser.mjs": "ac1ff11dcdb1901cd3fa16b85f6197598a64987d57afcc05073c46e57bed9a15",
+    "scripts/test-pr010-browser.mjs": "1365c52716f27ba0be578e014c33c4d4b8d3cbb566b784332378810fbb4e90ec",
     "scripts/test-pr010-migration.py": "ac3faaa4f07c2e5d2fb52a2165e1780edb6552b48848d93df406f3ea28ea9fd3",
     "wrangler.toml": "45328e66db9202546eced69327fb7e520d8f6d2ecac5a028b34852950ed8b659",
     "xtask/Cargo.toml": "6bcc325f5be049cb0b4e37af39fffe5f8e270da38b451199eeaac773f32cb4a7",
@@ -141,28 +141,29 @@
     "decision": "plan/decisions/D17_editor_history.md",
     "history": "Closed JSON paths cover section order and sparse typed settings changes; history retains the latest 100 edits, drops the redo tail on a new edit, and checks expected JSON before applying a diff.",
     "boundaries": "Preview/effective values, selection, request state, and server output stay outside history. Undo/redo use the existing preview generation path. Successful save and route load reset history; save/retryable/stale/keyboard-drag states lock it.",
-    "announcements": "Undo/redo announces the moved section and resulting position for order diffs, and the schema field label for setting diffs.",
-    "compatibility": "No API request, persistence format, contract, migration, idempotency, retry, editor-head CAS, or dependency changes.",
+    "announcements": "Undo/redo announces order action, moved section, and resulting position, or the schema label for setting diffs. An incrementing revision alternates identical text between two persistent spans in the same atomic polite live region to create a fresh DOM mutation.",
+    "compatibility": "No API request, persistence format, contract, migration, idempotency, retry, editor-head CAS, dependency, or lockfile changes.",
     "frozen_contracts_changed": false,
     "manifest_dependencies_added": false,
     "lockfile_changed": false,
     "sql_migrations_added": false,
-    "remote_operations": false
+    "remote_operations": false,
+    "announcement_verification_limit": "Hydrated browser coverage verifies MutationObserver callbacks and live-region text for consecutive identical undo/redo messages. It does not verify screen-reader speech delivery."
   },
   "checks": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && cargo xtask check",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/xtask-check.log",
-      "log_sha256": "34cc1f73977abeae1adbf4fa5a45d20452c6d541844ac332a1288ee91fbcf944",
-      "outcome": "Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. The dashboard presentation suite has 34 tests."
+      "log_sha256": "ddf3fc5c141f5cc15cb8fe9997605435ca21a759d34c8f473956cd7b9530db5c",
+      "outcome": "Formatting, Clippy with warnings denied, all workspace tests, and layer validation passed on the repeated-announcement fix. Dashboard presentation has 34 passing tests."
     },
     "cargo_xtask_ci": {
       "command": "source .project-tools/env.sh && cargo xtask ci",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/xtask-ci.log",
-      "log_sha256": "c05519a97d10b56819c95bb80712e1bd545c54d3bb17d5cfbd5e9f2e0389590b",
-      "outcome": "Workspace checks/tests, dashboard and API WASM builds, asset generation, local-only D1 smoke, and cargo audit passed.",
+      "log_sha256": "01d3521a34cdc254f9f632628167cec2a06afb8b8a7debfaced94beeceb72690",
+      "outcome": "Workspace checks/tests, dashboard and API WASM builds, asset generation, local D1 smoke including process cleanup, and cargo audit passed.",
       "audit": {
         "advisories_loaded": 1314,
         "locked_crate_dependencies_scanned": 346,
@@ -174,17 +175,22 @@
       "command": "source .project-tools/env.sh && cargo test -p eez-dashboard-presentation",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/presentation-tests.log",
-      "log_sha256": "12e24c0b0301204f26518c27ebea87ee87f18a3a4a69f6ee88ee0d82cfe38155",
-      "outcome": "34 tests passed. Coverage includes 100 edits / undo 50 / redo 50, nullable/missing values, branch truncation, order announcements, setting announcements, keyboard reorder grouping/cancel, and save locks/reset.",
-      "test_first": "The 100-edit test was first run with undo/redo stubs and failed at the expected undo assertion. The live-region regression failed before the announcement fix and passes afterward."
+      "log_sha256": "eb97f5eb1a8f09c95c189e2b2b2d3a9eb6784676484fd75a18c6c2b8b6779b97",
+      "outcome": "34 tests passed, including 100 edits / undo 50 / redo 50, nullable/missing values, branch truncation, order announcements, setting announcements, keyboard grouping/cancel, and save locks/reset.",
+      "test_first": "The 100-edit test first failed with undo/redo stubs. The hydrated identical-announcement regression failed before the final revision/alternating-span fix: second Ctrl+Z expected two mutations but observed one."
     },
     "browser_integration": {
       "command": "npm run test:pr012:browser",
       "exit_code": 0,
       "log": "plan/verification/PR-012/logs/browser.log",
       "log_sha256": "a07dba6b33855ebdc2d898d4c8b4f25a59e9039a020ca7f5dfbcf44b399ec2b8",
-      "outcome": "Hydrated Worker/browser checks passed for Ctrl+Z/Ctrl+Y, preview requests, dirty/save state, order undo/redo announcements, existing editor interactions, and save/CAS coverage. Axe critical findings: 0.",
-      "axe_critical_findings": 0
+      "outcome": "Hydrated Worker/browser checks passed for Ctrl+Z/Ctrl+Y, preview requests, dirty/save state, order undo/redo announcements, consecutive identical setting undo/redo text mutations and restored values, existing editor interactions, and save/CAS coverage. Axe critical findings: 0. This verifies DOM mutation/text only; screen-reader speech delivery is unverified.",
+      "axe_critical_findings": 0,
+      "repeated_announcement_regression": {
+        "transitions": 6,
+        "checks": "Two same-field undos, two same-field redos, then two undos each produced a new MutationObserver record and the expected live-region message; the editor value returned to its saved baseline.",
+        "assistive_technology_speech_verified": false
+      }
     },
     "migration_harness": {
       "command": "npm run test:pr010:migration",
@@ -205,14 +211,14 @@
         "exit_code": 0,
         "log": "plan/verification/PR-012/logs/diff-check.log",
         "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "outcome": "PASS across code, decisions, STATUS, and structured evidence. Raw command logs are excluded so captured terminal output remains verbatim."
+        "outcome": "PASS across code, D17, STATUS, and structured evidence. Captured command logs are excluded to preserve terminal output verbatim."
       },
       "frozen_surface_check": {
         "command": "git diff --exit-code origin/main -- Cargo.toml Cargo.lock migrations plan/contracts",
         "exit_code": 0,
         "log": "plan/verification/PR-012/logs/frozen-surface.log",
         "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "outcome": "No frozen contracts, manifests/lockfiles, or migration files changed."
+        "outcome": "No contracts, manifests/lockfiles, or migration files changed."
       }
     }
   },
@@ -221,11 +227,15 @@
       "independent_reviewers": 2,
       "first_pass_actionable_findings": 1,
       "resolved_findings": [
-        "Undo/redo of order diffs now announces the action, moved section, and resulting position."
+        "Undo/redo of order diffs announces the action, moved section, and resulting position.",
+        "Repeated identical same-field undo/redo messages now create a fresh live-region DOM mutation for each transition."
       ],
       "final_actionable_findings": 0,
+      "noted_limitations": [
+        "Browser evidence verifies live-region DOM mutation/text, not screen-reader speech delivery."
+      ],
       "log": "plan/verification/PR-012/logs/interrogate.log",
-      "log_sha256": "211137611068032740b6c590e1b5ea190a42447d642207c5f2bc3324534a4dfd"
+      "log_sha256": "b4498a0ce59cae89439f02fe85accf3810171d0a0a13639571132f2e2796c951"
     },
     "no_comments": {
       "auditor": "Project-local no-comments skill audit",
@@ -234,17 +244,21 @@
       "added_or_deleted_lint_suppressions": 0,
       "added_or_deleted_substantive_workaround_prose": 0,
       "findings": 0,
+      "open_constraints": 0,
       "log": "plan/verification/PR-012/logs/no-comments.log",
-      "log_sha256": "4be156da6686e4b5f395d000eb114b023bfb04414cb12d72f81bd32de0e4873b"
+      "log_sha256": "a0984c65a870beb26c2a15deb6d39d3696f90a4e393eb4a3ce74bdb9e0e83a8c"
     }
   },
   "hosted_ci": {
     "pull_request": 13,
     "url": "https://github.com/lianihossam-eng/EezFunnels/pull/13",
     "base": "main",
-    "status_at_evidence_capture": "pending",
-    "head_at_evidence_capture": "6e747af3ce0367e798afc8831f140eff782eb6e2",
-    "run_id": "38598037415",
+    "previous_head": "0ac87e5267c4bb6390717100b247be1429ddcd54",
+    "previous_run_id": "38598159776",
+    "previous_failed_job_rerun_id": "115971746548",
+    "previous_head_rerun_status": "SUCCESS; the earlier cleanup-fixture failure did not reproduce on the same head.",
+    "fix_source_commit": "1c7b40b41779a3e57756182818c7de31fcacec50",
+    "status_at_evidence_capture": "fix source is local and not yet pushed; fresh hosted CI is required after push.",
     "required_before_merge": true,
     "review_handoff": "GPT-6.1-Sol handles PR review and merge. This work did not review or merge a PR."
   },

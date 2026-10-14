@@ -1,26 +1,28 @@
 PR-012 editor undo/redo verification
-Evidence refreshed: 2026-10-14T16:26:30Z
+Evidence refreshed: 2026-10-14T17:43:30Z
 Branch: feat/012_history
 Base commit: d783e3f3a9e43ff7c74cb245250852cf74073600 (exact origin/main SHA)
-Verified source commit: 2ec9db155a5767503663e344ab06f41d9f0017f6
-Source fingerprint: e552c94336b0ed0b7ca15e04e62f6bb6f052d40cb9a6e3a92bbac7ab47a198d7 (121 source files)
+Verified source commit: 1c7b40b41779a3e57756182818c7de31fcacec50
+Source fingerprint: 2b94facbc8cffa1441c4d5d25171a8a2bac6c5b322241959f4a96e6715587a20 (121 source files)
 Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/build outputs, and .project-tools are excluded.
 
 Implementation and compatibility:
 - D17 records presentation-only JSON-diff history for section order and sparse typed settings changes, capped at 100 edits. New edits discard the redo tail; a mismatched patch resets history.
 - Undo/redo reuse the preview generation path. Order changes announce action, section, and resulting position; setting changes announce the schema label.
+- Repeated identical announcement text now alternates between two persistent spans inside the same atomic polite live region. This creates a fresh DOM mutation while preserving the announcement wording.
 - Keyboard reorders create one history entry on drop; Escape restores the order and records none. Successful save and route load reset history; pending, retryable, stale, and keyboard-drag states lock undo/redo.
 - No API, persistence, idempotency, retry, CAS, contract, migration, dependency, or lockfile changes.
 
 Validation:
-- `source .project-tools/env.sh && cargo xtask check`: PASS; workspace formatting, Clippy with warnings denied, tests, and layer checks. Log `logs/xtask-check.log`; SHA-256 `34cc1f73977abeae1adbf4fa5a45d20452c6d541844ac332a1288ee91fbcf944`.
-- `source .project-tools/env.sh && cargo xtask ci`: PASS; workspace checks/tests, WASM builds, asset generation, local D1 smoke, and audit (1,314 advisories; 346 dependencies; zero vulnerability findings). Log `logs/xtask-ci.log`; SHA-256 `c05519a97d10b56819c95bb80712e1bd545c54d3bb17d5cfbd5e9f2e0389590b`.
-- Presentation tests: PASS, 34 tests including 100 edits / undo 50 / redo 50, nullable/missing values, redo branching, reorder grouping, save reset/locks, and live-region announcements. Log `logs/presentation-tests.log`; SHA-256 `12e24c0b0301204f26518c27ebea87ee87f18a3a4a69f6ee88ee0d82cfe38155`.
-- `npm run test:pr012:browser`: PASS; shortcuts, preview requests, dirty/save state, order undo/redo announcements, existing editor and save/CAS interactions; axe critical findings: 0. Log `logs/browser.log`; SHA-256 `a07dba6b33855ebdc2d898d4c8b4f25a59e9039a020ca7f5dfbcf44b399ec2b8`.
+- `source .project-tools/env.sh && cargo xtask check`: PASS; workspace formatting, Clippy with warnings denied, tests, and layer checks. Log `logs/xtask-check.log`; SHA-256 `ddf3fc5c141f5cc15cb8fe9997605435ca21a759d34c8f473956cd7b9530db5c`.
+- `source .project-tools/env.sh && cargo xtask ci`: PASS; workspace checks/tests, WASM builds, asset generation, local D1 smoke, and audit (1,314 advisories; 346 dependencies; zero vulnerability findings). Log `logs/xtask-ci.log`; SHA-256 `01d3521a34cdc254f9f632628167cec2a06afb8b8a7debfaced94beeceb72690`.
+- `source .project-tools/env.sh && cargo test -p eez-dashboard-presentation`: PASS, 34 tests including 100 edits / undo 50 / redo 50. Log `logs/presentation-tests.log`; SHA-256 `eb97f5eb1a8f09c95c189e2b2b2d3a9eb6784676484fd75a18c6c2b8b6779b97`.
+- `npm run test:pr012:browser`: PASS; hydrated browser suite covers the six consecutive same-field undo/redo transitions, confirms each causes a DOM mutation with expected text, and restores the saved value; all other editor checks pass; axe critical findings: 0. Log `logs/browser.log`; SHA-256 `a07dba6b33855ebdc2d898d4c8b4f25a59e9039a020ca7f5dfbcf44b399ec2b8`. Actual screen-reader speech delivery remains unverified.
 - `npm run test:pr010:migration`: PASS; migration preflight/backfill harness. Log `logs/migration.log`; SHA-256 `bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192`.
-- Browser syntax, `git diff --check origin/main -- . ':(exclude)plan/verification/PR-012/logs/**'` and frozen-surface checks: PASS; captured terminal logs are excluded from whitespace checks and remain verbatim. Logs and hashes are listed in results.json.
-- Fresh interrogate: zero remaining findings after the live-region fix. No-comments audit: zero findings. Reports and hashes are listed in results.json.
+- The new browser regression failed before the final fix: second Ctrl+Z expected two mutations but observed one. Captured in `logs/repeated-announcement-failure-before-fix.log`; SHA-256 `d58efca2481cd7db643e3ee349bad9743abff8c597fc200baca3b235dca97593`.
+- Browser syntax, diff checks, and frozen-surface checks pass; logs and hashes are listed in results.json.
+- Fresh interrogate: zero actionable code findings. No-comments audit: zero findings across the full 18-file diff. Both reports and hashes are in results.json.
 
 Delivery:
-- PR #13 is open at https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`. Hosted CI run `38598037415` was pending on initial PR head `6e747af3ce0367e798afc8831f140eff782eb6e2` at evidence capture; the status/evidence follow-up will trigger a fresh run. GPT-6.1-Sol owns PR review and merge.
-- No remote D1 operation, Cloudflare deployment, publication, or merge was run.
+- PR #13 is open at https://github.com/lianihossam-eng/EezFunnels/pull/13, targeting `main`. Hosted CI run `38598159776` failed only at the PR-009 cleanup fixture; failed-job rerun `115971746548` passed on old head `0ac87e5267c4bb6390717100b247be1429ddcd54`. Fresh hosted CI is required on the pushed fix/evidence head.
+- No remote D1 operation, Cloudflare deployment, publication, review, or merge was run.
