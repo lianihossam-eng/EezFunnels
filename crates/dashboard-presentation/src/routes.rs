@@ -93,6 +93,20 @@ fn Dashboard() -> Element {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DialogCancelDisposition {
+    KeepOpen,
+    Dismiss,
+}
+
+fn dialog_cancel_disposition(mutation_pending: bool) -> DialogCancelDisposition {
+    if mutation_pending {
+        DialogCancelDisposition::KeepOpen
+    } else {
+        DialogCancelDisposition::Dismiss
+    }
+}
+
 #[component]
 fn Funnels() -> Element {
     let mut load_state = use_signal(|| None::<Vec<FunnelCard>>);
@@ -120,6 +134,18 @@ fn Funnels() -> Element {
                     Err(()) => load_failed.set(true),
                 }
             });
+        });
+
+        let create_modal_open = create_open;
+        use_effect(move || {
+            let open = create_modal_open();
+            spawn(async move { set_modal_dialog("create-funnel-dialog", open).await });
+        });
+
+        let delete_modal_target = delete_target;
+        use_effect(move || {
+            let open = delete_modal_target().is_some();
+            spawn(async move { set_modal_dialog("delete-funnel-dialog", open).await });
         });
     }
 
@@ -219,10 +245,15 @@ fn Funnels() -> Element {
         }
 
         dialog {
+            id: "create-funnel-dialog",
             class: "funnel-dialog",
-            open: create_open(),
+            "aria-modal": "true",
             "aria-labelledby": "create-funnel-title",
             "aria-describedby": "create-funnel-description",
+            oncancel: move |event| match dialog_cancel_disposition(create_pending()) {
+                DialogCancelDisposition::KeepOpen => event.prevent_default(),
+                DialogCancelDisposition::Dismiss => create_open.set(false),
+            },
             div { class: "dialog-heading",
                 p { class: "eyebrow", "New workspace asset" }
                 h2 { id: "create-funnel-title", "Create a funnel" }
@@ -273,40 +304,20 @@ fn Funnels() -> Element {
                     #[cfg(not(feature = "browser"))]
                     create_pending.set(false);
                 },
-                label { "Funnel name"
-                    input {
-                        r#type: "text",
-                        name: "name",
-                        required: true,
-                        maxlength: "120",
-                        value: "{funnel_name}",
-                        oninput: move |event| {
-                            funnel_name.set(event.value());
-                            create_idempotency_key.set(None);
-                        },
-                    }
-                }
-                fieldset { class: "blueprint-options",
-                    legend { "Choose a blueprint" }
-                    for item in FunnelBlueprint::ALL {
-                        label { class: "blueprint-option",
-                            "data-blueprint": item.id(),
-                            input {
-                                r#type: "radio",
-                                name: "blueprint",
-                                value: item.id(),
-                                checked: blueprint() == item,
-                                onchange: move |_| {
-                                    blueprint.set(item);
-                                    create_idempotency_key.set(None);
-                                },
-                            }
-                            span { class: "blueprint-copy",
-                                strong { "{item.label()}" }
-                                span { "{item.description()}" }
-                            }
-                        }
-                    }
+                CreateFields {
+                    name: funnel_name(),
+                    blueprint: blueprint(),
+                    pending: create_pending(),
+                    on_name_change: move |value| {
+                        if create_pending() { return; }
+                        funnel_name.set(value);
+                        create_idempotency_key.set(None);
+                    },
+                    on_blueprint_change: move |value| {
+                        if create_pending() { return; }
+                        blueprint.set(value);
+                        create_idempotency_key.set(None);
+                    },
                 }
                 if let Some(message) = create_error() {
                     p { class: "error-message", role: "alert", "{message}" }
@@ -336,10 +347,18 @@ fn Funnels() -> Element {
                 .and_then(|items| items.into_iter().find(|item| item.id == target_id))
             {
                 dialog {
+                    id: "delete-funnel-dialog",
                     class: "funnel-dialog confirmation-dialog",
-                    open: true,
+                    "aria-modal": "true",
                     "aria-labelledby": "delete-funnel-title",
                     "aria-describedby": "delete-funnel-description",
+                    oncancel: move |event| match dialog_cancel_disposition(delete_pending()) {
+                        DialogCancelDisposition::KeepOpen => event.prevent_default(),
+                        DialogCancelDisposition::Dismiss => {
+                            delete_target.set(None);
+                            delete_error.set(None);
+                        }
+                    },
                     h2 { id: "delete-funnel-title", "Delete {target.name}?" }
                     p { id: "delete-funnel-description", "This removes the funnel and its saved revisions." }
                     if let Some(message) = delete_error() {
@@ -510,6 +529,28 @@ async fn api_request(
 }
 
 #[cfg(feature = "browser")]
+const BROWSER_MODAL_DIALOG: &str = r#"
+const {id, open} = await dioxus.recv();
+const dialog = document.getElementById(id);
+if (dialog instanceof HTMLDialogElement) {
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+}
+dioxus.send(true);
+"#;
+
+#[cfg(feature = "browser")]
+async fn set_modal_dialog(id: &'static str, open: bool) {
+    let mut request = document::eval(BROWSER_MODAL_DIALOG);
+    if request
+        .send(serde_json::json!({ "id": id, "open": open }))
+        .is_ok()
+    {
+        let _ = request.recv::<bool>().await;
+    }
+}
+
+#[cfg(feature = "browser")]
 async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
     let response = api_request("GET", "/api/funnels", None, None).await?;
     if response.status != 200 {
@@ -518,6 +559,87 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
     serde_json::from_str::<FunnelListResponse>(&response.body)
         .map(|response| response.items)
         .map_err(|_| ())
+}
+
+#[component]
+fn CreateFields(
+    name: String,
+    blueprint: FunnelBlueprint,
+    pending: bool,
+    on_name_change: EventHandler<String>,
+    on_blueprint_change: EventHandler<FunnelBlueprint>,
+) -> Element {
+    rsx! {
+        label { "Funnel name"
+            input {
+                r#type: "text",
+                name: "name",
+                required: true,
+                maxlength: "120",
+                disabled: pending,
+                value: "{name}",
+                oninput: move |event| on_name_change.call(event.value()),
+            }
+        }
+        fieldset { class: "blueprint-options",
+            legend { "Choose a blueprint" }
+            for item in FunnelBlueprint::ALL {
+                label { class: "blueprint-option",
+                    "data-blueprint": item.id(),
+                    input {
+                        r#type: "radio",
+                        name: "blueprint",
+                        value: item.id(),
+                        checked: blueprint == item,
+                        disabled: pending,
+                        onchange: move |_| on_blueprint_change.call(item),
+                    }
+                    span { class: "blueprint-copy",
+                        strong { "{item.label()}" }
+                        span { "{item.description()}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dioxus::core::VirtualDom;
+
+    #[test]
+    fn create_fields_are_disabled_while_a_request_is_pending() {
+        let mut virtual_dom = VirtualDom::new(|| {
+            rsx! {
+                CreateFields {
+                    name: "Offer".to_owned(),
+                    blueprint: FunnelBlueprint::Tripwire,
+                    pending: true,
+                    on_name_change: move |_| {},
+                    on_blueprint_change: move |_| {},
+                }
+            }
+        });
+        virtual_dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&virtual_dom);
+
+        assert_eq!(html.matches("<input").count(), 6, "{html}");
+        assert_eq!(html.matches("disabled").count(), 6, "{html}");
+    }
+
+    #[test]
+    fn native_dialog_cancel_stays_open_until_pending_mutation_finishes() {
+        assert_eq!(
+            dialog_cancel_disposition(true),
+            DialogCancelDisposition::KeepOpen
+        );
+        assert_eq!(
+            dialog_cancel_disposition(false),
+            DialogCancelDisposition::Dismiss
+        );
+    }
 }
 
 #[component]

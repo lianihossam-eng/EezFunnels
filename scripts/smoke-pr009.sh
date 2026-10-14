@@ -4,7 +4,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-source .project-tools/env.sh
+if [ -f .project-tools/env.sh ]; then
+  source .project-tools/env.sh
+fi
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/tmp/eezfunnel-xdg}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/eezfunnel-cache}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-/tmp/eezfunnel-npm-cache}"
@@ -59,6 +61,7 @@ if curl --silent --output /dev/null --connect-timeout 1 "http://127.0.0.1:$port/
 fi
 
 npm ci --no-audit --no-fund
+bash scripts/install-worker-build.sh
 ./node_modules/.bin/wrangler d1 migrations apply DB --local --env dev --persist-to "$state_dir"
 setsid ./node_modules/.bin/wrangler dev --local --env dev --port "$port" --ip 127.0.0.1 --persist-to "$state_dir" > "$log_file" 2>&1 &
 worker_pid=$!
