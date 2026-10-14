@@ -1,0 +1,10 @@
+
+> test:pr012:browser
+> node scripts/test-pr010-browser.mjs
+
+PR-010/011/012 browser: navigation, keyboard, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=0
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

@@ -1,0 +1,5 @@
+
+> test:pr010:migration
+> python3 scripts/test-pr010-migration.py
+
+PR-010 editor-head migration: zero/multi-revision preflight and valid backfill passed

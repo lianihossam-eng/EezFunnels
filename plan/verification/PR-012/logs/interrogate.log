@@ -1,0 +1,15 @@
+Fresh local interrogate against the complete PR-012 diff from origin/main, including the working tree after the keyboard-boundary fix.
+
+Intent: recognized Ctrl+Z and Ctrl+Y shortcuts within the editor must be consumed even at empty undo/redo edges or while application history is locked, preventing browser-native input undo/redo from changing a field or disturbing the redo stack. The hydrated regression fills the 100-entry history, checks Ctrl+Y at full-history/empty-redo and Ctrl+Z at empty-undo, verifies the field value and input-event count, and confirms normal undo/redo still works.
+
+Reviewers:
+- Reviewer A: GPT-6 Astra (available Codex reviewer model; the configured default models were not exposed by this environment) — no findings.
+- Reviewer B: GPT-5.6-Sol (available Codex reviewer model; the configured default models were not exposed by this environment) — no findings.
+
+Act on: none.
+Consider: none.
+Noted: browser evidence observes DOM mutations and input events; it does not verify assistive-technology speech delivery.
+Dismissed: none.
+Final actionable findings: 0.
+
+This is a local required interrogate audit, separate from PR #13 review/merge, which remain reserved for GPT-6.1-Sol.
