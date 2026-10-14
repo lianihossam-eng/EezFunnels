@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-008 Dashboard shell (`feat/008_dashboard`)
+Current phase: PR-009 Funnel list + creation (`feat/009_funnel_list`)
 Last updated: 2026-10-14
 
 ## Phases
@@ -13,8 +13,8 @@ Last updated: 2026-10-14
 - [x] PR-005 Render engine (merged as PR #6; merge commit `2c67843b61c0eb266dee1219565d4e55d59738da`)
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
-- [ ] PR-008 Dashboard shell (implementation complete; local verification passed)
-- [ ] PR-009 Funnel list + creation
+- [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
+- [ ] PR-009 Funnel list + creation (implementation and local verification complete; hosted review pending)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -115,8 +115,29 @@ head `1755fd8` found that classifying the dashboard app in L3 conflicted with th
 boundary. A new layer test failed before correction by accepting an API-to-dashboard edge; commit
 `cf05024e0130185648cb83fadf9fdabd70754d63` moved the shared tree/SSR/assets into L1 and restored the
 browser app to L4. `AGENTS.md` and `plan/production.md` remain unchanged. Fingerprinted evidence is
-in `plan/verification/PR-008/execution.txt` and `results.json`. Final hosted CI and Codex/Sol review
-are required on the pushed evidence head before merge; no remote deployment was run.
+in `plan/verification/PR-008/execution.txt` and `results.json`. PR #9 merged the dashboard shell at
+`13472d2daa8047b166e1a9635434cc48e5b3b62e`; no remote deployment was run.
+
+PR-009 adds the funnel list, create flow for the five closed blueprints, and idempotent delete. The
+Worker exposes `GET/POST /api/funnels` and `DELETE /api/funnels/:id`; command handling stays in
+`Session::execute`. D13 records the versioned snapshot format and the initial immutable revision
+created atomically with each funnel. Create and delete receipts enforce C-03's 24-hour same-key,
+same-payload replay and reject key reuse with different command parameters. The dashboard locks
+create fields during pending requests, preserves retry keys after ambiguous network results, and
+uses native modal dialogs that cannot be dismissed with Escape while a mutation is pending.
+
+Final source commit `4cad1bf739e0a800b6d0af64fd9483b9a78e996d` passes `cargo xtask check` with API
+11, commands 7, dashboard presentation 9, domain 13, render 33, storage 5, xtask 26, and CLI tests
+2 and 6. A fresh-target `cargo xtask ci` passes workspace checks/tests, API and dashboard WASM,
+asset generation, the local CRUD smoke gate, and audit of 345 locked dependencies against 1,310
+advisories with zero findings. The separate local-only Wrangler smoke verifies all five blueprint
+snapshots, create replay, payload-mismatch conflict, delete/replay, malformed JSON, missing
+idempotency key, missing funnel, unsupported method, and host denial. Fingerprinted evidence is in
+`plan/verification/PR-009/execution.txt` and `results.json`.
+
+The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
+completion and native Escape behavior remain unverified in a headless browser. No remote binding
+was used, and no remote migration or deployment was run.
 
 - Project toolchain is Rust/Cargo 1.85.0; Node 24.19.0, npm 11.9.0, and local
   Wrangler 4.149.0 are available. Wrangler runs with local bindings only for the current
@@ -168,6 +189,6 @@ are required on the pushed evidence head before merge; no remote deployment was 
 
 ## Next action
 
-Push the PR-008 source and refreshed evidence, verify hosted CI on the final PR #9 head, then request
-one @codex review and Sol review on that same head. Do not merge until both reviews and hosted CI
-are clean on the exact SHA. Do not deploy remotely.
+Push PR-009 and its refreshed evidence, verify hosted CI on the exact final head, then request one
+@codex review and Sol review on that same head. Merge only after both reviews and hosted CI are clean
+on the exact SHA. Do not deploy remotely.
