@@ -14,7 +14,7 @@ Last updated: 2026-10-14
 - [x] PR-006 5 sections (merged as PR #7; merge commit `96701762c384e47264cdd8092c5f0c3496c7adac`)
 - [x] PR-007 5 themes (merged as PR #8; merge commit `7ade40e9ed3cb917d380d762beeb5a01916f1e83`)
 - [x] PR-008 Dashboard shell (merged as PR #9; merge commit `13472d2daa8047b166e1a9635434cc48e5b3b62e`)
-- [ ] PR-009 Funnel list + creation (exact-source local gates and process-group regression pass; refreshed evidence pending push and hosted review)
+- [ ] PR-009 Funnel list + creation (100-funnel cap and bounded-list review fix pass local gates on `cef8647`; evidence refreshed, push and hosted review pending)
 - [ ] PR-010 Visual editor
 - [ ] PR-011 Inspector
 - [ ] PR-012 Undo/redo
@@ -133,6 +133,13 @@ Create and delete D1 batches remove expired receipts before claiming a fresh key
 are reclaimed during ordinary writes. The list uses request generations so a delayed initial load
 cannot replace the result of a newer post-create refresh.
 
+D14 sets a 100-funnel workspace cap to bound the all-at-once list response and dashboard rendering.
+`funnel.list` applies `LIMIT 100`; create claims its idempotency receipt only below the cap within
+the same atomic batch as the funnel and initial revision. At capacity the API returns
+`conflict/funnel_limit_reached` (HTTP 409) without storing a receipt or funnel. A D1 trigger rejects
+other over-cap insert paths. Local smoke verifies list truncation, idempotent replay for the 100th
+funnel, direct insert rejection, and that deleting a funnel frees a slot.
+
 Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
 read the background launch process before `setsid` established the server's own group. The startup
 poll now tracks the live child whose PID, PGID, and SID match. A second review found shutdown only
@@ -142,7 +149,7 @@ live group membership even after launcher exit. The regression first failed on t
 passed with a live group member remaining after launcher exit. Cleanup still confines signals to the
 verified group or the launcher's owned process tree, and it fails if port 8787 stays open.
 
-Final source commit `10b77f909dcc9074b49086eff7681cf1d181f419` passes `cargo +1.85.0 xtask check`
+Source commit `10b77f909dcc9074b49086eff7681cf1d181f419` adds the process-group shutdown fix and passes `cargo +1.85.0 xtask check`
 with API 11, commands 7, dashboard presentation 13, domain 13, render 33, storage 5, xtask 26, and
 CLI tests 2 and 6. A fresh `cargo +1.85.0 xtask ci` invocation on the existing isolated target passes
 workspace checks/tests, API and dashboard browser WASM, asset generation, the process-group regression,
@@ -153,6 +160,15 @@ delete/replay, validation, unsupported method, not-found, and host-denial checks
 standalone runs leave no live Wrangler or workerd processes and close port 8787. Fingerprinted
 regression logs and validation evidence are in `plan/verification/PR-009/execution.txt` and
 `results.json`.
+
+The final cap source is `cef86473cb2b4a12da3bb7cbaa0f301a799eceaa`. Its fresh `cargo +1.85.0 xtask check`,
+full `cargo +1.85.0 xtask ci`, and separate Wrangler smoke pass on the same source tree. CI reuses
+`/workspace/.eezfunnel-pr009-name-limit-ci`, which was not empty at invocation. The smoke fills the
+100th slot through the API, checks idempotent replay and a 409 capacity error with no receipt or row,
+rejects a direct insert, bounds an over-cap test fixture to 100 list items, and verifies delete frees a
+slot. Exact logs and the refreshed source fingerprint are recorded in PR-009 verification evidence.
+The hosted run `38520311552` passed on previous head `2842323`, before the cap fix; hosted CI on the
+new evidence head is pending push.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding
