@@ -1,11 +1,11 @@
 PR-009 Funnel list and creation verification
 
-Evidence refreshed: 2026-10-14T04:04:26Z
+Evidence refreshed: 2026-10-14T05:17:46Z
 Branch: feat/009_funnel_list
 Base commit: 13472d2daa8047b166e1a9635434cc48e5b3b62e
-Verified source commit: fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c
-Source fingerprint: 909df84fd4e837b4656f92443a91de622cbfb7197d3e6e335f79978c17178829
-Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, and toolchain files excluded.
+Verified source commit: 5c0934443316ce4562d9f0dad1531dbc401769ac
+Source fingerprint: be825d018ee7add0104ed0f6749166edb6db5b1612a254b7f0590921b1ca0af4
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; generated dist, plan/STATUS.md, evidence files, build targets, and toolchain files are excluded.
 
 Implementation:
 - Worker exposes GET/POST /api/funnels and DELETE /api/funnels/:id; commands remain in Session::execute.
@@ -15,16 +15,18 @@ Implementation:
 - Before create/delete dispatch, the browser prepares and stores a UUID synchronously. The sessionStorage slot name includes the HTTP method, API route, and SHA-256 digest of the canonical request tuple (method, route, canonical JSON body or null); only the UUID is the stored value and user body fields do not appear in the slot name.
 - Ambiguous transport/evaluator failures and non-success responses retain the key; successful create (201) and delete (200) responses clear that slot. D13 records the method/route scope and cleanup lifecycle, including browser session end.
 - Create inputs lock while requests are pending. Native modal dialogs prevent Escape dismissal while mutations are pending.
+- The Wrangler smoke harness tracks the `setsid` launcher separately from the live server child, polls for a child whose PID, PGID, and SID match, and scopes shutdown to the verified process group. If isolation cannot be verified, it cleans only the launcher's process tree and fails if port 8787 remains open.
 
 Checks:
-- `cargo +1.85.0 xtask check`: exit 0; formatting, warning-denied Clippy, workspace tests, and strict layer checks passed. Counts: API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: 116a110b7033e13a5a59cb92695b63cde7d59045fc5152c4df7dcb7ff1e93a40.
-- Fresh-target `cargo +1.85.0 xtask ci` at `/workspace/.eezfunnel-pr009-name-limit-ci`: exit 0; tests/checks, API and dashboard browser WASM builds, generated assets, integrated local CRUD smoke, and cargo audit passed. RustSec scanned 345 locked dependencies against 1,310 advisories with zero findings. Log SHA-256: 7881d2133da1215b56d1ee986fe944e906b6623d0163ad58aa14c0b3f44cae2a.
-- CI artifacts: raw API WASM 55,641,435 bytes (SHA-256 9ec4fe54a99537a41ad3f069f897c79e0233c14a9d69b08a7d1c8f071cf9ed3f); raw dashboard WASM 1,696,002 bytes (SHA-256 cfb5101841d0ed600243d68a825f927364f5bc31964787acbb2c545aab2f84d0); transformed `apps/dashboard/dist/assets/eezfunnel_bg.wasm` 784,717 bytes (SHA-256 64064c2cd05a1b2393b455bbbab5c5d8b3f50a7e6916717a4978cdb71099bb0b). All generated bundle hashes are in results.json.
-- Separate local-only Wrangler smoke: exit 0; all five blueprints, create replay, payload-mismatch conflict, delete/replay, validation, unsupported method, not-found, and host-denial assertions passed. Output log SHA-256: 845da30cc2a0a74165582b483386d94471aa8b4abe7af7b94ccfe24c5bdc4629; Wrangler log SHA-256: 232f78bed76d8a3da8322e307ee3e03fda6050d10d754782bace2fa809a35ff0.
+- `cargo +1.85.0 xtask check`: exit 0; formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source commit 5c0934443316ce4562d9f0dad1531dbc401769ac. Counts: API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: b1ef78b193b0a379032d46a2a64e74be70c7ca5f6c98ec76907185159b142b86.
+- Fresh-target `cargo +1.85.0 xtask ci` in `/workspace/.eezfunnel-pr009-name-limit-ci`: exit 0; the target was empty before this run. Workspace checks/tests, API and dashboard browser WASM, generated assets, integrated local CRUD smoke, and cargo audit passed. RustSec scanned 345 locked dependencies against 1,310 advisories with zero findings. Log SHA-256: 3dff29a954b7e00c787b6d5c2b375b4018f8a791834fe57f787883acb6df18ee.
+- CI artifacts: raw API WASM 55,641,435 bytes (SHA-256 f4322dc6d7dcdea316a1755d679058a54bfa404944f1f90e8a0ce364952a5a72); raw dashboard WASM 1,696,002 bytes (SHA-256 a6fc9f14bc2f0b77e041d3f624d2a12ec8d5f41458f25a8b129fed1f9d705005); transformed `apps/dashboard/dist/assets/eezfunnel_bg.wasm` 784,717 bytes (SHA-256 64064c2cd05a1b2393b455bbbab5c5d8b3f50a7e6916717a4978cdb71099bb0b). All generated bundle hashes are in results.json.
+- Standalone local Wrangler smoke with a 150 ms delayed `setsid` wrapper: exit 0; all five blueprints, create replay, payload-mismatch conflict, delete/replay, validation, unsupported method, not-found, and host-denial assertions passed. Smoke log SHA-256: 583b97ee7603c576ce07b40102b99b8fee5d30d64ab1dc6ae667ee668416b565; Wrangler log SHA-256: 0412f3daf98f0706a65d041bacf07037618c56d5d30d29c80038dcd5ea5a6e16. Port 8787 was closed after cleanup, with no live Wrangler or workerd processes.
+- Hosted run 38509655594 failed on prior head 0a8b265 because the immediate PGID check observed the launch process before `setsid` established the server session. The delayed-start regression and final fresh CI smoke pass on source commit 5c0934443316ce4562d9f0dad1531dbc401769ac.
 - The UTF-8 limit regression first failed before the shared predicate existed (exit 101, unresolved `can_create_funnel`; log SHA-256 4541c48ff8d5db1186bd28f0799a96569315d2e963167c265231459012746391). It passes after implementation (exit 0; log SHA-256 7978c5b37481ef8c8dc6723b79c77baaf3e3a688c84b8c5c4262fc00c684db19) for 120/121 ASCII bytes and 30/31 four-byte emoji. The rendered error regression also passes (log SHA-256 7db19804fcaa2086413960eac602bff8a647d2e9a32919cc74a6143365d48aa0).
 - The idempotency-slot regression covers canonical property ordering, changed payload, method/route scope, and absence of cleartext user fields. Only the validated UUID is stored as the sessionStorage value; D13 documents success cleanup and session-end cleanup.
-- Existing create/delete tests verify each blueprint's initial revision and idempotent replay. The separate smoke confirms create replay and delete replay semantics.
-- `git show --check` passed for source commit fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c. Fresh internal Luna review found no P1/P2; the fresh no-comments review found no comments, TODO/FIXME markers, suppressions, or cleanup findings (0 deleted, 0 restored).
+- Existing create/delete tests verify each blueprint's initial revision and idempotent replay. The smoke confirms create replay and delete replay semantics.
+- `bash -n scripts/smoke-pr009.sh`, `git show --check`, and the no-comments checks passed. No code comments, TODO/FIXME markers, or lint suppressions were added or removed in the harness delta.
 - No headless browser ran, so hydration completion and native Escape interaction remain unverified. Wrangler used local bindings only; no remote deployment or migration ran.
 
 Hosted CI and the once-only @codex review are pending on the exact pushed evidence head.

@@ -130,14 +130,22 @@ tuple. The slot value is only the UUID; user-entered form fields are absent. Amb
 retain the key for replay; successful responses clear the slot. D13 records this lifecycle. The create
 dialog uses the same 120-byte UTF-8 name limit as commands and blocks oversized multibyte names.
 
-Final source commit `fdb342bbefd5eca87f6f8d9b989f90f361a3ca4c` passes `cargo +1.85.0 xtask check`
+Hosted run `38509655594` failed on evidence head `0a8b265` at the Wrangler process-group check: it
+read the background launch process before `setsid` established the server's own group. The smoke
+harness now tracks the launcher separately, polls for the live child whose PID, PGID, and SID match,
+and uses only that verified group for shutdown; if isolation cannot be verified, cleanup stays within
+the launcher's owned process tree. Cleanup also fails if port 8787 remains open. A regression smoke
+with a 150 ms delay before `setsid` passed, as did the integrated and standalone CRUD smoke runs.
+
+Final source commit `5c0934443316ce4562d9f0dad1531dbc401769ac` passes `cargo +1.85.0 xtask check`
 with API 11, commands 7, dashboard presentation 12, domain 13, render 33, storage 5, xtask 26, and
 CLI tests 2 and 6. Fresh-target `cargo +1.85.0 xtask ci` passes workspace checks/tests, API and
-dashboard browser WASM, asset generation, local CRUD smoke, and audit of 345 locked dependencies
-against 1,310 advisories with zero findings. A separate local-only Wrangler smoke also passes the
-five blueprint snapshots, create replay, payload-mismatch conflict, delete/replay, malformed JSON,
-missing idempotency key, missing funnel, unsupported method, and host denial checks. Fingerprinted
-evidence is in `plan/verification/PR-009/execution.txt` and `results.json`.
+dashboard browser WASM, asset generation, the corrected local CRUD smoke, and audit of 345 locked
+dependencies against 1,310 advisories with zero findings. A separate delayed-start local Wrangler
+smoke passes the five blueprint snapshots, create replay, payload-mismatch conflict, delete/replay,
+validation, unsupported method, not-found, and host-denial checks; it leaves no live Wrangler or
+workerd processes and closes port 8787. Fingerprinted evidence is in
+`plan/verification/PR-009/execution.txt` and `results.json`.
 
 The smoke validates local API behavior and does not execute browser JavaScript. Browser hydration
 completion and native Escape behavior remain unverified in a headless browser. No remote binding
