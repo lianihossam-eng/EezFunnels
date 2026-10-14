@@ -1,12 +1,12 @@
 {
   "task": "PR-009",
-  "evidence_refreshed_at_utc": "2026-10-14T07:42:52Z",
+  "evidence_refreshed_at_utc": "2026-10-14T07:58:11Z",
   "branch": "feat/009_funnel_list",
   "base_commit": "13472d2daa8047b166e1a9635434cc48e5b3b62e",
-  "verified_source_commit": "7ba830a7abb52ceee4c4190da41551a3eba93101",
-  "source_commit_role": "PR-009 review follow-up: the API routes oversized and invalid-UTF-8 create bodies through active-receipt classification before returning validation errors; active keys return C-03 mismatch while fresh/expired keys preserve 400 validation.",
+  "verified_source_commit": "9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
+  "source_commit_role": "PR-009 final-gate follow-up: successful create releases pending state before list refresh and no longer clears a newer create mutation when the earlier refresh completes; error paths still clear pending state.",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines from source_sha256; plan/STATUS.md, plan/verification/**, generated dist, build targets, Rust toolchain files, and .project-tools are excluded.",
-  "source_fingerprint_sha256": "bc943c679cbc251c4f36834daf54bfacd472b4aee3cce7d0420d105db58c46df",
+  "source_fingerprint_sha256": "ae4360768ab3f9d05c1be601ab45f260d97567ed409fae34c3a1bb16f7bbf88f",
   "source_sha256": {
     ".cargo/config.toml": "07e75f80544a833951c1532649fadd0ee21712b40e55b6e74b880b3c11259e36",
     ".editorconfig": "9fb313a84f82f725df82f647c43b5ad1c243366dbf31b3a498529731fd29a34b",
@@ -46,7 +46,7 @@
     "crates/dashboard-presentation/assets/dashboard.css": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b",
     "crates/dashboard-presentation/src/app.rs": "565e4362fc2ac3d46334c53870e40d70e49da1d4413b504139feac8c8ecb85ef",
     "crates/dashboard-presentation/src/lib.rs": "bf13826b697575d8f57e6479187d10ca3bb843243cbf86c1f43e623bad5374d7",
-    "crates/dashboard-presentation/src/routes.rs": "e79b1385a7a4d9f351ebb299bd94fbc91f6153b778e85f01f880f2d93cab2e41",
+    "crates/dashboard-presentation/src/routes.rs": "958dcacc3bd19ce0960debf25778eab2038ea0d33eaa0c2de853d5f96f567058",
     "crates/dashboard-presentation/src/ssr.rs": "adc4e1eb07f0aac7b6e3edffd79887945fc3ee54d19c17acac1152b7980b9495",
     "crates/domain/Cargo.toml": "81f8d8308f44812a37b16515437d33aa4bd542db633aba791aaa6c57c696a273",
     "crates/domain/src/lib.rs": "24bbacc2e66485d3d608f2ff5110ffe64a376b7159222e84d34e3457c3650cff",
@@ -121,7 +121,7 @@
   },
   "first_red": {
     "observed": true,
-    "capture_status": "The final review regressions were first observed before fixes. The transient red outputs were not retained: invalid-blueprint replay returned HTTP 400 instead of the expected 409; malformed DELETE replay stopped at the route guard with 404 instead of receipt conflict; and the dashboard test observed the form still pending while refresh was unresolved. Focused green evidence is retained in the direct smoke and final check/CI logs. The latest review also found that oversized and invalid-UTF-8 POST bodies were rejected by the HTTP adapter before receipt lookup; transient red responses were not retained.",
+    "capture_status": "The final review regressions were first observed before fixes. The transient red outputs were not retained: invalid-blueprint replay returned HTTP 400 instead of the expected 409; malformed DELETE replay stopped at the route guard with 404 instead of receipt conflict; and the dashboard test observed the form still pending while refresh was unresolved. Focused green evidence is retained in the direct smoke and final check/CI logs. The latest review also found that oversized and invalid-UTF-8 POST bodies were rejected by the HTTP adapter before receipt lookup; transient red responses were not retained. The Sol final-gate regression also first failed (exit 101) after a second create started while the first refresh was unresolved; the first refresh completion cleared the second mutation pending state. The red output was observed in the focused test run but not saved to a separate log.",
     "modal_cancel_regression": {
       "test": "native_dialog_cancel_stays_open_until_pending_mutation_finishes",
       "pre_fix_exit_code": 101,
@@ -214,9 +214,9 @@
       "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
       "pre_fix_observation": "With list refresh unresolved, the create dialog remained open and mutation-pending remained true; transient red output was not retained.",
       "post_fix_exit_code": 0,
-      "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-check.log",
-      "post_fix_log_sha256": "3a87d490ef03caba11f7b0d42d9380841d02ff38a31d4831ae11433a727ad24c",
-      "diagnostic": "The regression polls the production transition with a never-resolving refresh future and verifies the dialog is closed and mutation-pending is false before refresh completion."
+      "post_fix_log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
+      "post_fix_log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
+      "diagnostic": "The test verifies success closes the first dialog and clears pending before refresh, then starts a second create before completing the first refresh and confirms the old completion leaves the second mutation pending."
     },
     "unreadable_create_body_precedence": {
       "pre_fix_observation": "The API adapter returned 400 validation/invalid_json for oversized and invalid-UTF-8 POST bodies before Session::execute could inspect an active receipt; transient red output was not retained.",
@@ -224,13 +224,23 @@
       "post_fix_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
       "post_fix_log_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
       "diagnostic": "The smoke verifies both oversized and invalid-UTF-8 create bodies return 409 conflict/idempotency_payload_mismatch with the successful active key, and 400 validation/invalid_json with fresh or expired keys."
+    },
+    "create_pending_stale_refresh": {
+      "test": "successful_create_closes_and_enables_form_before_unresolved_list_refresh",
+      "pre_fix_exit_code": 101,
+      "pre_fix_observation": "After the first create released pending state and its list refresh remained unresolved, a second create set pending=true; resolving the first refresh incorrectly cleared it.",
+      "pre_fix_log": null,
+      "post_fix_exit_code": 0,
+      "post_fix_log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
+      "post_fix_log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
+      "diagnostic": "The regression uses a manually resolved refresh future, starts a second create while the first refresh is pending, resolves the old refresh, and asserts the second dialog remains open and pending. The production success branch now has no post-refresh reset; non-201 and transport-error branches clear pending explicitly."
     }
   },
   "checks": {
     "cargo_xtask_check": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask check",
       "exit_code": 0,
-      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on exact source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101.",
+      "outcome": "Formatting, warning-denied Clippy, workspace tests, and strict layer checks passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe.",
       "workspace_test_counts": {
         "api": 12,
         "commands": 7,
@@ -242,9 +252,9 @@
         "bootstrap_cli": 2,
         "pr001_cli": 6
       },
-      "log": "/tmp/eezfunnel-pr009-codex-p3-check.log",
-      "log_sha256": "3a87d490ef03caba11f7b0d42d9380841d02ff38a31d4831ae11433a727ad24c",
-      "exit_marker": "CHECK_EXIT=0 (captured command status; xtask log ends with task completed: Check)"
+      "log": "/tmp/eezfunnel-pr009-stale-pending-check.log",
+      "log_sha256": "f56872e0a9142d5bca669273091fccdbf5aa4276910e250e892630be1533d922",
+      "exit_marker": "CHECK_EXIT=0"
     },
     "final_ci": {
       "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci cargo +1.85.0 xtask ci",
@@ -252,9 +262,9 @@
       "fresh_isolated_target": false,
       "target_was_empty_at_start": false,
       "target_dir": "/workspace/.eezfunnel-pr009-name-limit-ci",
-      "outcome": "Full cargo xtask ci passed on exact source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101: workspace checks/tests, API and dashboard browser WASM, generated assets, process cleanup regressions, CRUD/idempotency/capacity smoke (including unreadable-body receipt precedence), and audit.",
-      "log": "/tmp/eezfunnel-pr009-codex-p3-ci.log",
-      "log_sha256": "1ba1c889c4cc07e47718adf6fa6eddac821c1f19f5aae41df9e36e547990603c",
+      "outcome": "Full cargo xtask ci passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe, including workspace checks/tests, API and dashboard browser WASM, asset generation, process cleanup regressions, local CRUD/idempotency/capacity smoke, and cargo audit.",
+      "log": "/tmp/eezfunnel-pr009-stale-pending-ci.log",
+      "log_sha256": "7b5b61c319a1b48de18b2806fb33f85f22b3eb35f3a5e70bc2adca97e66a18e8",
       "audit": {
         "cargo_audit_version": "0.22.2",
         "advisories_loaded": 1310,
@@ -265,91 +275,91 @@
       "wasm_outputs": {
         "eez_api.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/debug/eez_api.wasm",
-          "bytes": 59515763,
-          "sha256": "0ba874b0617a7f0a5ca57b47aa4322ae72b5f27ee097bf0bf92731ab13475c1d"
+          "bytes": 59515759,
+          "sha256": "76c35f6e6acda3139fbb4514094640d60b9b79553a604c0aee5c3476c635bbff"
         },
         "eez_dashboard.wasm": {
           "path": "/workspace/.eezfunnel-pr009-name-limit-ci/wasm32-unknown-unknown/release/eez_dashboard.wasm",
-          "bytes": 1696895,
-          "sha256": "9bdefd997f9e060e218163279a584ef1d2b5a4554120bd5bbb87456cf8601b8e"
+          "bytes": 1696931,
+          "sha256": "1501d56b5e8fc81387d90a12a3e3fd4667e874f98eae7cfc3c0b0c1c9e0b7edf"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 785522,
-          "sha256": "87c9b4c50c23fd49b6134d0f50f3270037371327d8ee186ca2a6c8258d8f1336"
+          "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
+          "bytes": 785554,
+          "sha256": "6d020b49c7b6b7e7de8f8d99a45e36391fa7a2d2e4fe50f535885e108235fe36"
         }
       },
       "generated_bundle_sha256": {
         "apps/dashboard/dist/assets/bootstrap.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/bootstrap.js",
+          "path": "apps/dashboard/dist/assets/bootstrap.js",
           "bytes": 883,
           "sha256": "597826afbe18ed004a0709966edf9cd7a9c1953d1912f0094ca06ff9ff849110"
         },
         "apps/dashboard/dist/assets/dashboard.css": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/dashboard.css",
+          "path": "apps/dashboard/dist/assets/dashboard.css",
           "bytes": 11178,
           "sha256": "3583ec51d09d33ba912a1d4c4e0e1f12b9493be4ea868b5cbdf729e8883a269b"
         },
         "apps/dashboard/dist/assets/eezfunnel.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/eezfunnel.js",
+          "path": "apps/dashboard/dist/assets/eezfunnel.js",
           "bytes": 74916,
           "sha256": "3118fca0988c2111e8088d1b64b76bd99fb12968f021464904e46e977e815be9"
         },
         "apps/dashboard/dist/assets/eezfunnel_bg.wasm": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/eezfunnel_bg.wasm",
-          "bytes": 785522,
-          "sha256": "87c9b4c50c23fd49b6134d0f50f3270037371327d8ee186ca2a6c8258d8f1336"
+          "path": "apps/dashboard/dist/assets/eezfunnel_bg.wasm",
+          "bytes": 785554,
+          "sha256": "6d020b49c7b6b7e7de8f8d99a45e36391fa7a2d2e4fe50f535885e108235fe36"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-cli-config-74c4aa43f52789a0/inline0.js",
           "bytes": 259,
           "sha256": "07027f8ccbb9ba3619deeb861233594ccab582d7eb3da34ca86559c932a09e6b"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/inline0.js",
           "bytes": 20855,
           "sha256": "cd533b7b9f2192fa535f92f4f266d03d47c23105cf500498d0bc8d6cc90dc6cf"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/hydrate.js",
           "bytes": 488,
           "sha256": "0659b58e105fbc8e7e97feb8aa123f455520333ae10c326fa37ec0eb4b08e833"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js",
           "bytes": 937,
           "sha256": "9ef1d21e8c05e91f5dd9e46c8f47ae574185a64497527b687f8fdb9b98045f83"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/set_attribute.js",
           "bytes": 1887,
           "sha256": "5b56995f71fe629934f4ab5eb292d5cfccd9d99037eb9a39ede5078c78db88df"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline0.js",
           "bytes": 267,
           "sha256": "853d44dbc9d2696e80d66c056e21d69e77b2bf68f9636826becd029f67c884a5"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/inline1.js",
           "bytes": 578,
           "sha256": "b70ad6fba9bf230286fad838d4620c302980502f5af12ea602005d7b8f6af9b0"
         },
         "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js": {
-          "path": "/workspace/EezFunnels/apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js",
+          "path": "apps/dashboard/dist/assets/snippets/dioxus-web-eae67878b22d6805/src/js/eval.js",
           "bytes": 1278,
           "sha256": "2cd20723c2c3cc52d648d1f5670df929733b359036044d3fd6c9507d929f28b6"
         }
       },
-      "exit_marker": "CI_EXIT=0 (captured command status; xtask log ends with task completed: Ci)"
+      "exit_marker": "CI_EXIT=0"
     },
     "local_wrangler_smoke": {
-      "command": "source .project-tools/env.sh && bash scripts/smoke-pr009.sh",
+      "command": "source .project-tools/env.sh && CARGO_TARGET_DIR=/workspace/.eezfunnel-pr009-name-limit-ci bash scripts/smoke-pr009.sh",
       "exit_code": 0,
-      "smoke_stdout_log": "/tmp/eezfunnel-pr009-codex-p3-smoke.log",
-      "smoke_stdout_sha256": "5a7dae7282113eca38f727be5ea7323029554ca31e54eb851836085f3d12e5c3",
+      "smoke_stdout_log": "/tmp/eezfunnel-pr009-stale-pending-smoke.log",
+      "smoke_stdout_sha256": "061a91b8ef0359e5d977fd8e552d18ff8508826b901e3ca3664e5c4f2e099500",
       "wrangler_log": "/tmp/eezfunnel-pr009-wrangler.log",
-      "wrangler_log_sha256": "65fe362e2c4aadf7e8b74b769cfb68d3797515cb3b27155d2809dbb83546d74f",
+      "wrangler_log_sha256": "3977667136082f28aabd8ce3824b1635e0fe353ba7b5121856ccb384f1b0880c",
       "assertions": {
         "initial_and_final_list": "Initial and final list responses returned HTTP 200.",
         "create": "All five blueprints produced ordered section types and unique initial section IDs.",
@@ -377,7 +387,7 @@
         "invalid_utf8_create_new_or_expired_key": "HTTP 400 validation/invalid_json."
       },
       "remote_bindings_used": false,
-      "ci_smoke_integration": "The full CI invocation also passed this local CRUD/idempotency/capacity smoke before audit.",
+      "ci_smoke_integration": "The full cargo xtask ci smoke passed on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe.",
       "process_group_race_regression": {
         "command": "PATH=/tmp/eezfunnel-pr009-delay-bin:$PATH bash scripts/smoke-pr009.sh",
         "delay_wrapper": "/tmp/eezfunnel-pr009-delay-bin/setsid",
@@ -415,11 +425,11 @@
       "capture_note": "An earlier exec wrapper printed SMOKE_EXIT=0 while its returned session status was 1 and was excluded. The evidence here is the direct bash invocation with captured DIRECT_SMOKE_EXIT=0."
     },
     "source_format_and_comment_checks": {
-      "cargo_fmt_check": "passed as part of cargo xtask check on source contents committed as 7ba830a7abb52ceee4c4190da41551a3eba93101",
+      "cargo_fmt_check": "passed as part of cargo xtask check on source contents committed as 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
       "git_diff_check_exit_code": 0,
       "added_source_comments_todos_fixmes_or_lint_suppressions": 0,
       "no_comments_review": "The source diff adds no comments, TODO/FIXME markers, or lint suppressions.",
-      "source_commit_check": "git show --check passed for source commit 7ba830a7abb52ceee4c4190da41551a3eba93101",
+      "source_commit_check": "git show --check passed for source commit 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe",
       "bash_n_check": "passed for scripts/smoke-pr009.sh"
     }
   },
@@ -448,10 +458,11 @@
     "Frozen contracts C-01 and C-04 are byte-identical to base commit 13472d2; the 100-funnel cap and decision-scoped conflict/funnel_limit_reached (HTTP 409) exist only in D14 and implementation/evidence.",
     "For create and delete, command handling classifies any active receipt before returning parse or semantic validation errors, so C-03 payload mismatch takes precedence for reused keys. New or expired keys preserve normal validation behavior.",
     "A malformed DELETE route with an active receipt can return 409 mismatch; without an active receipt, the existing 404 not_found/funnel response is preserved.",
-    "After a successful create POST, the dashboard closes and resets the dialog and clears mutation-pending state before awaiting the independent funnel-list refresh."
+    "After a successful create POST, the dashboard closes and resets the dialog and clears mutation-pending state before awaiting the independent funnel-list refresh.",
+    "After successful create releases pending state and closes the dialog, its independent list refresh cannot reset a newer create mutation; non-201 and transport-error branches clear pending explicitly."
   ],
   "hosted_ci": {
-    "status_at_evidence_capture": "Local validation is green on exact source 7ba830a7abb52ceee4c4190da41551a3eba93101; hosted CI for the pushed evidence head is pending. The previous green run verifies only head 62ef95b, before this unreadable-body fix.",
+    "status_at_evidence_capture": "Local validation is green on exact source 9d0ae29eb8aaaec4e645407578a8acf4e4b188fe; hosted CI for this new source/evidence head is pending. The last green hosted run verifies only the prior head 592d050.",
     "previous_failed_run": {
       "run_id": "38509655594",
       "head": "0a8b265165edc12f19452530d49fcaeed2213f65",
@@ -469,15 +480,15 @@
       "failure": "CI reached the PR-009 CRUD/capacity smoke after migrations, then scripts/smoke-pr009.sh failed at line 584 with rg: command not found (exit 127). Replaced the rg dependency with standard grep in source commit dbca0f012e2d2305c4d4219124e6901c3a567773; exact-source local check, full CI, and standalone smoke pass."
     },
     "latest_successful_run": {
-      "run_id": "38523130659",
-      "head": "098d66540ec25056ec5987ac48c77db21b2ab55b",
+      "run_id": "38528755269",
+      "head": "62ef95b90a29596a4eb2e120106d372b6e02e8da",
       "status": "success",
-      "scope": "Prior pushed head before frozen-contract restoration and the explicit reparenting fallback regression."
+      "scope": "Prior source/evidence head before the Sol final-gate pending-state fix; does not verify current source."
     }
   },
   "reviews": {
-    "codex": "The latest P2 finding about oversized and invalid-UTF-8 create bodies is addressed in source commit 7ba830a. A new Codex review is pending on the exact pushed source/evidence head after hosted CI passes.",
-    "sol": "Not requested; reserve Sol for PR review and merge after fresh Codex review and hosted CI are clean on the same exact SHA."
+    "codex": "The active-receipt and unreadable-body findings remain addressed. This final-gate pending-reset fix is pushed for parent inspection; no fresh review request was posted.",
+    "sol": "Sol final-gate P2 about a stale post-refresh pending reset is fixed in source; do not merge. Await parent direction for any follow-up review request."
   },
   "deployment": {
     "remote_deployment_run": false,
