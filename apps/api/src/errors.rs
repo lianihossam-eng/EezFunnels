@@ -85,11 +85,17 @@ impl ApiError {
                 "The requested route was not found.",
                 false,
             ),
-            "conflict/publish_stale_revision" | "conflict/idempotency_payload_mismatch" => (
+            "conflict/publish_stale_revision"
+            | "conflict/idempotency_payload_mismatch"
+            | "conflict/funnel_limit_reached" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
-                "The request conflicts with the current state.",
+                if code == "conflict/funnel_limit_reached" {
+                    "The workspace has reached its funnel limit."
+                } else {
+                    "The request conflicts with the current state."
+                },
                 false,
             ),
             "rate_limit/exceeded" => (
@@ -238,6 +244,21 @@ mod tests {
             assert_eq!(error.category, *category);
             assert_eq!(error.status(), *status);
         }
+    }
+
+    #[test]
+    fn workspace_capacity_error_matches_the_d14_decision() {
+        let error = ApiError::from_code("conflict/funnel_limit_reached");
+        let response = error.response("request-789".to_owned());
+
+        assert_eq!(error.status(), 409);
+        assert_eq!(response.code, "conflict/funnel_limit_reached");
+        assert_eq!(response.category, ErrorCategory::Conflict);
+        assert_eq!(
+            response.message,
+            "The workspace has reached its funnel limit."
+        );
+        assert_eq!(response.correlation_id, "request-789");
     }
 
     #[test]

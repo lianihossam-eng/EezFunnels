@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 use eez_domain::{Revision, Section, SectionType, ThemePreset};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
@@ -65,7 +66,8 @@ impl Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SectionContent {
     Hero {
         title: String,
@@ -92,26 +94,30 @@ pub enum SectionContent {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HeroImage {
     pub url: String,
     pub alt: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FeatureItem {
     pub title: String,
     pub description: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Testimonial {
     pub quote: String,
     pub author: String,
     pub attribution: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FooterLink {
     pub label: String,
     pub url: String,
