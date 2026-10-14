@@ -5,6 +5,7 @@ members = [
     "crates/render",
     "crates/storage",
     "crates/commands",
+    "crates/dashboard-presentation",
     "apps/api",
     "apps/dashboard",
     "apps/cli",
@@ -26,7 +27,10 @@ thiserror = "1"
 worker = { version = "=0.8.3", features = ["http", "axum", "d1"] }
 axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-service = "0.3"
-dioxus = "0.7"
+dioxus = { version = "=0.7.10", default-features = false, features = ["minimal", "router", "document"] }
+dioxus-fullstack-core = { version = "=0.7.10", default-features = false }
+dioxus-web = { version = "=0.7.10", default-features = false }
+wasm-bindgen = "=0.2.129"
 rmcp = "1.4"
 sha2 = { version = "0.10", default-features = false }
 url = "2.5"

@@ -13,7 +13,7 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,5 +23,6 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: bash scripts/install-cargo-audit.sh
+      - run: bash scripts/install-wasm-bindgen.sh
       - run: cargo xtask ci
       - run: cargo run -p eez-cli --locked -- --help

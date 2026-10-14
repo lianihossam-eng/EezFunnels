@@ -103,6 +103,18 @@ pub async fn fetch(
         local_publication_status(&env, request.headers(), correlation_id.clone()).await
     } else if request_path == "/__local/publication-race" && request.method() == Method::DELETE {
         local_publication_race_cleanup(&env, request.headers(), correlation_id.clone()).await
+    } else if request_path.starts_with("/assets/")
+        && (request.method() == Method::GET || request.method() == Method::HEAD)
+    {
+        asset_response(&env, request).await?
+    } else if request.method() == Method::GET {
+        match eez_dashboard_presentation::render_document(&request_path) {
+            Some(document) => dashboard_response(document),
+            None => {
+                let mut router = router();
+                router.call(request).await?
+            }
+        }
     } else {
         let mut router = router();
         router.call(request).await?
@@ -116,6 +128,24 @@ pub async fn fetch(
     );
 
     Ok(response)
+}
+
+async fn asset_response(
+    env: &Env,
+    request: HttpRequest,
+) -> worker::Result<Response<axum::body::Body>> {
+    let response = env.assets("ASSETS")?.fetch_request(request).await?;
+    let (parts, body) = response.into_parts();
+    Ok(Response::from_parts(parts, axum::body::Body::new(body)))
+}
+
+fn dashboard_response(document: String) -> Response<axum::body::Body> {
+    let mut response = Response::new(axum::body::Body::from(document));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
 }
 
 fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
