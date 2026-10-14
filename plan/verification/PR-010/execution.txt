@@ -1,0 +1,20 @@
+PR-010 visual editor verification
+Evidence refreshed: 2026-10-14T10:17:38Z
+Branch: feat/010_editor
+Base commit: cdd6c894fa7e3f6171b7d86bc518ce7bf14aaabc
+Verified source commit: 4c4b403a6f4473525a41e8639597aaf325404129
+Source fingerprint: 7a99a75198fed38a93964d8a55cda1b13ffb713863fdcfbbd7b3a604bb6a30cb (116 source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md, plan/verification/**, generated assets/builds, toolchain files, and .project-tools are excluded.
+
+Validation:
+- `cargo xtask check`: exit 0. Formatting, Clippy with warnings denied, workspace tests, and layer validation passed. Test counts: API 12, commands 10, dashboard presentation 22, domain 13, render 34, storage 5, xtask 26, bootstrap CLI 2, PR-001 CLI 6. Log SHA-256: 13e21e780ac9275c81691819d7ce5212cf04262916e3c0ff2f366b6ddca886e5.
+- `cargo xtask ci`: exit 0. API and dashboard WASM, dashboard asset generation, local CRUD smoke, and cargo audit passed. RustSec loaded 1,310 advisories and scanned 346 locked dependencies with zero findings. Log SHA-256: 2abea985f766c88989cc3e0f4355dc007937764ea87209d90bbfb382160532b8.
+- `npm run test:pr010:migration`: exit 0. Zero and multiple revision fixtures failed atomically; one-revision backfill passed. Log SHA-256: bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192.
+- `npm run test:pr010:browser`: exit 0. Hydration, pointer and keyboard reorder, active keyboard save lock, inert preview sandbox/CSP/network tripwire, save replay, stale CAS, shared-key race across funnels, and delayed-save route change passed. Axe critical findings: 0. Log SHA-256: 15f655407383005a67acd8957eb86b66fb5ebda6eaa0c0ec853cb75dc30fc837.
+- `node --check scripts/test-pr010-browser.mjs`, staged `git diff --check`, and `git show --check HEAD`: passed.
+
+Review:
+- Two independent adversarial reviews found a receipt-ownership race, a keyboard cancellation race, and a large route module. The implementation now claims and checks receipt ownership before writes, rejects keyboard mutations while saves are locked, and extracts the editor into `crates/dashboard-presentation/src/routes/editor.rs`. Both reviewers reported no remaining actionable findings.
+- `/no-comments` found no new source comments, TODO/FIXME markers, lint suppressions, or workaround prose.
+
+Hosted CI is pending push for this source commit. No remote D1 migration, Cloudflare deployment, publish, or merge occurred.
