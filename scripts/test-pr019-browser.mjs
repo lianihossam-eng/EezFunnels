@@ -13,6 +13,14 @@ const diagnostics = [];
 let browser;
 let worker;
 
+async function closeBrowser() {
+  const activeBrowser = browser;
+  if (activeBrowser) {
+    await activeBrowser.close();
+    browser = undefined;
+  }
+}
+
 async function focusedElement(page) {
   return page.evaluate(() => {
     const element = document.activeElement;
@@ -79,7 +87,7 @@ async function responseJson(response, expectedStatus, label) {
 }
 
 try {
-  worker = await startPr019Worker("browser");
+  worker = await startPr019Worker("browser", { onSignalCleanup: closeBrowser });
   const executablePath = await access("/usr/bin/chromium").then(
     () => "/usr/bin/chromium",
     () => undefined,
@@ -209,6 +217,6 @@ try {
     }),
   );
 } finally {
-  if (browser) await browser.close().catch(() => {});
+  await closeBrowser();
   if (worker) await worker.stop();
 }
