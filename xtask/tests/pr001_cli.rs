@@ -36,6 +36,8 @@ mod unix {
             }
             fs::write(workspace.join("scripts/smoke-pr009.sh"), "")
                 .expect("write smoke placeholder");
+            fs::write(workspace.join("scripts/smoke-pr017.sh"), "")
+                .expect("write MCP smoke placeholder");
             fs::write(
                 workspace.join("crates/dashboard-presentation/assets/bootstrap.js"),
                 "export {};\n",
@@ -265,13 +267,18 @@ mod unix {
     }
 
     #[test]
-    fn ci_runs_funnel_smoke_before_audit() {
+    fn ci_runs_funnel_then_mcp_smoke_before_audit() {
         let fixture = Fixture::new();
         fs::write(
             fixture.workspace().join("scripts/smoke-pr009.sh"),
             "printf 'funnel-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
         )
         .expect("write funnel smoke fixture");
+        fs::write(
+            fixture.workspace().join("scripts/smoke-pr017.sh"),
+            "printf 'mcp-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
+        )
+        .expect("write MCP smoke fixture");
         let output = run_ci_with_cargo(
             &fixture,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\n",
@@ -289,11 +296,16 @@ mod unix {
             .iter()
             .position(|line| *line == "funnel-smoke")
             .expect("funnel smoke gate");
+        let mcp_smoke_position = lines
+            .iter()
+            .position(|line| *line == "mcp-smoke")
+            .expect("MCP smoke gate");
         let audit_position = lines
             .iter()
             .position(|line| *line == "audit")
             .expect("audit gate");
-        assert!(smoke_position < audit_position, "{actual}");
+        assert!(smoke_position < mcp_smoke_position, "{actual}");
+        assert!(mcp_smoke_position < audit_position, "{actual}");
     }
 
     #[test]

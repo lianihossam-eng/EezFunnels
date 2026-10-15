@@ -42,6 +42,7 @@ enum Step {
     Cargo(Vec<OsString>),
     DashboardAssets,
     FunnelSmoke,
+    McpSmoke,
     Layers,
     Wrangler(Vec<OsString>),
 }
@@ -86,6 +87,7 @@ fn steps(task: &Task) -> Vec<Step> {
             ]));
             steps.push(Step::DashboardAssets);
             steps.push(Step::FunnelSmoke);
+            steps.push(Step::McpSmoke);
             steps.push(cargo_step(&["audit"]));
             steps
         }
@@ -162,6 +164,16 @@ fn run_funnel_smoke(root: &Path) -> Result<(), String> {
         "Bash",
         "PR-009 funnel smoke",
         &[OsString::from("scripts/smoke-pr009.sh")],
+    )
+}
+
+fn run_mcp_smoke(root: &Path) -> Result<(), String> {
+    run_command(
+        root,
+        OsStr::new("bash"),
+        "Bash",
+        "PR-017 Worker MCP smoke",
+        &[OsString::from("scripts/smoke-pr017.sh")],
     )
 }
 
@@ -330,6 +342,7 @@ fn run(task: &Task, root: &Path, cargo: &OsStr) -> Result<(), String> {
         Step::Cargo(arguments) => run_cargo(root, cargo, arguments),
         Step::DashboardAssets => run_dashboard_assets(root, cargo),
         Step::FunnelSmoke => run_funnel_smoke(root),
+        Step::McpSmoke => run_mcp_smoke(root),
         Step::Layers => layers::WorkspaceGraph::read(root, cargo)?.verify_layers(),
         Step::Wrangler(arguments) => run_wrangler(root, arguments),
     })?;
@@ -390,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn ci_steps_run_check_then_wasm_then_funnel_smoke_and_audit() {
+    fn ci_steps_run_check_then_wasm_then_funnel_and_mcp_smoke_then_audit() {
         assert_eq!(
             steps(&Task::Ci),
             vec![
@@ -416,6 +429,7 @@ mod tests {
                 ]),
                 Step::DashboardAssets,
                 Step::FunnelSmoke,
+                Step::McpSmoke,
                 cargo_step(&["audit"]),
             ]
         );
