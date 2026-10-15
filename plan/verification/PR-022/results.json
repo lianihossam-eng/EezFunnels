@@ -1,0 +1,122 @@
+{
+  "task": "PR-022",
+  "evidence_refreshed_at_utc": "2026-10-15T23:44:04Z",
+  "branch": "feat/pr-022-dashboard-publish",
+  "base_commit": "5ddb6ac1580d155a24ce13671b677dbfdf184489",
+  "implementation_commit": "8598a62c819d6fd025b060e822ff3a737b22035e",
+  "source_fingerprint_algorithm": "SHA-256 of sorted path and file-hash lines for changed source files in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
+  "source_fingerprint_sha256": "6a2014380d636b0a1e2ff5d7e1aa349e146c3c03d01ac39fcd83fc9a3961a63d",
+  "source_file_count": 8,
+  "source_sha256": {
+    ".github/workflows/ci.yml": "02db357e8951e165f36a7db2ed6b360d96be129d948390cd9d41060eee656bc7",
+    "crates/commands/src/funnel.rs": "713b0b5b76dacbf3fe65bfa5e28fd64e820265274ae9dce17c16c610d902a3ff",
+    "crates/dashboard-presentation/assets/dashboard.css": "3b5570e5e02c2e02a01ff543d4d82d78165e2b9c38fee4da489bfd2490ee37fb",
+    "crates/dashboard-presentation/src/routes/editor.rs": "9d2a2d5a2122f6a955a48bfabdf3638741d33c82f86f7fd4146844c82ea748a2",
+    "crates/dashboard-presentation/src/routes/editor/inspector.rs": "98d0d8b3f56d8bfdf9af47b81e6ffd075931fcfa8ad9f026c1259e8e9b9779c4",
+    "crates/storage/src/repository.rs": "f76c1b12d086673270856e12e77e150aa8fd81049f8c7a6e0b7198d59f1a566a",
+    "package.json": "553a5ee033b270b89d1ffc6c2ae7ec5c33b88d263cf4373db3646793a030ca81",
+    "scripts/test-pr022-browser.mjs": "5708264166fd226cc7b93d700522374660c983f014b442c2abfee47a6b2ae829"
+  },
+  "implementation": {
+    "published_revision_id_in_editor_snapshot": true,
+    "publication_state_separate_from_editor_document": true,
+    "conflict_refresh_preserves_unsaved_editor_state": true,
+    "ambiguous_retry_reuses_exact_action_key_and_body": true,
+    "ambiguous_retry_after_pending_edit_and_keyboard_drag": true,
+    "explicit_unpublish_confirmation": true,
+    "new_owner_command": false,
+    "schema_migration": false,
+    "application_dependency_added": false,
+    "immediate_cdn_purge_claimed": false
+  },
+  "validation": {
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "runs_before_each_planned_commit": true,
+      "log": "plan/verification/PR-022/logs/cargo-xtask-check.log.gz"
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "outcome": "PASS: workspace checks and tests, dashboard WASM/assets, local Worker/D1 and MCP smokes, and RustSec audit.",
+      "locked_dependencies_scanned": 355,
+      "advisories_loaded": 1329,
+      "findings": 0,
+      "remote_cloudflare_operations": false,
+      "log": "plan/verification/PR-022/logs/cargo-xtask-ci.log.gz"
+    },
+    "pr022_browser": {
+      "command": "npm run test:pr022:browser",
+      "exit_code": 0,
+      "result": {
+        "workflow": "create -> edit -> save -> stale publish conflict -> preserve draft -> save -> publish -> lose response while editing -> exact retry -> save preserved draft -> public read -> confirm unpublish -> 404",
+        "funnelId": "79aef50b-66dc-4ca7-a353-191dc05f58eb",
+        "slug": "pr-022-publication-journey-79aef50b-66dc-4ca7-a353-191dc05f58eb",
+        "initialRevisionId": "da611084-4edd-4cd6-8d63-7e1ec315aee4",
+        "firstSavedRevisionId": "7a925ab0-d24f-420f-b0c4-7f675fdbc6f3",
+        "finalRevisionId": "96aa4f71-2eb2-46e5-9943-3eb261ca988e",
+        "recoveredDraftRevisionId": "d711a363-68ba-4823-9035-ef9d48175472",
+        "dashboardKeyboardOnly": true,
+        "keyboardScope": "dashboard create/edit/save/publish/conflict recovery/unpublish",
+        "keyboardActionCount": 197,
+        "publicationMethod": "dashboard UI",
+        "staleRequests": 2,
+        "lostResponseDraftPreserved": true,
+        "lostResponseRetrySameRequest": true,
+        "pointerCancelEvents": 2,
+        "finalPointerEvents": 0,
+        "axeCritical": {
+          "dashboard": 0,
+          "funnelDashboard": 0,
+          "editor": 0,
+          "publishedFunnel": 0
+        }
+      },
+      "axe_serious_or_critical_findings": {
+        "dashboard_home": 0,
+        "funnel_dashboard": 0,
+        "editor": 0,
+        "published_funnel": 0
+      },
+      "log": "plan/verification/PR-022/logs/browser.log.gz"
+    },
+    "static_checks": {
+      "commands": [
+        "cargo fmt --all -- --check (via cargo xtask check)",
+        "node --check scripts/test-pr022-browser.mjs",
+        "git diff --check"
+      ],
+      "exit_code": 0
+    },
+    "tdd_red_phase": {
+      "test": "ambiguous_publish_retry_stays_available_after_an_edit_during_the_request",
+      "outcome": "Expected failure observed before the retry-gating fix; passes after the fix."
+    }
+  },
+  "review": {
+    "no_comments": "Final audit found no added/changed comments or lint suppressions; zero deletions.",
+    "interrogate": "Two independent exact-diff reviews found the retry deadlock before the fix and reported no findings after the fix and regression coverage."
+  },
+  "external_proof": {
+    "cloudflare_production": "NOT_RUN; this task uses local Worker/D1 only and does not require production credentials.",
+    "deployment": "NOT_RUN."
+  },
+  "logs": {
+    "plan/verification/PR-022/logs/cargo-xtask-check.log.gz": {
+      "sha256": "961bd4909bb30ef92a9bfb6574482e175dfa348606cb85a34428f2e9b7ed63be",
+      "raw_sha256": "022311b49901837a48965d4c38d3d2468fe657ca9dd9f3752dbc91a014697855",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-022/logs/cargo-xtask-ci.log.gz": {
+      "sha256": "e015cb96e039d69f5f8cf354e4917dd29ecef9498e2bbb9bde4761483361828c",
+      "raw_sha256": "cc14a4b48164e48cc90387ed68362e40251e0354a42d0fff941e591e8425642e",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-022/logs/browser.log.gz": {
+      "sha256": "d6ca130bdaa7c39df41d6d52ee0325a38a7dd35731eab3f219d3c28645c8f1d9",
+      "raw_sha256": "ca5d79dce50affc1671116b862e448779f14924ceb92fdbf70800e5f65e9fe11",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    }
+  }
+}

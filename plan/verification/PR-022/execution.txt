@@ -1,0 +1,28 @@
+PR-022 dashboard publication controls verification
+Evidence refreshed: 2026-10-15 23:44:04 UTC
+Branch: feat/pr-022-dashboard-publish
+Base: 5ddb6ac1580d155a24ce13671b677dbfdf184489
+Implementation commit: 8598a62c819d6fd025b060e822ff3a737b22035e
+Source fingerprint: 6a2014380d636b0a1e2ff5d7e1aa349e146c3c03d01ac39fcd83fc9a3961a63d (8 changed source files)
+
+Behavior verified:
+- The editor's initial snapshot includes the saved draft head and published pointer from one storage read. Publication state remains separate from the editable document.
+- Publish uses the saved draft and current published pointer as its CAS baseline. A stale response refreshes publication state only, retaining the unsaved editor draft.
+- An ambiguous publish can be replayed with the exact same request key and body, including when an edit or keyboard drag began while the request was pending. The local draft remains intact and can be saved after the retry resolves.
+- Unpublish names the live revision, requires explicit confirmation, and removes the public route (404).
+- No new command, schema migration, dependency, or immediate-CDN-purge claim was added.
+
+TDD and local validation:
+- Before the retry-gating fix, the new focused state test failed at the expected retry-eligibility assertion. It passes after the fix and covers a pending edit, active keyboard drag, exact action replay, preserved state, and saving after resolution.
+- `source .project-tools/env.sh && cargo xtask check` passed before each planned commit. The check includes formatting, Clippy, workspace tests, and layer checks.
+- `source .project-tools/env.sh && cargo xtask ci` passed: workspace checks/tests, dashboard WASM and assets, local Worker/D1 publication smoke, local MCP smoke, and RustSec audit (355 locked dependencies, 1,329 advisories, zero findings).
+- `npm run test:pr022:browser` passed the dashboard create/edit/save → stale publish conflict → preserve draft → publish → lost response during a pending edit → same-key/same-body retry → save recovered draft → public read → confirmed unpublish → 404 journey. It observed 197 keyboard actions and verified the main dashboard flow without pointer input. Axe reported no violations on dashboard home, funnel dashboard, editor, or published funnel.
+- `node --check scripts/test-pr022-browser.mjs` and `git diff --check` passed.
+
+Review:
+- The required no-comments audit found no added/changed comments or lint suppressions.
+- Two independent adversarial reviewers identified the ambiguous-retry deadlock before the fix. Both re-reviewed the final diff and reported no remaining findings; the regression now covers the reported case.
+
+Delivery state at evidence capture: implementation and local verification are complete; exact-head hosted checks and reviews are pending. No remote Cloudflare operation or deployment ran.
+
+Captured, compressed logs and their hashes are listed in `results.json`.

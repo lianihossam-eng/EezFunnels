@@ -35,7 +35,7 @@ jobs:
       - run: npm run test:pr010:migration
       - run: npm run test:pr010:browser
       - run: npm run test:pr019:fuzz
-      - run: npm run test:pr019:browser
+      - run: npm run test:pr022:browser
       - run: npm run test:pr019:load
       - run: npm run test:pr019:browser-finalizer
       - run: npm run test:pr019:worker-signals
