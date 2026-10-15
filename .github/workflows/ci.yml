@@ -35,5 +35,6 @@ jobs:
       - run: npm run test:pr019:fuzz
       - run: npm run test:pr019:browser
       - run: npm run test:pr019:load
+      - run: npm run test:pr019:browser-finalizer
       - run: npm run test:pr019:worker-signals
       - run: cargo run -p eez-cli --locked -- --help

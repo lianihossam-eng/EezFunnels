@@ -5,11 +5,13 @@ import { resolve } from "node:path";
 import { chromium } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { startPr019Worker } from "./pr019-local-worker.mjs";
+import { finalizePr019Browser } from "./pr019-browser-finalizer.mjs";
 
 const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, "..");
 const axeSource = require("axe-core").source;
 const diagnostics = [];
+const keyboardActions = [];
 let browser;
 let worker;
 
@@ -40,10 +42,20 @@ async function focusedElement(page) {
   });
 }
 
+async function pressKeyboard(page, key, options) {
+  keyboardActions.push({ kind: "press", key });
+  await page.keyboard.press(key, options);
+}
+
+async function typeKeyboard(page, text, options) {
+  keyboardActions.push({ kind: "type", length: text.length });
+  await page.keyboard.type(text, options);
+}
+
 async function tabUntil(page, matches, name, maxTabs = 120) {
   const visited = [];
   for (let index = 0; index < maxTabs; index += 1) {
-    await page.keyboard.press("Tab");
+    await pressKeyboard(page, "Tab");
     const active = await focusedElement(page);
     visited.push(active);
     if (active && matches(active)) return active;
@@ -107,7 +119,7 @@ try {
   await assertCriticalAxeFindingsAbsent(page, "Dashboard home");
 
   await tabUntil(page, (active) => active.tag === "A" && hasName(active, "Funnels"), "Funnels navigation link");
-  await page.keyboard.press("Enter");
+  await pressKeyboard(page, "Enter");
   await page.getByRole("heading", { name: "Your funnels" }).waitFor();
   await page.getByRole("button", { name: "Create funnel" }).waitFor();
 
@@ -116,14 +128,14 @@ try {
     (active) => active.tag === "BUTTON" && hasName(active, "Create funnel"),
     "Create funnel button",
   );
-  await page.keyboard.press("Enter");
+  await pressKeyboard(page, "Enter");
   const createDialog = page.getByRole("dialog", { name: "Create a funnel" });
   await createDialog.waitFor({ state: "visible" });
   const nameInput = page.getByLabel("Funnel name");
   await nameInput.waitFor();
   assert.equal(await nameInput.evaluate((element) => element === document.activeElement), true);
   const funnelName = "PR-019 keyboard journey";
-  await page.keyboard.type(funnelName, { delay: 8 });
+  await typeKeyboard(page, funnelName, { delay: 8 });
   await tabUntil(
     page,
     (active) => active.tag === "BUTTON" && hasName(active, "Create funnel"),
@@ -132,7 +144,7 @@ try {
   const createResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith("/api/funnels"),
   );
-  await page.keyboard.press("Enter");
+  await pressKeyboard(page, "Enter");
   const createResponse = await createResponsePromise;
   const created = await responseJson(createResponse, 201, "Create funnel");
   const funnelId = created.funnel?.id;
@@ -150,7 +162,7 @@ try {
     (active) => active.tag === "A" && hasName(active, funnelName),
     "created funnel link",
   );
-  await page.keyboard.press("Enter");
+  await pressKeyboard(page, "Enter");
   await page.getByRole("heading", { name: funnelName }).waitFor();
   await page.getByRole("list", { name: "Funnel sections" }).waitFor();
 
@@ -161,8 +173,8 @@ try {
     "CTA heading field",
   );
   const editedTitle = "PR-019 keyboard published CTA heading";
-  await page.keyboard.press("Control+A");
-  await page.keyboard.type(editedTitle, { delay: 8 });
+  await pressKeyboard(page, "Control+A");
+  await typeKeyboard(page, editedTitle, { delay: 8 });
   await page.frameLocator("iframe").getByRole("heading", { name: editedTitle }).waitFor();
   await page.getByText("Unsaved changes").waitFor();
 
@@ -176,7 +188,7 @@ try {
       response.request().method() === "PUT" &&
       response.url().endsWith(`/api/funnels/${funnelId}/revisions`),
   );
-  await page.keyboard.press("Enter");
+  await pressKeyboard(page, "Enter");
   const saveResponse = await saveResponsePromise;
   await responseJson(saveResponse, 200, "Save revision");
   await page.getByText("All changes saved").waitFor();
@@ -185,6 +197,10 @@ try {
   const editorStateResponse = await fetch(`${worker.origin}/api/funnels/${funnelId}`);
   const editorState = await responseJson(editorStateResponse, 200, "Read saved revision");
   assert.notEqual(editorState.base_revision_id, initialRevisionId);
+  const dashboardPointerEvents = await page.evaluate(() => window.__pr019PointerEvents);
+  assert.equal(dashboardPointerEvents, 0);
+  const dashboardKeyboardOnly = keyboardActions.length > 0 && dashboardPointerEvents === 0;
+  assert.equal(dashboardKeyboardOnly, true, "Dashboard create/edit/save actions must use keyboard input");
   const publishResponse = await fetch(`${worker.origin}/api/funnels/${funnelId}/publish`, {
     method: "POST",
     headers: {
@@ -197,13 +213,13 @@ try {
     }),
   });
   await responseJson(publishResponse, 200, "Publish funnel");
-  assert.equal(await page.evaluate(() => window.__pr019PointerEvents), 0);
 
   const publicResponse = await page.goto(`${worker.origin}/f/${slug}`, { waitUntil: "networkidle" });
   assert.equal(publicResponse?.status(), 200);
   await page.getByRole("heading", { name: editedTitle }).waitFor();
   await assertCriticalAxeFindingsAbsent(page, "Published funnel");
-  assert.equal(await page.evaluate(() => window.__pr019PointerEvents), 0);
+  const publicPagePointerEvents = await page.evaluate(() => window.__pr019PointerEvents);
+  assert.equal(publicPagePointerEvents, 0);
   assert.deepEqual(diagnostics, [], `Browser errors: ${diagnostics.join("\n")}`);
   console.log(
     JSON.stringify({
@@ -211,12 +227,14 @@ try {
       funnelId,
       slug,
       revisionId: editorState.base_revision_id,
-      keyboardOnly: true,
-      pointerEvents: 0,
+      dashboardKeyboardOnly,
+      keyboardScope: "dashboard create/edit/save",
+      keyboardActionCount: keyboardActions.length,
+      publicationMethod: "API",
+      pointerEvents: dashboardPointerEvents + publicPagePointerEvents,
       axeCritical: { dashboard: 0, publishedFunnel: 0 },
     }),
   );
 } finally {
-  await closeBrowser();
-  if (worker) await worker.stop();
+  await finalizePr019Browser(closeBrowser, worker);
 }
