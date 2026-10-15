@@ -1,15 +1,15 @@
 {
   "task": "PR-020",
-  "evidence_refreshed_at_utc": "2026-10-15T03:23:44Z",
+  "evidence_refreshed_at_utc": "2026-10-15T03:28:51Z",
   "branch": "release/v0.1.0",
   "base_commit": "f85cf8fe030024066149a0c4e9264bd277d7e9fa",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for files listed in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
-  "source_fingerprint_sha256": "d81a3b3e98f90509691cf343cad2898244ac9f1cc3e9e9705449bfa8c675b33f",
+  "source_fingerprint_sha256": "e7eeab9f80a4bb9b0c27e069e8f70d0f10e3de0d9dc18f34639828c2b6ca4332",
   "source_file_count": 3,
   "source_sha256": {
     ".github/workflows/release.yml": "bd26dcd3d709d9862b33266377c47fe85942a8059287349dbcb5afa37e53f60e",
     "CHANGELOG.md": "8f5970e4dd4bfe1ae8e6b38672af952bc109fb060bd36a8a07dffda48046a547",
-    "release-notes/v0.1.0.md": "faa9e4a717f11070d9da921ce7ffd68f5a458f10ca23b2059b37f742a9ddc187"
+    "release-notes/v0.1.0.md": "ec3b27b7caa0fc2b84659c9f46f1faeffee16c5ed1109f707494f9f572871b52"
   },
   "implementation": {
     "cargo_version": "0.1.0 (already set in workspace; manifests unchanged)",
@@ -19,7 +19,7 @@
       "eez-v0.1.0-windows-x86_64.exe"
     ],
     "workflow": "Pull requests build and test three native targets with contents:read. Packaging/artifact upload runs only for refs/tags/v0.1.0. A tag-guarded publish job has contents:write, downloads the three assets, generates/verifies SHA256SUMS, then invokes local gh release create with the checked-in release notes and repository token.",
-    "release_notes": "CHANGELOG date updated to 2026-10-15; release-notes/v0.1.0.md documents included product behavior, download names, checksum verification, setup links, and single-user limitations.",
+    "release_notes": "CHANGELOG date updated to 2026-10-15; release-notes/v0.1.0.md documents included product behavior, download names, selected-entry checksum verification for each OS, per-platform CLI installation/PATH setup, setup links, and single-user limitations.",
     "third_party_release_action": false,
     "application_behavior_changed": false,
     "dependencies_added": false,
@@ -91,6 +91,12 @@
       "command": "git diff --check",
       "exit_code": 0,
       "log": "plan/verification/PR-020/logs/static-audit.log.gz"
+    },
+    "release_notes_commands": {
+      "command": "isolated release-notes validation: run Linux/macOS selected-entry checks with only selected binary + SHA256SUMS; run documented Linux/macOS install blocks; validate Windows PowerShell entry selection and install commands against generated manifest",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/release-notes-validation.log.gz",
+      "outcome": "PASS: Linux and macOS selected-entry checksum commands succeed with only the chosen asset present; absent rows fail under pipefail. Documented Linux install, executable mode, PATH, and actual release binary --help pass. macOS install/PATH/help pass with a local executable placeholder. Windows commands select exactly one Windows hash and scope comparison to the Windows asset; PowerShell runtime was unavailable on this Linux host, so these commands were structurally checked rather than executed."
     }
   },
   "logs": {
@@ -122,6 +128,11 @@
     "plan/verification/PR-020/logs/linux-tests.log.gz": {
       "sha256": "fc3646ccddb79c0d18c5ba27357c50492e7c85e750cc4791abbac123ef6f80e0",
       "raw_sha256": "e76b59109cf465be2bf88d91c2e3c195e7a84f7b0b812c865c99ff9e3078e0dd",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/release-notes-validation.log.gz": {
+      "sha256": "1e739c4e3a3a83e900dd59273aef78d769113397fba65085119df4adc1045302",
+      "raw_sha256": "1b6ff7b687ea4cd319ab0290a6653773abaa8f0b2367a81c4597994b115a99b0",
       "compression": "gzip -n; gzip -cd restores captured output"
     },
     "plan/verification/PR-020/logs/static-audit.log.gz": {
