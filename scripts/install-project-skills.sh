@@ -10,10 +10,8 @@ IMPECCABLE_REVISION=8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7
 
 ensure_pinned_source() {
   local name="$1" url="$2" revision="$3" preferred="$4" sentinel="$5"
-  local path="$preferred"
+  local pinned_path="$SKILL_ROOT/pinned/$name-${revision:0:12}"
 
-  # Reuse the existing checkout only when it already matches. Never move a
-  # user's existing skill-stack checkout to another revision.
   if [ -d "$preferred/.git" ] \
     && [ "$(git -C "$preferred" rev-parse HEAD)" = "$revision" ] \
     && [ -z "$(git -C "$preferred" status --porcelain)" ] \
@@ -22,35 +20,56 @@ ensure_pinned_source() {
     return
   fi
 
-  path="$SKILL_ROOT/pinned/$name-${revision:0:12}"
-  if [ ! -e "$path" ]; then
-    mkdir -p "$(dirname -- "$path")"
-    git clone --depth 1 --no-checkout "$url" "$path" >&2
-  fi
-  if [ ! -d "$path/.git" ]; then
-    echo "Refusing to overwrite non-git skill source: $path" >&2
-    return 1
-  fi
-  if [ "$(git -C "$path" rev-parse HEAD 2>/dev/null || true)" != "$revision" ]; then
-    if [ -n "$(git -C "$path" status --porcelain)" ]; then
-      echo "Preserving local changes in $path" >&2
+  if [ -e "$pinned_path" ] || [ -L "$pinned_path" ]; then
+    if [ ! -d "$pinned_path/.git" ]; then
+      echo "Refusing to overwrite non-git skill source: $pinned_path" >&2
       return 1
     fi
-    git -C "$path" fetch --depth 1 origin "$revision" >&2
-    git -C "$path" checkout --detach "$revision" >&2
+    if [ -n "$(git -C "$pinned_path" status --porcelain)" ]; then
+      echo "Preserving local changes in $pinned_path" >&2
+      return 1
+    fi
+    if [ "$(git -C "$pinned_path" rev-parse HEAD)" != "$revision" ]; then
+      echo "Preserving existing skill source at an unexpected revision: $pinned_path" >&2
+      return 1
+    fi
+    if [ ! -f "$pinned_path/$sentinel" ]; then
+      echo "Preserving existing skill source with missing sentinel: $pinned_path/$sentinel" >&2
+      return 1
+    fi
+    printf '%s\n' "$pinned_path"
+    return
   fi
-  if [ ! -f "$path/$sentinel" ]; then
-    git -C "$path" checkout --detach "$revision" >&2
-  fi
-  if [ -n "$(git -C "$path" status --porcelain)" ]; then
-    echo "Preserving local changes in $path" >&2
+
+  mkdir -p "$(dirname -- "$pinned_path")"
+  local temporary_path
+  local cleanup_command
+  temporary_path="$(mktemp -d "$(dirname -- "$pinned_path")/.$name-${revision:0:12}.XXXXXX")"
+  # A fresh --no-checkout clone reports tracked files as deleted until checkout.
+  # Keep it temporary so a failed fetch cannot make the next install look user-edited.
+  printf -v cleanup_command 'rm -rf -- %q' "$temporary_path"
+  trap "$cleanup_command" EXIT
+  git clone --depth 1 --no-checkout "$url" "$temporary_path" >&2 || return 1
+  git -C "$temporary_path" fetch --depth 1 origin "$revision" >&2 || return 1
+  git -C "$temporary_path" checkout --detach "$revision" >&2 || return 1
+  if [ ! -f "$temporary_path/$sentinel" ]; then
+    echo "Pinned source is missing its expected sentinel: $temporary_path/$sentinel" >&2
     return 1
   fi
-  if [ "$(git -C "$path" rev-parse HEAD)" != "$revision" ]; then
-    echo "Pinned source verification failed for $name at $path" >&2
+  if [ -n "$(git -C "$temporary_path" status --porcelain)" ]; then
+    echo "Pinned source is unexpectedly dirty: $temporary_path" >&2
     return 1
   fi
-  printf '%s\n' "$path"
+  if [ "$(git -C "$temporary_path" rev-parse HEAD)" != "$revision" ]; then
+    echo "Pinned source verification failed for $name at $temporary_path" >&2
+    return 1
+  fi
+  if [ -e "$pinned_path" ] || [ -L "$pinned_path" ]; then
+    echo "Preserving a skill source created during install: $pinned_path" >&2
+    return 1
+  fi
+  mv -- "$temporary_path" "$pinned_path"
+  printf '%s\n' "$pinned_path"
 }
 
 MATT_SOURCE="$(ensure_pinned_source mattpocock https://github.com/mattpocock/skills.git "$MATT_REVISION" "$SKILL_ROOT/mattpocock" skills/engineering/domain-modeling/SKILL.md)"
@@ -133,10 +152,19 @@ for source_name, name, skill in selected:
         target = link.resolve(strict=True)
         if not (target / "SKILL.md").is_file():
             raise SystemExit(f"Existing skill link is broken: {link}")
+        expected_target = skill.resolve(strict=True)
+        if target != expected_target:
+            raise SystemExit(
+                f"Existing skill link points to an unexpected skill directory: "
+                f"{link} -> {target} (expected {expected_target})"
+            )
         actual = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"], text=True).strip()
         expected = sources[source_name][1]
         if actual != expected:
             raise SystemExit(f"Existing skill link has unexpected source revision: {link} ({actual})")
+        dirty = subprocess.check_output(["git", "-C", str(target), "status", "--porcelain"], text=True)
+        if dirty:
+            raise SystemExit(f"Existing skill link has local source changes: {link}")
         continue
     if link.exists():
         raise SystemExit(f"Preserving existing non-symlink skill path: {link}")

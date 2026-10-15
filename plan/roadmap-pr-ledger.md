@@ -372,14 +372,14 @@ Frozen files C-01, C-03, C-04, D19, D21, and current configuration are immutable
 ### PR-053: install and route project-local skills
 
 - Branch: `chore/pr-053-skill-workflow`.
-- Commits: `chore(skills): add pinned project-local installer`; `docs(workflow): map skills to roadmap phases`.
+- Commits: `chore(skills): add pinned project-local installer`; `docs(workflow): map skills to roadmap phases`; `fix(skills): verify pinned install integrity`.
 - Task-ID: `PR-053`; tracking issue: [#23](https://github.com/lianihossam-eng/EezFunnels/issues/23).
 - Depends on merged PR-021 (GitHub PR #22).
 - It must complete before PR-022 starts. It does not create a ninth product phase, reorder PR-022–PR-052, change the public/private boundary, or alter product behavior.
 - Pin and verify the already selected Matt Pocock and Cursor pstack revisions plus Impeccable 4.6.0. Add only missing selected local skill links; preserve existing links, ignored checkouts, and `.project-skills/README.md`. Do not install the eight Snyk skills, change global settings, add hooks, invoke Cursor automation, add app dependencies, or execute Impeccable's separately downloaded engine.
 - Add a task-by-task map for PR-022–PR-052, explain each skill's role and limits, and route evidence to the owning tests. Impeccable may guide a future rendered-Dioxus UI pilot only after its engine has an independently verified digest; Playwright/axe, manual keyboard/screen-reader checks, and product-specific tests remain acceptance evidence.
 - Integrate the adversarial plan clarifications: owner route map in PR-027; explicit absent/accepted/refused analytics consent gate in PR-032/033 and unchecked marketing opt-in in PR-028; unique email-provider choice in PR-036; provider setup/rotation UI in PR-038; buyer handoff/return UI in PR-039; campaign review and distinct campaign identities in PR-042; preview/activate and closed effect matrix in PR-043; integrated recovery journeys in PR-048; zero serious/critical contrast violations for PR-026's target states.
-- Checks: installer syntax, pinned source verification, selected-link integrity, idempotent second install, and preservation of the preexisting 90 links and `.project-skills/README.md`; `git diff --check`; the roadmap structural validator; `cargo xtask check`; `cargo xtask ci`. No remote Cloudflare operation or product runtime change.
+- Checks: installer syntax; checked-in fixtures for failed-fetch retry, fresh clone with a newer upstream default branch, existing pinned-checkout preservation, selected-link identity, wrong-link and dirty-source fail-closed behavior, and idempotent second install; preservation of the preexisting 90 links and `.project-skills/README.md`; `git diff --check`; the roadmap structural validator; `cargo xtask check`; `cargo xtask ci`. CI runs `scripts/test-install-project-skills.sh`. No remote Cloudflare operation or product runtime change.
 - GitHub workflow: link issue #23, open `[PR-053] Add project-local skill workflow`, tag `@codex`, request Sol's exact-head review, resolve all threads, require green hosted checks, then Sol merges. Update `plan/STATUS.md` before opening the PR.
 
 ## Decision and evidence gates that remain open
