@@ -32,4 +32,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:pr010:migration
       - run: npm run test:pr010:browser
+      - run: npm run test:pr019:fuzz
+      - run: npm run test:pr019:browser
+      - run: npm run test:pr019:load
       - run: cargo run -p eez-cli --locked -- --help

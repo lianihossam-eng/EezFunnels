@@ -10,7 +10,10 @@
     "test:pr010:migration": "python3 scripts/test-pr010-migration.py",
     "test:pr010:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr011:browser": "node scripts/test-pr010-browser.mjs",
-    "test:pr012:browser": "node scripts/test-pr010-browser.mjs"
+    "test:pr012:browser": "node scripts/test-pr010-browser.mjs",
+    "test:pr019:fuzz": "cargo test -p eez-api --locked deterministic_",
+    "test:pr019:browser": "node scripts/test-pr019-browser.mjs",
+    "test:pr019:load": "node scripts/test-pr019-load.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

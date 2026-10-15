@@ -104,8 +104,70 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{validate_unique_json, JsonValidationError};
+
+    pub(crate) fn deterministic_json_fuzz_inputs() -> Vec<String> {
+        const CASES: usize = 10_000;
+        const TOKENS: &[u8] = b"{}[],:\"\\/0123456789.-+eEtruefalsn \t\r\n";
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut inputs = Vec::with_capacity(CASES);
+
+        for case_number in 0..CASES {
+            let input = match case_number % 4 {
+                0 => {
+                    let length = (next_fuzz_value(&mut state) % 256) as usize;
+                    (0..length)
+                        .map(|_| {
+                            TOKENS[(next_fuzz_value(&mut state) as usize) % TOKENS.len()] as char
+                        })
+                        .collect()
+                }
+                1 => {
+                    let depth = (next_fuzz_value(&mut state) % 192) as usize;
+                    format!("{}null{}", "[".repeat(depth), "]".repeat(depth))
+                }
+                2 => {
+                    let duplicate_key = if next_fuzz_value(&mut state) % 2 == 0 {
+                        "nested"
+                    } else {
+                        "escaped\\\"key"
+                    };
+                    let nested_depth = (next_fuzz_value(&mut state) % 32) as usize;
+                    format!(
+                        "{{\"{duplicate_key}\":{},\"{duplicate_key}\":{}}}",
+                        "[".repeat(nested_depth) + "0" + &"]".repeat(nested_depth),
+                        case_number
+                    )
+                }
+                _ => {
+                    let mut encoded_text = String::new();
+                    let length = (next_fuzz_value(&mut state) % 64) as usize;
+                    for _ in 0..length {
+                        match next_fuzz_value(&mut state) % 6 {
+                            0 => encoded_text.push('a'),
+                            1 => encoded_text.push_str("\\\""),
+                            2 => encoded_text.push_str("\\\\"),
+                            3 => encoded_text.push_str("\\n"),
+                            4 => encoded_text.push_str("\\u0061"),
+                            _ => encoded_text.push('é'),
+                        }
+                    }
+                    format!("{{\"case\":{case_number},\"value\":\"{encoded_text}\"}}")
+                }
+            };
+            inputs.push(input);
+        }
+
+        inputs
+    }
+
+    fn next_fuzz_value(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *state
+    }
 
     #[test]
     fn rejects_duplicate_keys_recursively_and_accepts_unique_json() {
@@ -125,5 +187,19 @@ mod tests {
             validate_unique_json(r#"{"key":}"#),
             Err(JsonValidationError::Invalid)
         );
+    }
+
+    #[test]
+    fn deterministic_json_parser_fuzzes_ten_thousand_cases_without_panicking() {
+        let inputs = deterministic_json_fuzz_inputs();
+        assert_eq!(inputs.len(), 10_000);
+
+        for (case_number, input) in inputs.iter().enumerate() {
+            let result = std::panic::catch_unwind(|| validate_unique_json(input));
+            assert!(
+                result.is_ok(),
+                "JSON parser panicked for case {case_number}: {input:?}"
+            );
+        }
     }
 }
