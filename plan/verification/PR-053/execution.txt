@@ -1,0 +1,24 @@
+PR-053 project-local skill workflow verification
+
+Verified source commit: aa6cd297d491662bcf6bc1472c806038a80e922a
+Branch: chore/pr-053-skill-workflow
+Base: origin/main at f747afb6fd0f1f19ef6054dd107e584c3226297f
+Source fingerprint and per-file hashes: results.json and candidate-hashes.sha256.
+
+Scope:
+- Pinned project-local Matt Pocock and Cursor pstack source revisions and added the Impeccable 4.6.0 skill source for local discovery.
+- Routed skills to each planned Task-ID PR-022 through PR-052, documented limitations and end-to-end evidence gates, and integrated the adversarial roadmap clarifications.
+- Added a fail-closed installer with checked-in regression fixtures run by CI.
+- No product behavior, dependency, global agent configuration, hook, remote Cloudflare operation, or production deployment changed.
+
+Local validation (commands exited 0):
+- `bash -n scripts/install-project-skills.sh scripts/test-install-project-skills.sh`.
+- `bash scripts/test-install-project-skills.sh`; fixtures cover retry after fetch failure, pinned checkout despite upstream movement, wrong/broken selected links, dirty source, and idempotency.
+- `bash scripts/install-project-skills.sh`; verified 24 selected project skills and added zero links; preserved all 91 existing links and `.project-skills/README.md` (SHA-256 `5f67dc59f0e6747bbbc6a1dcb6c92e3fbfeebec13e4d7cbfb023766ff85003ff`).
+- `python3 plan/verification/PR-021/validate-roadmap.py`; eight phases, 28 pairs, six combined journeys, private overlay restricted to Phase 8.
+- `source .project-tools/env.sh && cargo xtask check` and `source .project-tools/env.sh && cargo xtask ci`; Local CI covers workspace tests, WASM/assets, local Worker/D1/MCP smoke, and RustSec audit (355 dependencies, 1,329 advisories, no findings).
+- `git diff --check`.
+
+Captured logs are compressed under `logs/`; results.json contains exit statuses, SHA-256 values, and source fingerprint. This record does not claim hosted Cloudflare production validation. Impeccable's separately downloaded engine is not independently digest-pinned and was not executed.
+
+Delivery at evidence capture: PR #24 was open. Its exact-head hosted checks and review are tracked on the PR; see the PR page for the current final-head status.

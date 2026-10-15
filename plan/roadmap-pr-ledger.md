@@ -372,7 +372,7 @@ Frozen files C-01, C-03, C-04, D19, D21, and current configuration are immutable
 ### PR-053: install and route project-local skills
 
 - Branch: `chore/pr-053-skill-workflow`.
-- Commits: `chore(skills): add pinned project-local installer`; `docs(workflow): map skills to roadmap phases`; `fix(skills): verify pinned install integrity`.
+- Commits: `chore(skills): add pinned project-local installer`; `docs(workflow): map skills to roadmap phases`; `fix(skills): verify pinned install integrity`; `docs(evidence): record PR-053 validation`.
 - Task-ID: `PR-053`; tracking issue: [#23](https://github.com/lianihossam-eng/EezFunnels/issues/23).
 - Depends on merged PR-021 (GitHub PR #22).
 - It must complete before PR-022 starts. It does not create a ninth product phase, reorder PR-022–PR-052, change the public/private boundary, or alter product behavior.

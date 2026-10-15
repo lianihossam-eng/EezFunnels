@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-053 Project-local skills and workflow (three commits complete; local checks and installer regression fixtures green; exact-head review and hosted checks pending; PR-022 remains gated)
+Current phase: PR-053 Project-local skills and workflow (four commits complete; local checks and installer regression fixtures recorded; exact-head review and hosted checks pending; PR-022 remains gated)
 Last updated: 2026-10-15
 
 ## Phases
