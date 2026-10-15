@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Test project skill installer
+        run: bash scripts/test-install-project-skills.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
