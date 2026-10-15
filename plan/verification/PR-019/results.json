@@ -1,0 +1,266 @@
+{
+  "task": "PR-019",
+  "evidence_refreshed_at_utc": "2026-10-15T02:59:25Z",
+  "branch": "test/019_e2e",
+  "base_commit": "756511c4aed7521249b65ee98f28d5ad6497a6d7",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
+  "source_fingerprint_sha256": "67bdc7460428b5c5c4be460e19c6811cdaa416bc22a1f2f68bf2cbd894d0558b",
+  "source_file_count": 12,
+  "source_sha256": {
+    ".github/workflows/ci.yml": "662bf05dea69f2d837362424416d5d13e66feceb991cd09bb9e198cbfa824ca0",
+    "apps/api/src/json.rs": "e0e3a0c8a4bfb11bcd9902001dea9898c91b9ccd81ccfae9d3d13646b1adcce2",
+    "apps/api/src/lib.rs": "1187482aa1142a770b494d19bd29bdd6f05751e32e8f4f0b5ec1001ad2b4c289",
+    "apps/api/src/mcp/tests.rs": "fb1f9999e821439a68a4e6974341c6c111d95d8a9d120a27546f6dbc3f508dbc",
+    "package.json": "5388ad0733bc9f21d9f4acfd5bd3e6824bedd71838b897fe2052bd246ae0b231",
+    "plan/production.md": "e117b6a92cb7a24621ef09c1bb8687dd290558cffba4f2dc779e3691aeb2f341",
+    "scripts/pr019-browser-finalizer.mjs": "10d402e3806792ac40c066b35c36788b8cbb335ea3fa72cf1ed10161512b8936",
+    "scripts/pr019-local-worker.mjs": "4eee76a166d36ed7146986b11a9ad55442a09601c7703ffd0464f576b16b237a",
+    "scripts/test-pr019-browser-finalizer.mjs": "6465c53bd835586ed990f97c48d416ecc28bc938886996289a608a8e86c5ebc9",
+    "scripts/test-pr019-browser.mjs": "729dc444c6961ceba1d5e1741816bb1331ba1990c853cb923c355cd5fa25adb9",
+    "scripts/test-pr019-load.mjs": "bf6ca1e21b2bfcca0cf7e60ddedb27a05c943d8281b486ce46ec82dcf834aa76",
+    "scripts/test-pr019-worker-signals.mjs": "7c2b7a6cb9bf7001c616a5d42e4e8531dbe6ffead1919332a9a63625c9250e87"
+  },
+  "implementation": {
+    "browser_workflow": "Local Playwright flow creates a funnel through the dashboard, edits and saves its CTA heading with keyboard input, publishes through the local API, and visits /f/:slug.",
+    "accessibility": "axe-core checks dashboard home, funnel dashboard, and the published funnel. Critical findings are zero; the dashboard has one serious color-contrast rule with four nodes on each of its two tested views.",
+    "parser_fuzz": {
+      "cases_per_parser_path": 10000,
+      "seed": "0x9e3779b97f4a7c15",
+      "paths": [
+        "duplicate-key JSON validation",
+        "editor and publication command parameter parsing",
+        "MCP JSON-RPC message parsing"
+      ],
+      "panics": 0
+    },
+    "local_load": {
+      "published_funnels": 100,
+      "public_get_requests": 1000,
+      "p95_ms": 9.78,
+      "max_ms": 40.61,
+      "threshold_ms": 100
+    },
+    "isolation": "Wrangler local Worker and D1 state use per-run temporary directories, ephemeral loopback ports, and isolated caches. Idempotent SIGINT/SIGTERM teardown cleans the Worker process group, D1 state, and temporary config during startup or after readiness; the Playwright runner closes its browser before Worker teardown.",
+    "frozen_contracts_changed": false,
+    "manifest_dependencies_added": false,
+    "lockfile_changed": false,
+    "sql_migrations_added": false,
+    "application_behavior_changed": false,
+    "remote_operations": false,
+    "dashboard_keyboard_coverage": {
+      "dashboardKeyboardOnly": true,
+      "keyboard_scope": "dashboard create/edit/save",
+      "observed_keyboard_actions": 41,
+      "pointer_events": 0,
+      "publication_method": "API"
+    }
+  },
+  "validation": {
+    "cargo_fmt": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/formatter.log.gz",
+      "log_sha256": "59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2",
+      "outcome": "PASS."
+    },
+    "cargo_xtask_check": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo xtask check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/xtask-check.log.gz",
+      "log_sha256": "c435ac71d7a6e1a1a8ef94427c517cc193e5e39ffadfe1db5022281b4f2c2d55",
+      "outcome": "PASS: Clippy, workspace tests, and layer checks.",
+      "suite_counts": {
+        "eez-api": 39,
+        "eez-cli unit": 6,
+        "eez-cli process": 11,
+        "eez-commands": 29,
+        "eez-dashboard": 0,
+        "eez-dashboard-presentation": 34,
+        "eez-domain": 13,
+        "eez-render": 35,
+        "eez-storage": 5,
+        "xtask": 26,
+        "bootstrap_cli": 2,
+        "pr001_cli": 6
+      }
+    },
+    "cargo_xtask_ci": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo xtask ci",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/xtask-ci.log.gz",
+      "log_sha256": "171332f29f3d89bfcd0889f52666c1a7c77bdfb04d63178008ac5814a2803b64",
+      "outcome": "PASS: workspace checks, dashboard WASM assets, local Worker/D1 smokes, and RustSec audit.",
+      "audit": {
+        "exit_code": 0,
+        "advisories_loaded": 1329,
+        "locked_dependencies_scanned": 355,
+        "findings": 0
+      },
+      "remote_operations": false
+    },
+    "existing_migration": {
+      "command": "npm run test:pr010:migration",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/pr010-migration.log.gz",
+      "log_sha256": "52d64cb7b933faac2624ed3c8faffa9ac89b7ef863fa2764fddfdc59dabd36cc",
+      "outcome": "PASS: editor-head preflight and backfill."
+    },
+    "existing_browser_suites": {
+      "pr010": {
+        "command": "source /workspace/EezFunnels/.project-tools/env.sh && npm run test:pr010:browser",
+        "exit_code": 0,
+        "log": "plan/verification/PR-019/logs/pr010-browser.log.gz",
+        "log_sha256": "46ec3d2f39c5f8e62ce435d922e5966f487d91e559edcf9853eaa8ff60c9d0ae",
+        "outcome": "PASS: PR-010/011/012/013 browser coverage; critical axe findings: 0."
+      },
+      "pr011": {
+        "command": "source /workspace/EezFunnels/.project-tools/env.sh && npm run test:pr011:browser",
+        "exit_code": 0,
+        "log": "plan/verification/PR-019/logs/pr011-browser.log.gz",
+        "log_sha256": "7c3635be5f52c9155fd9acc9127296ca69c178cabd5ac3d22c859ae78dc1dcd2",
+        "outcome": "PASS: PR-010/011/012/013 browser coverage; critical axe findings: 0."
+      },
+      "pr012": {
+        "command": "source /workspace/EezFunnels/.project-tools/env.sh && npm run test:pr012:browser",
+        "exit_code": 0,
+        "log": "plan/verification/PR-019/logs/pr012-browser.log.gz",
+        "log_sha256": "50903f6db0c21859de18eb6822021b8c702f9e3ad50e389fad863fea827afe5c",
+        "outcome": "PASS: PR-010/011/012/013 browser coverage; critical axe findings: 0."
+      }
+    },
+    "pr019_fuzz": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target npm run test:pr019:fuzz",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/fuzz.log.gz",
+      "log_sha256": "5961b8ee195972c4316924da7b8670baede7008b1c6a9ee6419c6db35917622f",
+      "outcome": "PASS: all three deterministic 10,000-case tests passed."
+    },
+    "pr019_browser": {
+      "command": "npm run test:pr019:browser",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/browser.log.gz",
+      "log_sha256": "9fc8d4a7b5875061a58dd086b86e2c5e66cde18accca1689ed5e703ed778a213",
+      "outcome": "PASS: create \u2192 edit \u2192 publish \u2192 visit; dashboard create/edit/save had 41 observed keyboard actions and zero pointer events; publication used API; axe critical findings=0.",
+      "axe_critical_findings": 0,
+      "dashboard_serious_color_contrast_nodes": 4,
+      "published_funnel_axe_violations": 0,
+      "dashboard_keyboard_only": true,
+      "keyboard_scope": "dashboard create/edit/save",
+      "keyboard_action_count": 41,
+      "publication_method": "API"
+    },
+    "pr019_load": {
+      "command": "npm run test:pr019:load",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/load.log.gz",
+      "log_sha256": "54c21c4968d7be59cd345641b2de4a4510c23ce2e05f8c1fb5392dcce4ad591d",
+      "outcome": "PASS: local-only 100-funnel / 1,000-request run met the p95 threshold (9.78 ms).",
+      "published_funnels": 100,
+      "requests": 1000,
+      "p95_ms": 9.78,
+      "max_ms": 40.61,
+      "threshold_ms": 100
+    },
+    "static_checks": {
+      "command": "node --check scripts/pr019-local-worker.mjs; node --check scripts/test-pr019-worker-signals.mjs; node --check scripts/test-pr019-browser.mjs; node --check scripts/test-pr019-load.mjs; node --check scripts/pr019-browser-finalizer.mjs; node --check scripts/test-pr019-browser-finalizer.mjs; git diff --check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/static-audit.log.gz",
+      "log_sha256": "9d6a44275dbeb65f11dbdd7413fecf28066bdbb8153a9dd30289cc4be55f10c3",
+      "outcome": "PASS."
+    },
+    "pr019_worker_signals": {
+      "command": "npm run test:pr019:worker-signals",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/worker-signals.log.gz",
+      "log_sha256": "0d553ceba5b44b3c6dfd6ae44517904da53e59c648ff62a7857997031b7d2e58",
+      "outcome": "PASS: SIGTERM during startup after spawn and health readiness, and after helper readiness; pre-shutdown callback saw /health=200; child exited 143, Worker port closed, and D1/config were removed.",
+      "phases": [
+        "startup/readiness",
+        "running"
+      ],
+      "child_exit_code": 143,
+      "worker_health_during_cleanup_callback": 200,
+      "port_closed": true,
+      "temporary_state_removed": true
+    },
+    "pr019_browser_finalizer": {
+      "command": "npm run test:pr019:browser-finalizer",
+      "exit_code": 0,
+      "log": "plan/verification/PR-019/logs/browser-finalizer.log.gz",
+      "outcome": "PASS: synchronous browser-close failure still runs Worker stop; dual teardown failures preserve both errors.",
+      "log_sha256": "d04e64a53f3286c438926c7cd108a32292a94151d4ad111c57b8fd69d4d40720"
+    }
+  },
+  "logs": {
+    "plan/verification/PR-019/logs/browser.log.gz": {
+      "sha256": "9fc8d4a7b5875061a58dd086b86e2c5e66cde18accca1689ed5e703ed778a213",
+      "raw_log_sha256": "3a440bc8230699d1cdfbfb32492cd92d6a936e0542cdac6902ac4c163dfc4abd",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/formatter.log.gz": {
+      "sha256": "59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2",
+      "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/fuzz.log.gz": {
+      "sha256": "5961b8ee195972c4316924da7b8670baede7008b1c6a9ee6419c6db35917622f",
+      "raw_log_sha256": "c70d3a46cee222beaaad53160ca9286e6ad993e9132c31777ea56bdc7572cdf3",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/load.log.gz": {
+      "sha256": "54c21c4968d7be59cd345641b2de4a4510c23ce2e05f8c1fb5392dcce4ad591d",
+      "raw_log_sha256": "704097b79acabc3f8310ef65d34623469b66986afd52f9498bcf27eb98fca3ed",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/pr010-browser.log.gz": {
+      "sha256": "46ec3d2f39c5f8e62ce435d922e5966f487d91e559edcf9853eaa8ff60c9d0ae",
+      "raw_log_sha256": "2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/pr010-migration.log.gz": {
+      "sha256": "52d64cb7b933faac2624ed3c8faffa9ac89b7ef863fa2764fddfdc59dabd36cc",
+      "raw_log_sha256": "bf5bcb228e014fb683f5e5c8f3499b072ef78eac0e61eccf6c7773bede518192",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/pr011-browser.log.gz": {
+      "sha256": "7c3635be5f52c9155fd9acc9127296ca69c178cabd5ac3d22c859ae78dc1dcd2",
+      "raw_log_sha256": "fb000ddd8baf6f0691e8f1e2531c31a03222edb11517af508bb6fae52b4578ec",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/pr012-browser.log.gz": {
+      "sha256": "50903f6db0c21859de18eb6822021b8c702f9e3ad50e389fad863fea827afe5c",
+      "raw_log_sha256": "97ab2d0ef4e2646da92fc7ba9e6f465df5a5fcd7b20d0ec49b89aefc42f88974",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/static-audit.log.gz": {
+      "sha256": "9d6a44275dbeb65f11dbdd7413fecf28066bdbb8153a9dd30289cc4be55f10c3",
+      "raw_log_sha256": "26f5d057761c99e8f0f2641eb42bafdf346b281ca2f43b531e8d730d573432e4",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/worker-signals.log.gz": {
+      "sha256": "0d553ceba5b44b3c6dfd6ae44517904da53e59c648ff62a7857997031b7d2e58",
+      "raw_log_sha256": "78410624c798f0d12362fe44823e8e4426c05f7eda1888f40f142d719c67230d",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/xtask-check.log.gz": {
+      "sha256": "c435ac71d7a6e1a1a8ef94427c517cc193e5e39ffadfe1db5022281b4f2c2d55",
+      "raw_log_sha256": "204899fe3b5e5100298297fbfee1608bdac6c09b35f8ac6fc372923db2d90e7c",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/xtask-ci.log.gz": {
+      "sha256": "171332f29f3d89bfcd0889f52666c1a7c77bdfb04d63178008ac5814a2803b64",
+      "raw_log_sha256": "3bab129295cc4a38fc0ae7742764b745cf833b55e87e2e6ce2fa67bf6aabd443",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    },
+    "plan/verification/PR-019/logs/browser-finalizer.log.gz": {
+      "sha256": "d04e64a53f3286c438926c7cd108a32292a94151d4ad111c57b8fd69d4d40720",
+      "raw_log_sha256": "1c19850ba1eb95705c58a39ce94954e97d26a35359f144f1fb90c5409d17162b",
+      "compression": "gzip -n; gzip -cd restores the captured output"
+    }
+  },
+  "delivery": {
+    "worktree_changes_uncommitted": false,
+    "remote_database_or_deployment": false,
+    "cloud_environment_published": false
+  }
+}

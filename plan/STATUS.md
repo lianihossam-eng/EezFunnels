@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-018 Documentation (`docs/018_docs`; implementation complete, review pending)
+Current phase: PR-019 Tests E2E + quality (`test/019_e2e`; local verification complete, review pending)
 Last updated: 2026-10-15
 
 ## Phases
@@ -23,8 +23,8 @@ Last updated: 2026-10-15
 - [x] PR-015 Command registry (PR #16 merged at `af25dec5e0469e796016906e9210e85f86ca2fd9`)
 - [x] PR-016 CLI (merged)
 - [x] PR-017 MCP server (PR #18 merged at `dc976f3ec6ffd4b18937cac23748b38b2ef38405`)
-- [ ] PR-018 Documentation
-- [ ] PR-019 Tests E2E + quality
+- [x] PR-018 Documentation (PR #19 merged at `756511c4aed7521249b65ee98f28d5ad6497a6d7`)
+- [ ] PR-019 Tests E2E + quality (implementation and local verification complete; hosted review pending)
 - [ ] PR-020 Release v0.1.0
 
 ## Verified locally
@@ -38,6 +38,10 @@ PR-015 adds a closed registry for the nine existing executable command IDs. Each
 PR-016 implements the native `eez` CLI: endpoint configuration, funnel list/create/publish through the Worker API, durable immutable retry tickets for ambiguous mutations, and `wrangler deploy` argument/exit forwarding. `cargo xtask check`, full `cargo xtask ci`, standalone `cargo +1.88.0 audit`, and the isolated local Worker/D1 smoke passed; the CLI has 6 unit and 11 process tests. RustSec scanned 355 locked dependencies against 1,329 advisories with no findings. The release matrix builds and tests natively on Linux, Apple Silicon macOS, and Windows, with artifact upload remaining tag-only. PR #17 checks passed on exact head `32dd5bd7240e37d865a0b7c6b9ee78a690c741ac` (CI run `38641945016`, release matrix run `38641945005`), and `@codex` reviewed that exact head with no major issues. No remote migration, deployment, or cloud environment publication ran. Fingerprinted evidence is in `plan/verification/PR-016/`.
 
 PR-017 implements a Worker-native stateless Streamable HTTP endpoint with case-insensitive Bearer auth, bounded JSON-RPC/tool messages, supplied-Origin checks, the four-tool table, and command dispatch through the registry and `Session`. D21 records why the RMCP dependency is omitted to preserve the Rust 1.85 contract and avoid Tokio in the Worker. March-version JSON-RPC batches accept request/notification-only arrays and response-only arrays; they reject `initialize` and mixed response/request-or-notification shapes before dispatch. June-version requests remain single-message. Unknown tools return `-32602`; MCP HTTP errors and command failures preserve all four C-04 fields (`code`, `category`, `message`, and `correlation_id`). Regression tests assert exact status and C-04 fields for every MCP HTTP error path and prove prohibited batches, including those with a sibling tool call, fail during parsing. `cargo fmt --all -- --check`, `cargo xtask check`, `bash scripts/smoke-pr017.sh`, and `cargo xtask ci` pass on merged product source `a7fa901e448619312c176e99102f94a24857c1c0`. PR #18 merged at `dc976f3ec6ffd4b18937cac23748b38b2ef38405`; hosted CI run `38668412916` and release run `38668412849` passed on exact head `a7fa901e448619312c176e99102f94a24857c1c0`. Codex's exact-head review was clean, Sol's review found no findings, and all review threads were resolved. Claude Desktop interoperability and Cloudflare production setup/deployment remain unverified. No remote D1 operation, deployment, or environment publication ran.
+
+PR-018 documentation merged as PR #19 at `756511c4aed7521249b65ee98f28d5ad6497a6d7`.
+
+PR-019 adds a local-only Playwright create → edit → publish → visit workflow. Dashboard create/edit/save uses keyboard input (41 observed actions, zero pointer events); publication uses the local API because the dashboard has no publish control. Axe-core checks dashboard home, funnel dashboard, and the published funnel. The deterministic JSON fuzz suite exercises 10,000 inputs each through duplicate-key validation, editor/publication command parsing, and MCP message parsing without panics. The isolated local Worker/D1 load check creates and publishes 100 funnels, then makes 1,000 public reads; measured p95 was 9.78 ms (max 40.61 ms), below the 100 ms limit. Signal-aware, idempotent SIGINT/SIGTERM teardown removes the Worker process group, temporary D1 state, and Wrangler config during startup or after readiness; the browser runner closes Chromium before Worker teardown, and its finalizer always stops the Worker if browser close throws. Regressions cover both signal phases and synchronous browser-close failure. `cargo fmt --all -- --check`, `cargo xtask check`, `cargo xtask ci`, the PR-010 migration and browser suites, PR-011/012 browser aliases, and all PR-019 suites pass. Axe reported zero critical findings; the dashboard has one serious color-contrast rule affecting four nodes, recorded in the captured output. No application behavior, contract, migration, dependency, or lockfile changed. Fingerprinted evidence is in `plan/verification/PR-019/`. No remote D1 operation, deployment, or environment publication ran.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -300,4 +304,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Finish, open, and review PR-018 against `main`; after its hosted checks and reviews pass, proceed to PR-019 E2E tests and quality. Keep Cloudflare production setup and deployment unverified until credentials and resource IDs are available.
+Open and review PR-019 against `main` after confirming the exact-head checks. Keep Cloudflare production setup and deployment unverified until credentials and resource IDs are available.

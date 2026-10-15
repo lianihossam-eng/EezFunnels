@@ -1192,11 +1192,28 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        correlation_id, normalize_correlation_id, public_slug_from_path,
+        correlation_id, editor_command_parameters, normalize_correlation_id, public_slug_from_path,
         publication_command_parameters, request_if_none_match, valid_public_slug,
         EditorCommandParametersError,
     };
     use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
+        let inputs = super::json::tests::deterministic_json_fuzz_inputs();
+        assert_eq!(inputs.len(), 10_000);
+
+        for (case_number, input) in inputs.iter().enumerate() {
+            let result = std::panic::catch_unwind(|| {
+                let _ = editor_command_parameters("fuzz-funnel", input);
+                let _ = publication_command_parameters("fuzz-funnel", "funnel.publish", input);
+            });
+            assert!(
+                result.is_ok(),
+                "API JSON adapter panicked for case {case_number}: {input:?}"
+            );
+        }
+    }
 
     #[test]
     fn missing_correlation_id_is_generated_and_written_to_headers() {

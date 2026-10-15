@@ -1,0 +1,25 @@
+PR-019 E2E and quality verification
+Evidence refreshed: 2026-10-15T02:59:25Z
+Branch: test/019_e2e
+Base commit: 756511c4aed7521249b65ee98f28d5ad6497a6d7
+Source fingerprint: 67bdc7460428b5c5c4be460e19c6811cdaa416bc22a1f2f68bf2cbd894d0558b (12 source/plan files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json `source_sha256`; status and verification artifacts are excluded.
+
+Implementation:
+- Added a deterministic JSON input generator and 10,000-case no-panic tests for duplicate-key validation, editor/publication command parameter parsing, and MCP message parsing.
+- Added local-only Playwright create → edit → publish → visit coverage. Dashboard create, edit, and save use keyboard navigation (41 observed keyboard actions, zero pointer events); publication uses the local API because the dashboard has no publish control.
+- Axe-core reports zero critical findings on dashboard home, funnel dashboard, and published funnel. Dashboard views each report one serious color-contrast rule across four nodes; the published funnel reports no violations. This observation is recorded without changing application behavior.
+- Added a local load test that creates/publishes 100 funnels and performs 1,000 public reads. p95 was 9.78 ms and max was 40.61 ms against the <100 ms threshold.
+- Wrangler uses ephemeral loopback ports, per-run local D1 persistence and isolated caches. Signal-aware, idempotent SIGINT/SIGTERM teardown removes the Worker process group, D1 state, and temporary config during startup or after readiness. The browser runner closes Chromium before Worker teardown, and its finalizer still stops the Worker if browser close throws synchronously.
+- Child-process signal regressions send SIGTERM after Worker spawn while `/health` is ready but before the helper returns, and again after readiness. The browser-finalizer regression covers a synchronous browser-close error and dual teardown failures. Tests check child exit, port closure, and temporary-resource cleanup where applicable.
+- Added package scripts and CI steps. No dependency, lockfile, contract, migration, renderer, or application behavior changed.
+
+Validation (all commands exited 0):
+- `cargo fmt --all -- --check`, `cargo xtask check`, and `cargo xtask ci` pass. CI includes workspace tests, dashboard WASM assets, local PR-009/017 Worker/D1 smoke checks, and RustSec audit (1,329 advisories, 355 locked dependencies, zero findings).
+- Existing `npm run test:pr010:migration`, `test:pr010:browser`, `test:pr011:browser`, and `test:pr012:browser` passed.
+- New `test:pr019:fuzz`, `test:pr019:browser`, `test:pr019:load`, `test:pr019:worker-signals`, and `test:pr019:browser-finalizer` passed sequentially.
+- Node syntax checks for all six PR-019 scripts and `git diff --check` passed. Fingerprinted, compressed output is under `logs/`; `results.json` contains SHA-256 hashes for source and logs.
+
+Delivery:
+- PR #19 documentation merged at `756511c4aed7521249b65ee98f28d5ad6497a6d7`; PR-017 and PR-018 status entries are closed.
+- PR-019 changes are committed to `test/019_e2e` and pushed for exact-head review. No remote D1 operation, deployment, or Cloudflare environment publication ran.

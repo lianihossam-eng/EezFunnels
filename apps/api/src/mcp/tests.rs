@@ -14,6 +14,20 @@ use axum::http::StatusCode;
 use eez_commands::command_registry;
 
 #[test]
+fn deterministic_mcp_json_fuzzes_ten_thousand_cases_without_panicking() {
+    let inputs = crate::json::tests::deterministic_json_fuzz_inputs();
+    assert_eq!(inputs.len(), 10_000);
+
+    for (case_number, input) in inputs.iter().enumerate() {
+        let result = std::panic::catch_unwind(|| parse_message(input, "2025-03-26"));
+        assert!(
+            result.is_ok(),
+            "MCP JSON parser panicked for case {case_number}: {input:?}"
+        );
+    }
+}
+
+#[test]
 fn accepts_string_and_integer_request_ids() {
     assert!(matches!(
         parse_message(r#"{"jsonrpc":"2.0","id":"client-1","method":"ping"}"#, "2025-03-26"),
