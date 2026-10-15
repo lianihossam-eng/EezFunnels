@@ -1,1 +1,56 @@
-{"schema_version": 1, "name": "webinar", "sections": []}
+{
+  "format_version": 1,
+  "schema_version": 1,
+  "blueprint": "webinar",
+  "theme_id": "minimal",
+  "sections": [
+    {"id": "hero", "type": "hero", "order": 1},
+    {"id": "features", "type": "features", "order": 2},
+    {"id": "testimonials", "type": "testimonials", "order": 3},
+    {"id": "cta", "type": "cta", "order": 4}
+  ],
+  "contents": {
+    "hero": {
+      "type": "hero",
+      "title": "A practical webinar for your next launch",
+      "subtitle": "Join a focused session on planning an offer, writing a clear page, and choosing the next step.",
+      "cta_label": "Reserve my place",
+      "cta_url": "https://example.com/register",
+      "image": null
+    },
+    "features": {
+      "type": "features",
+      "items": [
+        {
+          "title": "Plan the offer",
+          "description": "Outline the audience, promise, and next action before writing the page."
+        },
+        {
+          "title": "Build the page",
+          "description": "Arrange the main message, supporting details, and registration action."
+        },
+        {
+          "title": "Prepare follow-up",
+          "description": "Decide what attendees should receive after the session."
+        }
+      ]
+    },
+    "testimonials": {
+      "type": "testimonials",
+      "items": [
+        {
+          "quote": "Replace this sample with a verified attendee quote before publishing.",
+          "author": "Attendee name",
+          "attribution": "Sample content — replace before publishing"
+        }
+      ]
+    },
+    "cta": {
+      "type": "cta",
+      "title": "Save your seat",
+      "body": "Add the real event date, time, and registration details before sharing this page.",
+      "cta_label": "Register for the webinar",
+      "cta_url": "https://example.com/register"
+    }
+  }
+}
