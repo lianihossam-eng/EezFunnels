@@ -103,7 +103,7 @@ L4: api, dashboard, cli
 | Base de données | D1 (SQLite) | Cloudflare |
 | Stockage objets | R2 | Cloudflare |
 | Cache | KV | Cloudflare |
-| MCP | rmcp | 1.4+ |
+| MCP | Worker-native private DTO adapter | Streamable HTTP 2025-03-26/2025-06-18 |
 | CLI framework | clap | 4 |
 | Sérialisation | serde / serde_json | 1 |
 
@@ -434,13 +434,14 @@ registry.
 
 | Commit | Contenu |
 |:---|:---|
-| `feat(mcp): rmcp 1.4.0+ server (HTTP transport)` | — |
+| `feat(mcp): Worker-native stateless Streamable HTTP adapter` | MCP 2025-03-26 batches / 2025-06-18 single messages |
 | `feat(mcp): bearer token auth (EEZ_MCP_TOKEN)` | Secret env |
 | `feat(mcp): tool execute_command` | Dispatcher universel |
 | `feat(mcp): tool list_commands` | Découverte |
 | `feat(mcp): tool list_funnels, get_funnel` | Read |
-| `feat(mcp): strict Host validation` | — |
+| `feat(mcp): strict Host and supplied Origin validation` | — |
 | `test(mcp): bearer token rejected without header` | 401 |
+| `test(mcp): protocol errors and batch framing` | Unknown tools use `-32602`; malformed or oversized batches fail safely |
 | `test(mcp): execute_command from Claude Desktop` | Smoke test |
 
 **Critère** : Claude Desktop peut créer un funnel via `execute_command("funnel.create", {...})`.
@@ -555,7 +556,7 @@ registry.
 | Type | Self-hosted SaaS single-user |
 | Stack | Rust + Axum + Cloudflare Workers + D1 + R2 + KV |
 | Frontend | Dioxus WASM |
-| MCP | rmcp 1.4+ (HTTP, Bearer token) |
+| MCP | Worker-native stateless Streamable HTTP (Bearer token) |
 | PRs | 21 (PR-000 → PR-020) |
 | Durée | ~26 jours agent |
 | Scope | Dashboard + éditeur + publication + MCP |

@@ -1,0 +1,344 @@
+use axum::http::{HeaderMap, HeaderValue};
+use serde_json::{json, Value};
+
+use super::{
+    authorized, bounded_response_value, command_error_tool_result, command_parameters_bytes,
+    has_json_content_type, has_streamable_http_accept, list_commands_result,
+    negotiate_protocol_version, origin_matches_host, parse_message, protocol_version_header,
+    response_protocol_version, tools_list_result, ClientMessage, JsonRpcId, ParseError,
+    MAX_BATCH_MESSAGES, MAX_COMMAND_PARAMETERS_BYTES, MAX_RESPONSE_BYTES, MCP_PROTOCOL_VERSION,
+    TOOL_SPECS,
+};
+use crate::errors::ApiError;
+use eez_commands::command_registry;
+
+#[test]
+fn accepts_string_and_integer_request_ids() {
+    assert!(matches!(
+        parse_message(r#"{"jsonrpc":"2.0","id":"client-1","method":"ping"}"#, "2025-03-26"),
+        Ok(super::ParsedMessages { messages, is_batch: false })
+            if matches!(messages.as_slice(), [ClientMessage::Request(super::RpcRequest { id: JsonRpcId::String(value), .. })] if value == "client-1")
+    ));
+    assert!(matches!(
+        parse_message(r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "2025-03-26"),
+        Ok(super::ParsedMessages { messages, is_batch: false })
+            if matches!(messages.as_slice(), [ClientMessage::Request(super::RpcRequest { id: JsonRpcId::Number(value), .. })] if value.as_i64() == Some(7))
+    ));
+}
+
+#[test]
+fn absent_id_is_notification_and_explicit_null_is_invalid() {
+    assert!(matches!(
+        parse_message(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "2025-03-26"),
+        Ok(super::ParsedMessages { messages, is_batch: false })
+            if matches!(messages.as_slice(), [ClientMessage::Notification(_)])
+    ));
+    assert!(matches!(
+        parse_message(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#, "2025-03-26"),
+        Ok(super::ParsedMessages { messages, is_batch: false })
+            if messages == vec![ClientMessage::InvalidRequest(None)]
+    ));
+}
+
+#[test]
+fn march_protocol_accepts_bounded_batches_and_june_rejects_them() {
+    let batch = r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"tools/list"}]"#;
+    let parsed = parse_message(batch, "2025-03-26").expect("March supports JSON-RPC batches");
+    assert!(parsed.is_batch);
+    assert_eq!(parsed.messages.len(), 3);
+    assert!(matches!(parsed.messages[0], ClientMessage::Request(_)));
+    assert!(matches!(parsed.messages[1], ClientMessage::Notification(_)));
+    assert!(matches!(parsed.messages[2], ClientMessage::Request(_)));
+    assert_eq!(
+        parse_message(batch, "2025-06-18"),
+        Err(ParseError::InvalidRequest(None))
+    );
+    assert_eq!(
+        parse_message("[]", "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+    let too_many = format!("[{}]", vec!["null"; MAX_BATCH_MESSAGES + 1].join(","));
+    assert_eq!(
+        parse_message(&too_many, "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+}
+
+#[test]
+fn batch_items_preserve_invalid_request_responses_and_ignore_client_responses() {
+    let batch = r#"[null,{"jsonrpc":"2.0","id":"response-1","result":{}},{"jsonrpc":"2.0","id":4,"method":"ping"}]"#;
+    let parsed = parse_message(batch, "2025-03-26").expect("valid batch envelope");
+    assert!(matches!(
+        parsed.messages[0],
+        ClientMessage::InvalidRequest(None)
+    ));
+    assert_eq!(parsed.messages[1], ClientMessage::Response);
+    assert!(matches!(parsed.messages[2], ClientMessage::Request(_)));
+}
+
+#[test]
+fn negotiates_only_the_documented_protocol_subset() {
+    assert_eq!(negotiate_protocol_version("2025-03-26"), "2025-03-26");
+    assert_eq!(negotiate_protocol_version("2025-06-18"), "2025-06-18");
+    assert_eq!(negotiate_protocol_version("2024-11-05"), "2025-06-18");
+    assert_eq!(negotiate_protocol_version("2025-11-25"), "2025-06-18");
+}
+
+#[test]
+fn validates_protocol_version_headers_and_uses_streamable_http_fallback() {
+    let mut headers = HeaderMap::new();
+    assert_eq!(protocol_version_header(&headers), Ok(None));
+
+    headers.insert(MCP_PROTOCOL_VERSION, HeaderValue::from_static("2025-03-26"));
+    assert_eq!(protocol_version_header(&headers), Ok(Some("2025-03-26")));
+    headers.insert(MCP_PROTOCOL_VERSION, HeaderValue::from_static("2025-06-18"));
+    assert_eq!(protocol_version_header(&headers), Ok(Some("2025-06-18")));
+    headers.insert(MCP_PROTOCOL_VERSION, HeaderValue::from_static("2025-11-25"));
+    assert_eq!(protocol_version_header(&headers), Err(()));
+
+    headers.remove(MCP_PROTOCOL_VERSION);
+    headers.append(MCP_PROTOCOL_VERSION, HeaderValue::from_static("2025-03-26"));
+    headers.append(MCP_PROTOCOL_VERSION, HeaderValue::from_static("2025-06-18"));
+    assert_eq!(protocol_version_header(&headers), Err(()));
+}
+
+#[test]
+fn response_protocol_version_uses_init_negotiation_then_header_or_legacy_default() {
+    let super::ParsedMessages { messages, .. } = parse_message(
+        r#"{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
+        "2025-03-26",
+    )
+    .expect("valid initialize request");
+    let Some(ClientMessage::Request(request)) = messages.into_iter().next() else {
+        panic!("initialize is a request");
+    };
+    assert_eq!(
+        response_protocol_version(&request, Some("2025-06-18")),
+        "2025-03-26"
+    );
+
+    let super::ParsedMessages { messages, .. } = parse_message(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        "2025-03-26",
+    )
+    .expect("valid tools/list request");
+    let Some(ClientMessage::Request(request)) = messages.into_iter().next() else {
+        panic!("tools/list is a request");
+    };
+    assert_eq!(
+        response_protocol_version(&request, Some("2025-06-18")),
+        "2025-06-18"
+    );
+    assert_eq!(response_protocol_version(&request, None), "2025-03-26");
+}
+
+#[test]
+fn duplicate_json_keys_are_parse_errors() {
+    assert_eq!(
+        parse_message(
+            r#"{"jsonrpc":"2.0","id":3,"method":"ping","params":{"x":1,"x":2}}"#,
+            "2025-03-26"
+        ),
+        Err(ParseError::Parse)
+    );
+}
+
+#[test]
+fn tool_inventory_is_fixed_and_command_discovery_matches_registry() {
+    assert_eq!(TOOL_SPECS.len(), 4);
+    let result = tools_list_result();
+    let listed = result
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("tool list array");
+    assert_eq!(listed.len(), TOOL_SPECS.len());
+    let commands = command_registry();
+    let listed_commands = list_commands_result();
+    let listed = listed_commands
+        .get("commands")
+        .and_then(Value::as_array)
+        .expect("command list array");
+    assert_eq!(commands.len(), 9);
+    assert_eq!(listed.len(), commands.len());
+    let ids = listed
+        .iter()
+        .filter_map(|command| command.get("id").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"funnel.public.read"));
+}
+
+#[test]
+fn authorization_and_content_type_require_single_valid_headers() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        "authorization",
+        HeaderValue::from_static("Bearer token-value"),
+    );
+    assert!(authorized(&headers, "token-value"));
+    headers.remove("authorization");
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("bearer token-value"),
+    );
+    assert!(authorized(&headers, "token-value"));
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("bEaReR  token-value"),
+    );
+    assert!(authorized(&headers, "token-value"));
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer token-value "),
+    );
+    assert!(!authorized(&headers, "token-value"));
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer wrong-token"),
+    );
+    headers.append(
+        "authorization",
+        HeaderValue::from_static("Bearer token-value"),
+    );
+    assert!(!authorized(&headers, "token-value"));
+
+    let mut content_type = HeaderMap::new();
+    content_type.append("content-type", HeaderValue::from_static("application/json"));
+    assert!(has_json_content_type(&content_type));
+    content_type.append("content-type", HeaderValue::from_static("text/plain"));
+    assert!(!has_json_content_type(&content_type));
+    content_type.clear();
+    content_type.insert(
+        "content-type",
+        HeaderValue::from_static("application/json; charset=utf-8, text/plain"),
+    );
+    assert!(!has_json_content_type(&content_type));
+}
+
+#[test]
+fn supplied_origins_must_be_single_http_origins_for_the_allowed_host() {
+    let mut headers = HeaderMap::new();
+    headers.insert("host", HeaderValue::from_static("eezfunnel.workers.dev"));
+    assert!(origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("https://eezfunnel.workers.dev"),
+    );
+    assert!(origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("https://attacker.example"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("https://attacker.example,eezfunnel.workers.dev"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("https:// eezfunnel.workers.dev"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("https://eezfunnel.workers.dev/path"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.insert("origin", HeaderValue::from_static("null"));
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.insert(
+        "origin",
+        HeaderValue::from_static("http://eezfunnel.workers.dev"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+    headers.append(
+        "origin",
+        HeaderValue::from_static("https://eezfunnel.workers.dev"),
+    );
+    assert!(!origin_matches_host(&headers, Some("https")));
+}
+
+#[test]
+fn streamable_http_accept_requires_both_json_and_event_stream() {
+    let mut accept = HeaderMap::new();
+    assert!(!has_streamable_http_accept(&accept));
+
+    accept.insert("accept", HeaderValue::from_static("application/json"));
+    assert!(!has_streamable_http_accept(&accept));
+
+    accept.insert("accept", HeaderValue::from_static("text/event-stream"));
+    assert!(!has_streamable_http_accept(&accept));
+
+    accept.insert("accept", HeaderValue::from_static("*/*"));
+    assert!(!has_streamable_http_accept(&accept));
+
+    accept.insert(
+        "accept",
+        HeaderValue::from_static("application/json;q=0, text/event-stream"),
+    );
+    assert!(!has_streamable_http_accept(&accept));
+
+    accept.insert(
+        "accept",
+        HeaderValue::from_static("Application/JSON; q=0.8, text/event-stream"),
+    );
+    assert!(has_streamable_http_accept(&accept));
+
+    accept.insert(
+        "accept",
+        HeaderValue::from_static("application/json, text/event-stream"),
+    );
+    accept.append("accept", HeaderValue::from_static("text/plain"));
+    assert!(has_streamable_http_accept(&accept));
+}
+
+#[test]
+fn serialized_command_parameters_enforce_the_limit_at_the_boundary() {
+    let within_limit = json!({
+        "value": "x".repeat(MAX_COMMAND_PARAMETERS_BYTES - 12),
+    });
+    assert_eq!(
+        command_parameters_bytes(&within_limit)
+            .expect("parameters at the limit are accepted")
+            .len(),
+        MAX_COMMAND_PARAMETERS_BYTES
+    );
+
+    let over_limit = json!({
+        "value": "x".repeat(MAX_COMMAND_PARAMETERS_BYTES - 11),
+    });
+    assert!(command_parameters_bytes(&over_limit).is_err());
+}
+
+#[test]
+fn oversized_tool_result_is_replaced_with_a_complete_safe_error() {
+    let large_value =
+        json!({ "content": [{ "type": "text", "text": "x".repeat(MAX_RESPONSE_BYTES) }] });
+    let response = bounded_response_value(json!("request-1"), large_value, true, "correlation-1")
+        .expect("tool response has a bounded fallback");
+    let response = serde_json::to_vec(&response).expect("complete JSON-RPC response");
+    assert!(response.len() <= MAX_RESPONSE_BYTES);
+    let response = serde_json::from_slice::<Value>(&response).expect("complete JSON-RPC response");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("fallback text");
+    assert!(text.contains("response/too_large"));
+    assert!(!text.contains(&"x".repeat(128)));
+}
+
+#[test]
+fn command_tool_errors_preserve_the_c04_error_fields() {
+    let response = command_error_tool_result(
+        &ApiError::from_code("validation/missing_field"),
+        "request-123",
+    );
+    assert_eq!(response["isError"], true);
+    let text = response["content"][0]["text"]
+        .as_str()
+        .expect("tool error text");
+    let error = serde_json::from_str::<Value>(text).expect("complete C-04 error payload");
+    assert_eq!(error["code"], "validation/missing_field");
+    assert_eq!(error["category"], "validation");
+    assert_eq!(error["message"], "The request is invalid.");
+    assert_eq!(error["correlation_id"], "request-123");
+}
