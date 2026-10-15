@@ -1,0 +1,38 @@
+PR-021 documentation candidate verification
+Date: 2026-10-15 UTC
+Base repository HEAD: 3d46ecaf4fc6dd0411ae047841b1001f1ab1f8e6
+Working changes: documentation and PR-021 verification artifacts only; no product code, frozen contract, migration, lockfile, or dependency changed.
+
+PASS (exit 0): `git diff --check`
+
+PASS (exit 0): `python3 plan/verification/PR-021/validate-roadmap.py`
+Exact output:
+PASS roadmap has the eight ordered phases
+PASS pair matrix contains each of the 28 unique phase pairs
+PASS roadmap contains six ordered combined journeys
+PASS ledger has 32 unique sequential Task-IDs PR-021 through PR-052 (31 future feature tasks)
+PASS dependency parser expands direct, slash-separated, and range references
+PASS all 32 task entries have unique branches, dependency fields, and 112 Conventional Commit subjects
+PASS every planned dependency points to a completed or earlier Task-ID; no forward edge or cycle
+PASS private account/auth/admin implementation is confined to Phase 8
+PASS frozen contracts, restore gate, and external private overlay boundaries are explicit
+PASS ledger names separate transport/schema versions, submission event, and unknown external-effect state
+Exact output is also stored in `roadmap-validation.log` for direct replay comparison.
+
+PASS (exit 0): `python3 plan/verification/PR-021/prototypes/scope_probe.py`
+Exact output is in `prototypes/scope_probe_execution.txt`: eight SQLite checks pass. It deliberately demonstrates that an unscoped mutation affects both matching owners. This is not D1, Worker, R2/KV, auth, restore, latency, or cost evidence.
+
+PASS (exit 0): `python3 plan/verification/PR-021/prototypes/commerce-prototype.py`
+Exact output is in `prototypes/commerce_prototype_execution.txt`: local SQLite model covers atomic order/receipt/outbox, replay, provider event duplicate/stale handling, an ambiguous provider result as `unknown`, and reconciliation. It is not D1, Rust Worker, Queue/Workflow, real-provider, pricing, or production evidence.
+
+PASS (exit 0): `source .project-tools/env.sh && cargo xtask check`
+Captured output: `cargo-xtask-check.log`; trailing terminal padding is removed so the artifact passes `git diff --check`.
+
+PASS (exit 0): `source .project-tools/env.sh && cargo xtask ci`
+Captured output: `cargo-xtask-ci.log`; trailing terminal padding is removed so the artifact passes `git diff --check`. It includes workspace tests, dashboard WASM/assets, local Worker/D1 and MCP smoke, and a successful audit run over 355 locked dependencies with 1,329 advisories loaded. Wrangler used local bindings only; no remote Cloudflare operation or deployment ran.
+
+Hosted release facts are the prior GitHub evidence recorded in `plan/STATUS.md`; this local check does not re-run or upgrade that evidence. Cloudflare production deployment and Claude Desktop interoperability remain unverified.
+
+## Revised-candidate revalidation after Pass 3 corrections
+
+The four Pass 3 findings were integrated before the recorded `cargo xtask check` and `cargo xtask ci` run. After completing that CI, the roadmap validator and both unchanged SQLite prototypes were rerun; their exact current outputs are in `roadmap-validation.log` and the two prototype execution files. `python3 -m json.tool plan/verification/PR-021/results.json` and `git diff --check` pass. No Rust source, dependency, lockfile, or runtime contract changed after repository CI; later edits only refreshed review status and evidence records. The revised candidate remains subject to targeted review of its new manifest and Sol's exact-head PR review.

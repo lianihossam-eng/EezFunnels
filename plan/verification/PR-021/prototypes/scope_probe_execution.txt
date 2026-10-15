@@ -1,0 +1,10 @@
+SQLite 3.53.1; foreign_keys=1
+PASS same slug and resource IDs can exist in separate workspace scopes
+PASS scoped revision lookup selects only the caller's workspace row
+PASS composite foreign key rejects an order linked to another workspace revision
+PASS composite foreign key rejects cross-workspace published pointer
+PASS unscoped query still mutates both matching owners; scope must be mandatory at repository boundary
+PASS compare-and-swap publish claims the expected empty pointer once
+PASS second transition claims only the expected current pointer
+PASS outbox failure rolls back publication pointer in the same SQLite transaction
+LIMITS SQLite-only: no D1/Workers/R2/KV transaction proof; no authentication or tenant runtime proof; no restore/backup proof; no latency/cost claim.

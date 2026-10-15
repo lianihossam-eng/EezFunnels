@@ -1,0 +1,11 @@
+crash_before_commit=simulated_crash_before_commit
+after_precommit_crash=orders:0,receipts:0,outbox:0
+crash_after_commit=simulated_before_queue_publish
+same_key_replay_result={"order_id": "ord-1", "status": "pending"}
+after_postcommit_replay=orders:1,receipts:1,outbox:1
+provider_event_v2=applied
+provider_duplicate_evt_2=duplicate_ignored
+provider_out_of_order_v1=stale_stored_reconcile_required
+payment_projection=["pay-1", 2, "paid"]
+provider_accept_then_response_lost=attempt_unknown
+after_reconcile=["confirmed", "pay-remote-1"]
