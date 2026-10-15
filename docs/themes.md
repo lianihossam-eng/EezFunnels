@@ -18,7 +18,7 @@ Select a section in the left outline to expose its settings in the inspector. Av
 
 The preview refreshes as you edit. It offers Mobile (375 px), Tablet (768 px), and Desktop (1280 px) widths. A hero image appears as a safe placeholder in the editor preview; a saved published page loads the configured image URL. The browser will make that request to the image host when a visitor opens the page.
 
-Use **Undo** or **Redo** before saving to move through editor changes. **Save revision** stores an immutable revision. To make it public, publish the saved revision from the funnel workflow.
+Use **Undo** or **Redo** before saving to move through editor changes. **Save revision** stores an immutable revision; the editor has no publish action yet. To publish the latest saved revision, use `eez funnels publish <funnel-id>`. API clients can call `POST /api/funnels/:funnel_id/publish`, and MCP clients can run `funnel.publish` through `execute_command`. See [CLI](commands.md#native-cli), [HTTP routes](commands.md#http-routes), and [command registry](commands.md#executable-command-registry).
 
 ## Current limits
 
