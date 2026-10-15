@@ -1,1 +1,46 @@
-{"schema_version": 1, "name": "vsl", "sections": []}
+{
+  "format_version": 1,
+  "schema_version": 1,
+  "blueprint": "vsl",
+  "theme_id": "bold",
+  "sections": [
+    {"id": "hero", "type": "hero", "order": 1},
+    {"id": "testimonials", "type": "testimonials", "order": 2},
+    {"id": "cta", "type": "cta", "order": 3}
+  ],
+  "contents": {
+    "hero": {
+      "type": "hero",
+      "title": "A clearer way to plan your next campaign",
+      "subtitle": "Watch the short presentation to see the process, what is included, and who it is for.",
+      "cta_label": "See the program",
+      "cta_url": "https://example.com/offer",
+      "image": {
+        "url": "https://images.example.com/campaign-overview.jpg",
+        "alt": "Campaign planning worksheet on a desk"
+      }
+    },
+    "testimonials": {
+      "type": "testimonials",
+      "items": [
+        {
+          "quote": "Replace this sample with a real customer result and approved wording.",
+          "author": "Customer name",
+          "attribution": "Sample content — replace before publishing"
+        },
+        {
+          "quote": "Use a second verified quote here, or remove this item if you do not have one.",
+          "author": "Customer name",
+          "attribution": null
+        }
+      ]
+    },
+    "cta": {
+      "type": "cta",
+      "title": "Review the offer",
+      "body": "Describe the program, price, and terms clearly before inviting visitors to continue.",
+      "cta_label": "View the offer",
+      "cta_url": "https://example.com/offer"
+    }
+  }
+}
