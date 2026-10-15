@@ -1,0 +1,167 @@
+{
+  "task": "PR-020",
+  "evidence_refreshed_at_utc": "2026-10-15T03:28:51Z",
+  "branch": "release/v0.1.0",
+  "base_commit": "f85cf8fe030024066149a0c4e9264bd277d7e9fa",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for files listed in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
+  "source_fingerprint_sha256": "e7eeab9f80a4bb9b0c27e069e8f70d0f10e3de0d9dc18f34639828c2b6ca4332",
+  "source_file_count": 3,
+  "source_sha256": {
+    ".github/workflows/release.yml": "bd26dcd3d709d9862b33266377c47fe85942a8059287349dbcb5afa37e53f60e",
+    "CHANGELOG.md": "8f5970e4dd4bfe1ae8e6b38672af952bc109fb060bd36a8a07dffda48046a547",
+    "release-notes/v0.1.0.md": "ec3b27b7caa0fc2b84659c9f46f1faeffee16c5ed1109f707494f9f572871b52"
+  },
+  "implementation": {
+    "cargo_version": "0.1.0 (already set in workspace; manifests unchanged)",
+    "release_assets": [
+      "eez-v0.1.0-linux-x86_64",
+      "eez-v0.1.0-macos-aarch64",
+      "eez-v0.1.0-windows-x86_64.exe"
+    ],
+    "workflow": "Pull requests build and test three native targets with contents:read. Packaging/artifact upload runs only for refs/tags/v0.1.0. A tag-guarded publish job has contents:write, downloads the three assets, generates/verifies SHA256SUMS, then invokes local gh release create with the checked-in release notes and repository token.",
+    "release_notes": "CHANGELOG date updated to 2026-10-15; release-notes/v0.1.0.md documents included product behavior, download names, selected-entry checksum verification for each OS, per-platform CLI installation/PATH setup, setup links, and single-user limitations.",
+    "third_party_release_action": false,
+    "application_behavior_changed": false,
+    "dependencies_added": false,
+    "cargo_manifests_changed": false,
+    "cloudflare_remote_operations": false
+  },
+  "validation": {
+    "workflow_actionlint": {
+      "command": "/tmp/actionlint-1.7.12/actionlint .github/workflows/release.yml",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/actionlint.log.gz",
+      "outcome": "PASS: actionlint v1.7.12; release archive SHA-256 was verified before execution."
+    },
+    "workflow_permissions_and_trigger": {
+      "command": "python3 PyYAML structural assertions on .github/workflows/release.yml",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/workflow-structure.log.gz",
+      "outcome": "PASS: PR is build/test-only; package/upload/release are v0.1.0-tag-only; contents:write is confined to the guarded publish job; asset names are distinct."
+    },
+    "cargo_fmt": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/formatter.log.gz"
+    },
+    "cargo_xtask_check": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo xtask check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/xtask-check.log.gz",
+      "outcome": "PASS: format, Clippy, workspace tests, and layer checks."
+    },
+    "cargo_xtask_ci": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo xtask ci",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/xtask-ci.log.gz",
+      "outcome": "PASS: workspace checks, WASM/assets, local PR-014/017 Worker/D1 smokes, and RustSec audit.",
+      "advisories_loaded": 1329,
+      "locked_dependencies_scanned": 355,
+      "audit_findings": 0,
+      "remote_operations": false
+    },
+    "linux_release_build": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo build --locked --release -p eez-cli --target x86_64-unknown-linux-gnu",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/linux-build.log.gz"
+    },
+    "linux_cli_tests": {
+      "command": "source /workspace/EezFunnels/.project-tools/env.sh && CARGO_TARGET_DIR=/tmp/EezFunnels-019-target cargo test --locked -p eez-cli --target x86_64-unknown-linux-gnu",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/linux-tests.log.gz",
+      "unit_tests_passed": 6,
+      "process_tests_passed": 11
+    },
+    "linux_release_packaging": {
+      "command": "copy release/eez to eez-v0.1.0-linux-x86_64; sha256sum eez-v0.1.0-* > SHA256SUMS; sha256sum --check SHA256SUMS; run --help",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/linux-packaging.log.gz",
+      "asset": "eez-v0.1.0-linux-x86_64",
+      "sha256": "c10a89bafb52e2a3441dde8e1fc5bcd9131c345b1e54f34acd1f1b9b9a5c5767",
+      "checksum_verified": true,
+      "cli_help_runs": true
+    },
+    "gh_cli_flags": {
+      "command": "gh release create --help",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/gh-cli.log.gz",
+      "outcome": "PASS: installed gh supports --verify-tag, --notes-file, and --title."
+    },
+    "static_checks": {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/static-audit.log.gz"
+    },
+    "release_notes_commands": {
+      "command": "isolated release-notes validation: run Linux/macOS selected-entry checks with only selected binary + SHA256SUMS; run documented Linux/macOS install blocks; validate Windows PowerShell entry selection and install commands against generated manifest",
+      "exit_code": 0,
+      "log": "plan/verification/PR-020/logs/release-notes-validation.log.gz",
+      "outcome": "PASS: Linux and macOS selected-entry checksum commands succeed with only the chosen asset present; absent rows fail under pipefail. Documented Linux install, executable mode, PATH, and actual release binary --help pass. macOS install/PATH/help pass with a local executable placeholder. Windows commands select exactly one Windows hash and scope comparison to the Windows asset; PowerShell runtime was unavailable on this Linux host, so these commands were structurally checked rather than executed."
+    }
+  },
+  "logs": {
+    "plan/verification/PR-020/logs/actionlint.log.gz": {
+      "sha256": "6cad3aba223bb5c4f0b9c1a58919c09a6aeefdd8cd738166848f0f1454f39dc5",
+      "raw_sha256": "4d31b494125ef215c35a75c84d441247aea5a07d2841df627a01af2f3a2a798e",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/formatter.log.gz": {
+      "sha256": "59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/gh-cli.log.gz": {
+      "sha256": "9f0d672bec2192dda855af2c989a9807feaf3aed7fa0112df74528cc7f2f612e",
+      "raw_sha256": "608ce15aaecea2bdce37b629886ce6525db3fee9084305795102aac3b290569c",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/linux-build.log.gz": {
+      "sha256": "fd51dbf2cf4271e7ff8daa761cdc2f7a3d5c985ab428154fe3bb37db8bd326c0",
+      "raw_sha256": "85c8dbac64ed6a362d668bf3988686e26e947620bb15cfdbe2e999a0ff8261b2",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/linux-packaging.log.gz": {
+      "sha256": "81f0d74372a8b57369c246c190ce43f55723b49c0edaf260b31e72614dcf8763",
+      "raw_sha256": "8c962560c2310400720564b994b7f58922eac8ea1a5d926a596b71e97389dcd2",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/linux-tests.log.gz": {
+      "sha256": "fc3646ccddb79c0d18c5ba27357c50492e7c85e750cc4791abbac123ef6f80e0",
+      "raw_sha256": "e76b59109cf465be2bf88d91c2e3c195e7a84f7b0b812c865c99ff9e3078e0dd",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/release-notes-validation.log.gz": {
+      "sha256": "1e739c4e3a3a83e900dd59273aef78d769113397fba65085119df4adc1045302",
+      "raw_sha256": "1b6ff7b687ea4cd319ab0290a6653773abaa8f0b2367a81c4597994b115a99b0",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/static-audit.log.gz": {
+      "sha256": "17205ed999fbcda4c0ce2fb49a7646c941629a86382b8ac8cfc3666d906e9e3c",
+      "raw_sha256": "1220446829d1e63a819c6fb6b8fdb18e5d3c249bd335a78b8f743351081e604a",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/workflow-structure.log.gz": {
+      "sha256": "5ee4587768acde80d8ae773eb2d140bf29d2d28c7a14be5dd14a2b01248c66b2",
+      "raw_sha256": "db6fb2a2cd8496caf09a1f808de8e735ecde97abe6c4e16bfcac41c140606ea1",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/xtask-check.log.gz": {
+      "sha256": "d5782b1d58b1d6f6a529d120823e88f6a6c46037b52ea96a444c822c7f16bf80",
+      "raw_sha256": "c5938d2aa6b93ef9cd220cb4bd64be4934b59b2fdcbf6b6ff0add607df3a9e7c",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-020/logs/xtask-ci.log.gz": {
+      "sha256": "433275299cb5b26da24c940e18fe8d362236e038dc4b6db4deb373919b2cab36",
+      "raw_sha256": "e1ccabb76fd92fd9376c6786290d42b29f79720968e3c5f7cf04349e693249db",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    }
+  },
+  "delivery": {
+    "tag_created": false,
+    "github_release_created": false,
+    "cloudflare_remote_operation": false,
+    "worktree_changes_uncommitted": false,
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/21",
+    "pull_request_number": 21
+  }
+}

@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Landing page
 - Custom subdomains
 
-## [0.1.0] - TBD
+## [0.1.0] - 2026-10-15
 
 ### Added
 - Dashboard Dioxus WASM at /
@@ -24,4 +24,4 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Publication at /f/:slug
 - CLI: eez funnels list, eez funnels create, eez deploy
 - MCP server at /mcp with execute_command
-- Cloudflare Workers + D1 + R2 + KV deployment
+- Cloudflare Workers runtime configured for D1, R2, and KV

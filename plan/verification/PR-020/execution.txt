@@ -1,0 +1,24 @@
+PR-020 v0.1.0 release verification
+Evidence refreshed: 2026-10-15T03:28:51Z
+Branch: release/v0.1.0
+Base commit: f85cf8fe030024066149a0c4e9264bd277d7e9fa
+Source fingerprint: e7eeab9f80a4bb9b0c27e069e8f70d0f10e3de0d9dc18f34639828c2b6ca4332 (3 release-source files)
+Fingerprint algorithm: SHA-256 of sorted `path SHA256\n` lines in results.json source_sha256; plan/STATUS.md and verification artifacts are excluded.
+
+Implementation:
+- Kept workspace/Cargo version at the existing 0.1.0; no manifest churn.
+- Replaced the release workflow's broad v* trigger with the explicit v0.1.0 tag. Pull requests build and test Linux x86_64, Apple Silicon macOS, and Windows x86_64 with read-only repository access.
+- The three distinct release binaries are packaged and uploaded only on the v0.1.0 tag. A separate tag-guarded publish job has contents:write, creates SHA256SUMS, verifies it, and calls the local gh CLI with the repository token and checked-in release notes. No third-party release action is used.
+- Updated the changelog date to 2026-10-15 and added detailed v0.1.0 notes with download names, checksum instructions, CLI setup, and release limitations.
+- No application behavior, dependency, migration, Cloudflare resource, or remote operation changed. The v0.1.0 tag and GitHub Release were not created.
+
+Validation (required checks exited 0; the missing-checksum negative case failed as expected):
+- actionlint 1.7.12 and PyYAML structural checks pass; checks confirm the pull-request and tag-only permission boundaries. `gh release create --help` confirms the workflow's selected flags.
+- `cargo fmt --all -- --check`, `cargo xtask check`, and `cargo xtask ci` pass. CI includes local Worker/D1 smokes and RustSec (1,329 advisories, 355 dependencies, zero findings).
+- Linux release build and target tests pass (6 unit, 11 process tests). The staged `eez-v0.1.0-linux-x86_64` binary runs `--help` and its SHA256SUMS entry verifies. macOS and Windows packaging will be exercised by hosted PR/release matrix jobs.
+- Release-note verification exercises Linux/macOS selected-entry checks with only one asset downloaded, rejects a missing checksum row, runs the documented Linux install against the actual release binary, and runs the macOS install with a local placeholder. Windows checksum and install commands are structurally checked against a generated three-entry manifest; PowerShell is not installed on this Linux host, so those commands were not executed.
+- `git diff --check` passes. Captured compressed output and source/log hashes are recorded alongside this file in `results.json` and `logs/`.
+
+Delivery:
+- PR #21 is open at https://github.com/lianihossam-eng/EezFunnels/pull/21. Branch `release/v0.1.0` was created directly from `origin/main` commit `f85cf8fe030024066149a0c4e9264bd277d7e9fa`; hosted checks are pending on the final PR head.
+- No v0.1.0 tag or release has been created. No Cloudflare action was run.
