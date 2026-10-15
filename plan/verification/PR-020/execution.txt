@@ -1,5 +1,5 @@
 PR-020 v0.1.0 release verification
-Evidence refreshed: 2026-10-15T03:22:04Z
+Evidence refreshed: 2026-10-15T03:23:44Z
 Branch: release/v0.1.0
 Base commit: f85cf8fe030024066149a0c4e9264bd277d7e9fa
 Source fingerprint: d81a3b3e98f90509691cf343cad2898244ac9f1cc3e9e9705449bfa8c675b33f (3 release-source files)
@@ -19,5 +19,5 @@ Validation (all commands exited 0):
 - `git diff --check` passes. Captured compressed output and source/log hashes are recorded alongside this file in `results.json` and `logs/`.
 
 Delivery:
-- PR-019 merged at `f85cf8fe030024066149a0c4e9264bd277d7e9fa`; this branch was created directly from that `origin/main` commit.
+- PR #21 is open at https://github.com/lianihossam-eng/EezFunnels/pull/21. Branch `release/v0.1.0` was created directly from `origin/main` commit `f85cf8fe030024066149a0c4e9264bd277d7e9fa`; hosted checks are pending on the final PR head.
 - No v0.1.0 tag or release has been created. No Cloudflare action was run.

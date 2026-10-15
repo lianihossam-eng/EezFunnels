@@ -1,6 +1,6 @@
 {
   "task": "PR-020",
-  "evidence_refreshed_at_utc": "2026-10-15T03:22:04Z",
+  "evidence_refreshed_at_utc": "2026-10-15T03:23:44Z",
   "branch": "release/v0.1.0",
   "base_commit": "f85cf8fe030024066149a0c4e9264bd277d7e9fa",
   "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for files listed in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
@@ -149,6 +149,8 @@
     "tag_created": false,
     "github_release_created": false,
     "cloudflare_remote_operation": false,
-    "worktree_changes_uncommitted": false
+    "worktree_changes_uncommitted": false,
+    "pull_request": "https://github.com/lianihossam-eng/EezFunnels/pull/21",
+    "pull_request_number": 21
   }
 }
