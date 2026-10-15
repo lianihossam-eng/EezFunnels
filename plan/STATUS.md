@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-021 Shared product boundary and roadmap (three adversarial passes completed; pass-3 corrections integrated into a revised candidate; targeted confirmation and exact-head PR review pending; feature work remains gated)
+Current phase: PR-053 Project-local skills and workflow (two commits complete; local checks green; exact-head PR review pending; PR-022 remains gated)
 Last updated: 2026-10-15
 
 ## Phases
@@ -26,7 +26,8 @@ Last updated: 2026-10-15
 - [x] PR-018 Documentation (PR #19 merged at `756511c4aed7521249b65ee98f28d5ad6497a6d7`)
 - [x] PR-019 Tests E2E + quality (merged as PR #20 at `f85cf8fe030024066149a0c4e9264bd277d7e9fa`)
 - [x] PR-020 Release v0.1.0 (PR #21 merged; GitHub release published)
-- [ ] PR-021 Shared product boundary and roadmap (documentation, local adversarial review, and exact-head PR review; no feature implementation)
+- [x] PR-021 Shared product boundary and roadmap (merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`; no feature implementation)
+- [ ] PR-053 Project-local skills and workflow (cross-cutting setup before PR-022; no product behavior)
 
 ## Verified locally
 
@@ -46,7 +47,7 @@ PR-019 adds a local-only Playwright create → edit → publish → visit workfl
 
 PR-020 prepared v0.1.0 release notes and Linux x86_64, macOS Apple Silicon, and Windows x86_64 CLI assets. PR #21 merged at 2026-10-15 03:35:40Z as `3d46ecaf4fc6dd0411ae047841b1001f1ab1f8e6`. Its hosted check run `38676533684` and native release matrix run `38676533683` passed. The `v0.1.0` tag workflow run `38677096705` passed on the merge commit. The GitHub Release was published at 03:38:27Z with `eez-v0.1.0-linux-x86_64`, `eez-v0.1.0-macos-aarch64`, `eez-v0.1.0-windows-x86_64.exe`, and `SHA256SUMS`. Fingerprinted local verification is in `plan/verification/PR-020/`. This release confirms published CLI artifacts only. It does not verify Cloudflare production bindings, deployment, or `PRODUCTION_READY` status.
 
-PR-021 records the user-confirmed shared-product boundary, current release baseline, eight phases, 28 phase pairs, six combined journeys, version register, and canonical Task-ID ledger (`PR-021`–`PR-052`): this documentation task plus 31 future feature tasks. The ledger specifies branches, conventional commit subjects, dependencies, UI/API/CLI/MCP surfaces, migrations/compatibility, tests, and evidence gates. Four independent first-pass reviews, four cross-reviews, and four exact-candidate pass-3 reports are integrated. Pass 3 returned `CORRECTIONS_REQUIRED`; this revised candidate adds restore-surviving deletion gates, fail-closed domain routing and transfer, explicit path-alias behavior, source/projection/UTM policy, payment/email provider separation, job-detail recovery UX, concrete cost fixtures, immutable frozen-contract handling, and an external private overlay pinned to the public core. The targeted correction review and exact-head PR review remain pending. Review provenance, P3 submission-versus-Lead arbitration, prototype outputs, report hashes, and limits are in `plan/verification/PR-021/review-ledger.md`. The DeepSeek share redirected to sign-in; zero prompts were sent, and the user chose local review. Feature implementation remains gated on final plan review.
+PR-021 records the user-confirmed shared-product boundary, current release baseline, eight phases, 28 phase pairs, six combined journeys, version register, and canonical Task-ID ledger (`PR-021`–`PR-052`): this documentation task plus 31 future product tasks. The ledger specifies branches, conventional commit subjects, dependencies, UI/API/CLI/MCP surfaces, migrations/compatibility, tests, and evidence gates. Four independent first-pass reviews, four cross-reviews, and four exact-candidate pass-3 reports were integrated. Pass 3 returned `CORRECTIONS_REQUIRED`; the merged candidate added restore-surviving deletion gates, fail-closed domain routing and transfer, explicit path-alias behavior, source/projection/UTM policy, payment/email provider separation, job-detail recovery UX, concrete cost fixtures, immutable frozen-contract handling, and an external private overlay pinned to the public core. Closure: the revised plan passed exact-head PR review and merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`. PR-053 records follow-up journey and consent clarifications before feature work begins. Review provenance, P3 submission-versus-Lead arbitration, prototype outputs, report hashes, and limits remain in `plan/verification/PR-021/review-ledger.md`. The DeepSeek share redirected to sign-in; zero prompts were sent, and the user chose local review.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -316,4 +317,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Complete targeted confirmation against the revised manifest in `plan/verification/PR-021/candidate-hashes.sha256`, run structural/document checks and repository CI on this documentation-only diff, then open PR-021 and request Sol's exact-head review. Do not begin business feature implementation until the consolidated plan passes review. Keep Cloudflare production checks separate until the required credentials, resource IDs, and scope are available.
+Push the completed PR-053 branch, open `[PR-053] Add project-local skill workflow`, tag `@codex`, and request Sol's exact-head review. Resolve all review threads and require hosted checks before merge. PR-022 is the next product task after PR-053 merges. Keep Cloudflare production checks separate until the required credentials, resource IDs, and scope are available.

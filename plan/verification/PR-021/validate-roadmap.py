@@ -32,8 +32,8 @@ print("PASS roadmap contains six ordered combined journeys")
 
 entries = list(re.finditer(r"^### PR-(\d+): (.+)$", LEDGER, re.M))
 ids = [int(entry.group(1)) for entry in entries]
-assert ids == list(range(21, 53)), f"canonical Task-ID sequence mismatch: {ids}"
-print("PASS ledger has 32 unique sequential Task-IDs PR-021 through PR-052 (31 future feature tasks)")
+assert ids == list(range(21, 54)), f"canonical Task-ID sequence mismatch: {ids}"
+print("PASS ledger has PR-021 through PR-053 in order (31 product tasks plus cross-cutting PR-053)")
 
 branches: set[str] = set()
 commits_checked = 0
@@ -97,6 +97,11 @@ assert "restore-before-delete proof" in LEDGER
 assert "private overlay repository" in LEDGER
 assert "private-only environment flag" in ROADMAP
 print("PASS frozen contracts, restore gate, and external private overlay boundaries are explicit")
+
+assert "### PR-053: install and route project-local skills" in LEDGER
+assert LEDGER.index("### PR-052:") < LEDGER.index("### PR-053:")
+assert "must complete before PR-022 starts" in LEDGER
+print("PASS cross-cutting PR-053 follows the stable product-task IDs and gates the first product task")
 
 assert "16 KiB" in LEDGER and "1 MiB" in LEDGER
 assert "manifest_version" in LEDGER and "schema_version" in LEDGER
