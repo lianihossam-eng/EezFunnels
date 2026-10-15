@@ -55,20 +55,19 @@ Enforced by cargo xtask layers.
 
 ### Before writing code
 
-- /architect if the change touches a function boundary.
-- /poteto-mode playbook bug-fix for bugs.
-- /poteto-mode playbook feature for features.
+- Read `docs/skill-workflow.md` and load only the skills relevant to the Task-ID.
+- Use `architect` and `codebase-design` for cross-boundary changes; use `domain-modeling` when changing domain invariants.
+- Use the documented bug-diagnosis method for regressions. Do not assume Cursor-only playbooks or runners are available.
 
 ### While writing code
 
-- /tdd: failing test first.
+- `tdd`: failing behavior test first.
 - Atomic commits. Conventional messages. Task-ID: PR-XXX.
 
 ### Before commit
 
 - cargo xtask check must pass (fmt, clippy -D warnings, tests, layers).
-- /no-comments on the diff.
-- /interrogate on the diff.
+- Apply `no-comments` and `interrogate` as local diff checks; do not depend on Cursor tools or block on user questions.
 
 ### Before merge
 
@@ -77,6 +76,8 @@ Enforced by cargo xtask layers.
   PR-001 introduces it.
 - Starting with PR-001, `cargo xtask ci` (check, WASM, and `cargo audit`) must pass before merging
   PR-001 and every later PR.
+- Hosted checks must pass on the exact PR head. Request Sol's exact-head review and tag `@codex`
+  for independent review or questions; resolve review threads before Sol merges.
 - Update plan/STATUS.md.
 
 ## Escalation
@@ -93,13 +94,16 @@ Otherwise, continue with the next independent PR.
 | Trigger | Skill |
 |:--------|:------|
 | New session | Read status/architecture/AGENTS |
-| Cross-boundary change | /architect |
-| Feature | /poteto-mode playbook feature |
-| Bug fix | /poteto-mode playbook bug-fix |
-| Before code | /tdd |
-| Before commit | /no-comments + /interrogate |
-| Numeric claim | /benchmark-checklist |
-| Opening PR | /opening-a-pr |
+| Any planned task | Read docs/skill-workflow.md and the PR ledger entry |
+| Cross-boundary change | architect + codebase-design |
+| Domain invariant | domain-modeling |
+| External provider/Cloudflare behavior | research using official, current sources |
+| Unproven runtime or repeated verification gap | prototype; create-verification-skill only for a recurring proof |
+| Before code | tdd |
+| Before commit | no-comments + interrogate (local checks) |
+| Numeric claim | benchmark-checklist |
+| UI change | Impeccable only under its pilot/provenance gate; browser and accessibility checks remain required |
+| Opening PR | Follow docs/skill-workflow.md and the PR ledger; opening-a-pr is a Cursor-oriented playbook, not the project workflow |
 | End of PR | Update plan/STATUS.md |
 | Retro | /reflect |
 
@@ -115,6 +119,8 @@ Never conflate. A green test is not a production readiness signal.
 ## What not to do
 
 - Do not modify a contract.
+- Project skills are advisory; contracts, roadmap, tests, and exact-head review are authoritative.
+- Do not run Cursor-only automation, hooks, model routing, or merge playbooks in the Codex workflow.
 - Do not declare PASS without execution.txt + results.json.
 - Do not add a dependency without an ADR.
 - Do not skip /interrogate.

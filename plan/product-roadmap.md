@@ -1,8 +1,12 @@
 # Product roadmap and review packet
 
-Status: proposed plan. Three local adversarial passes are complete; pass 3 returned corrections required, which are integrated into this revised candidate for targeted exact-candidate confirmation. The user chose local reviewers after DeepSeek could not be reached through the available browser path. Review provenance, findings, dispositions, and candidate digests are recorded in [the PR-021 review ledger](verification/PR-021/review-ledger.md).
+Status: PR-021 roadmap accepted and merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`. Product tasks PR-022–PR-052 remain planned and gated by their listed decisions and evidence. Cross-cutting skill routing and the adversarial clarifications below are tracked in PR-053 before PR-022 begins; they do not change the eight product phases or public/private boundary. Review provenance and prior candidate dispositions remain in [the PR-021 review ledger](verification/PR-021/review-ledger.md).
 
 Source discussion requested for review: https://chat.deepseek.com/share/t9ahagrwdr38ctp6rr
+
+## Cross-cutting implementation workflow
+
+PR-053 installs and routes project-local skills, records their revisions and limits, and updates the product task details where adversarial review found missing owner journeys or consent gates. The skill map is in [docs/skill-workflow.md](../docs/skill-workflow.md); implementation branches, commit subjects, checks, and dependencies remain in the [PR ledger](roadmap-pr-ledger.md). This setup adds no product behavior. All eight product phases stay in order, and Phase 8 remains the only phase for platform users/authentication and private administration.
 
 ## Product boundary
 
@@ -58,7 +62,7 @@ Prototype:
 
 Gate:
 - All release claims match the remote PR, tag, workflow, and asset list.
-- No product feature implementation begins until local reviewers have covered every phase, all 28 pairs, and the combined journeys, the findings are integrated or explicitly left as gates, and the exact integrated plan passes the final independent review.
+- The merged PR-021 candidate passed its local adversarial process and exact-head GitHub review. PR-053 integrates newly identified task-level journey and consent details; PR-022 remains gated until that exact PR is reviewed and merged.
 - The DeepSeek history remains explicit: 0 prompts were sent, and no external findings exist.
 
 ### Phase 2: complete the shared builder
@@ -127,6 +131,7 @@ Data and versions:
 - Separate event identity, submission identity, Contact identity, and opportunity identity. Link only with an explicit versioned rule and consent basis. Email equality is a duplicate candidate, never proof of identity.
 - Store event time and receive time. Define duplicate handling and correction rules. Do not claim exactly once delivery.
 - Store attribution inputs and rule version so a later attribution change can be explained or recomputed. Accept only the five named UTM keys and exact owner-configured campaign IDs; discard arbitrary query/referrer values and mark attribution `unknown` when no safe registered ID survives. Never carry a visitor identity, token, or session across domains.
+- PR-032 decides whether `page_view` and `form_start` collection proceeds when analytics consent is absent, accepted, or refused; PR-033 stays disabled until that choice is explicit and tested. Analytics consent, consent to handle a form request, and optional marketing consent remain separate. If marketing opt-in is offered, it starts unchecked.
 - Keep personal data out of aggregate event rows where possible.
 
 Acceptance:
@@ -141,7 +146,7 @@ Outcome: an owner can sell products through funnel checkout pages, inspect order
 
 This phase covers customer payments for the owner's products. It does not cover a subscription for access to a private SaaS service. Checkout, orders, payment providers, email, and automations remain shared public business features. Payment and email providers have separate decision and credential policies.
 
-Proposed PRs PR-036 through PR-043 are detailed in the [PR ledger](roadmap-pr-ledger.md). They make separate payment-provider and email-provider decisions, decide secret handling and durable runtime first, then add immutable offer versions, signed provider-event intake, checkout intents and orders, reconciliation/refunds, upsells, consented email, and bounded automations.
+Proposed PRs PR-036 through PR-043 are detailed in the [PR ledger](roadmap-pr-ledger.md). PR-036 is the sole payment-provider and email-provider selection point and decides secret handling and durable runtime. Later tasks add immutable offer versions, signed provider-event intake and connection setup, a complete buyer checkout flow, reconciliation/refunds, upsells, consented email campaigns, and bounded automations.
 
 Prototype:
 - Checkout shows the offer, price, currency, tax or shipping state where applicable, payment method, and a clear pending, paid, or failed result.
@@ -338,15 +343,15 @@ Review all 28 pairs separately after the eight individual phase reviews. For eac
 After the pair matrix, review these combined journeys as separate scenarios. They expose interactions that no single pair can cover.
 
 1. A visitor opens a published page, submits a versioned form, appears as one “Leads (soumissions)” inbox row, and may later be explicitly linked to a Contact/opportunity in Phase 4. Trace the published revision, form schema, consent record, duplicate submission behavior, separate page-view/form-start observations, retention, and deletion.
-2. A visitor checks out, pays, accepts or declines an upsell, receives an order result, and enters an email automation. Trace the price snapshot, verified provider event, distinct `upsell.decision.recorded` event, uncertain timeout, retry, duplicate callback, outbox, and reconciliation. Trigger paid-order effects only from verified provider confirmation; confirm that no step means SaaS subscription billing.
+2. A visitor checks out, the provider accepts but the response is lost, the buyer retries, then accepts or declines an upsell and returns to the funnel. A verified provider callback alone marks paid. Trace the price snapshot, distinct `upsell.decision.recorded` event, `unknown` state, duplicate callback, refund, queued email, consent/deletion overlay, restore, and reconciliation. Prove there is no duplicate charge/send and no blind retry; no step means SaaS subscription billing.
 3. A campaign link leads to a page, form submission, CRM contact, and later purchase. Trace exact owner-configured campaign IDs from the five UTM keys, dropped arbitrary query/referrer values, event time, receive time, contact linkage, correction, and a changed attribution rule. Show `unknown` when safe registered evidence is absent; never carry identity across domains.
-4. An owner asks AI to add a page and form, previews a proposal, accepts part of it, saves a revision, publishes it, then receives a lead. Confirm that typed commands, form privacy, version references, audit data, and owner approval remain intact.
+4. An owner asks AI to add a page and form, reviews a proposal based on a stale revision, rejects it, then accepts a current proposal in part, saves a revision, and publishes separately. Confirm that typed commands, form privacy, version references, audit data, and owner approval remain intact and that proposal acceptance cannot charge or send email.
 5. A future platform account signs in to the common owner dashboard and views customer records. Test an owner with the wrong workspace, a revoked session, a self hosted single owner installation, platform admin access, and buyer records that have no platform account.
 6. A release migration updates pages, forms, assets, analytics, payment records, and a platform account boundary. Confirm that old public revisions still render and that external provider effects cannot be rolled back as database writes.
 
 ## Adversarial review protocol
 
-Review each phase first, then each pair in the matrix, then the six combined journeys. Keep the review independent of the plan author. The user chose this local review process after the available browser path could not reach the authenticated DeepSeek tab. The review ledger records four independent reviews, four cross-reviews, the exact-candidate pass-3 findings, their dispositions, and the targeted confirmation status for the revised candidate.
+Review each phase first, then each pair in the matrix, then the six combined journeys. Keep the review independent of the plan author. The user chose this local review process after the available browser path could not reach the authenticated DeepSeek tab. The PR-021 review ledger preserves the original four independent reviews, four cross-reviews, and exact-candidate pass-3 findings; follow-up PR-053 reviews and their dispositions are captured in the current PR-053 task and per-task ledger details.
 
 For every prompt, send the relevant phase text, pair row, current baseline, and cited contracts. Ask for concrete counterexamples in data, UX, migration, permissions, cost measurement, and recovery. Request severity, affected decision, failure path, smallest fix, and unresolved question. Ask the reviewer to distinguish facts supported by the repository from assumptions. Do not ask for hidden reasoning.
 
@@ -368,11 +373,11 @@ Individual phase focus:
 
 Pair prompts use the common instruction followed by the exact matrix row. Combined journey prompts use the common instruction followed by the journey description and the linked phase sections.
 
-Record each actual response in a dated review log with its work request, source report hash, findings, accepted or rejected plan changes, and rationale. See [the PR-021 review ledger](verification/PR-021/review-ledger.md) for report digests, dispositions, current pass status, and P3 arbitration. The DeepSeek share remains a historical reference only. No prompt was sent, and no DeepSeek response or approval is implied by this packet.
+Record each actual response in a dated review log with its work request, source report hash, findings, accepted or rejected plan changes, and rationale. See [the PR-021 review ledger](verification/PR-021/review-ledger.md) for report digests, historical dispositions, and P3 arbitration. The DeepSeek share remains a historical reference only. No prompt was sent, and no DeepSeek response or approval is implied by this packet.
 
 ## Implementation gates
 
-- Do not begin the next business feature until local reviewers have covered all eight phases, all 28 pairs, and the combined journeys, pass-3 findings have been addressed and confirmed against the revised manifest, and the exact final PR head passes review.
+- The PR-021 roadmap baseline passed exact-head review and merged as PR #22. PR-053's refinements must pass its exact-head review before PR-022 begins. Later material scope changes update the canonical ledger and pass the same review process before dependent implementation.
 - Every implementation PR adds behavior tests for its changed user journey, schema and migration tests, command parity checks, security and privacy checks, accessibility checks, and local integration checks where relevant.
 - Run cargo xtask check and cargo xtask ci for implementation PRs. Keep Cloudflare production checks separate and run them only when the required remote prerequisites are available.
 - Keep each PR small and ordered. Land a stable command contract and data owner before adding adapters.
@@ -385,4 +390,4 @@ Repository facts come from README.md, plan/STATUS.md, plan/architecture.md, plan
 
 The DeepSeek share remains a historical reference: https://chat.deepseek.com/share/t9ahagrwdr38ctp6rr. The available browser path could not interact with the authenticated DeepSeek tab. Prior access to the share page reached a sign-in redirect and sent zero prompts. The user then chose local adversarial review as the plan review method. No external findings are claimed, and external review is not a gate.
 
-This plan remains proposed pending targeted confirmation of the integrated corrections and final exact-head PR review. Phase acceptance criteria are planning gates, not evidence that the features exist or have passed.
+The eight-phase roadmap is the accepted planning baseline; PR-022–PR-052 are not shipped behavior. Phase acceptance criteria are planning gates, not evidence that the features exist or have passed. PR-053 must merge before the first product task starts.

@@ -1,0 +1,112 @@
+{
+  "task": "PR-053",
+  "evidence_refreshed_at_utc": "2026-10-15T22:34:13Z",
+  "branch": "chore/pr-053-skill-workflow",
+  "base_commit": "f747afb6fd0f1f19ef6054dd107e584c3226297f",
+  "verification_base_commit": "aa6cd297d491662bcf6bc1472c806038a80e922a",
+  "source_fingerprint_algorithm": "SHA-256 of sorted `path SHA256\\n` lines for changed source files in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
+  "source_fingerprint_sha256": "bdb441626059bd6df0fd5f417894c0c0a6883daabde5b6d84dd4b88253b01cc4",
+  "source_file_count": 8,
+  "source_sha256": {
+    ".github/workflows/ci.yml": "8b8eff10adf1071e39a22719a32596471d90c6e4e1a0ab1efef8c8499377ffcf",
+    "AGENTS.md": "7b2ef329ba80cc2d857b316cbef4bb575c7b50980f4a7c979f8dabaa92864d03",
+    "CONTRIBUTING.md": "0e9a593e32a013c370b22c4b28114cd1febc90a8c26f8b0207becc1ed39ade6b",
+    "docs/skill-workflow.md": "d0d1d583238c755522dbb8124ae1ce5f27a66bfe04a0b5e18b9b3d8b2edf6b91",
+    "plan/product-roadmap.md": "61a5c11527672d66c3c4351abeab14912d1f5a19d6c72cd74e772f17ec7b81fd",
+    "plan/roadmap-pr-ledger.md": "885a6b5dcc7b5231c424e0822f6bbc72ba3edf15297d697697f141a0b29475fa",
+    "scripts/install-project-skills.sh": "130ea98d8cfaffe84fe083617eeba4aa0c47e8ca8aa8ba7798b7631112a2f3bb",
+    "scripts/test-install-project-skills.sh": "29b6c17f9086e409c5a97e9652edc9de79bb6b1a3092e6975f5247b004c36e16"
+  },
+  "implementation": {
+    "product_behavior_changed": false,
+    "application_dependencies_added": false,
+    "global_settings_or_hooks_changed": false,
+    "selected_skill_sources": {
+      "matt_pocock": "49dd158d1076134a641b33efb035946536778336",
+      "cursor_pstack": "1dcc2bacde73ddd284803b7af28164d0436198fc",
+      "impeccable": "8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7"
+    },
+    "installed_selected_project_skill_count": 24,
+    "existing_skill_links_preserved": 91,
+    "project_skill_readme_sha256": "5f67dc59f0e6747bbbc6a1dcb6c92e3fbfeebec13e4d7cbfb023766ff85003ff",
+    "impeccable_cli_engine_executed": false,
+    "snyk_article_skills_installed": 0
+  },
+  "validation": {
+    "shell_syntax": {
+      "command": "bash -n scripts/install-project-skills.sh scripts/test-install-project-skills.sh",
+      "exit_code": 0,
+      "log": "plan/verification/PR-053/logs/shell-syntax.log.gz"
+    },
+    "installer_regression": {
+      "command": "bash scripts/test-install-project-skills.sh",
+      "exit_code": 0,
+      "evidence": "Failed-fetch retry, advanced upstream default branch, pinned-checkout preservation, broken source symlink, wrong selected link, dirty source, and idempotent install.",
+      "log": "plan/verification/PR-053/logs/installer-regression.log.gz"
+    },
+    "project_installer": {
+      "command": "bash scripts/install-project-skills.sh",
+      "exit_code": 0,
+      "evidence": "Verified 24 selected project skills; added 0 missing links; preserved all 91 existing links and .project-skills/README.md.",
+      "log": "plan/verification/PR-053/logs/installer-run.log.gz"
+    },
+    "roadmap_validation": {
+      "command": "python3 plan/verification/PR-021/validate-roadmap.py",
+      "exit_code": 0,
+      "evidence": "Eight phases, 28 unique phase pairs, six combined journeys, all 33 task entries, 121 Conventional Commit subjects, and private auth/admin confined to Phase 8.",
+      "log": "plan/verification/PR-053/logs/roadmap-validator.log.gz"
+    },
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "log": "plan/verification/PR-053/logs/cargo-xtask-check.log.gz"
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "evidence": "Workspace tests, WASM/assets, local Worker/D1 and MCP smoke passed; RustSec loaded 1,329 advisories and scanned 355 locked dependencies.",
+      "remote_cloudflare_operations": false,
+      "log": "plan/verification/PR-053/logs/cargo-xtask-ci.log.gz"
+    },
+    "git_diff_check": {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  },
+  "logs": {
+    "plan/verification/PR-053/logs/cargo-xtask-check.log.gz": {
+      "sha256": "aab4e6d2c24a8d8223f67c17fde44f9b88a7f6f730c11ffca9a07076817fc81d",
+      "raw_sha256": "28007a81cb1c1088f6351bc2034daca46e33cfe47b936d36551b8a521fedfd6f",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-053/logs/cargo-xtask-ci.log.gz": {
+      "sha256": "4a8c42bd96e87d4f80606feb673cb69d58c441a796136538373c0dd8c46f234a",
+      "raw_sha256": "132866619701a7f4cda533ad5f1eddcffe29000ae8ccc615410a381fa4bf1d2e",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-053/logs/installer-regression.log.gz": {
+      "sha256": "9598b6d31cb55979a08abdd8827b35a78dd1f5e751578f6ebd6eefcee84324e7",
+      "raw_sha256": "526f84079d28e67e1fb0f4eb0160e1a343540d046c952ab2843c687c6069f5d6",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-053/logs/installer-run.log.gz": {
+      "sha256": "8254487feb971bbbca35c3ba90d0d4c69cabbd2bd3e85d32b7b04b184db02222",
+      "raw_sha256": "e3cc9ef1f0212a82117520b0abb6c8127574228da4e0e64c004aa45480a13e34",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-053/logs/roadmap-validator.log.gz": {
+      "sha256": "313e59da32cf96f11c667d7ad1e0834b4f61a925fe6b2b0481265b5a72ed6d31",
+      "raw_sha256": "7d2754566b5f356fbef96b4eb6d184ee4b4723c774dbe9c82bf01b9808b00974",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-053/logs/shell-syntax.log.gz": {
+      "sha256": "59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    }
+  },
+  "external_proof": {
+    "cloudflare_production": "UNVERIFIED; no remote Cloudflare operation was run.",
+    "impeccable_engine_binary_digest": "NOT_INDEPENDENTLY_VERIFIED; CLI, hooks, live mode, remote shape service, and init remain disabled."
+  }
+}
