@@ -7,19 +7,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use eez_commands::{command_ids, command_registry, Session};
-use std::cell::Cell;
-use std::collections::HashSet;
-
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
-use serde::{Deserializer, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use tower_service::Service;
 use worker::{event, Context, Env, HttpRequest};
 
 use crate::errors::ApiError;
+use crate::json::{validate_unique_json, JsonValidationError};
 
 pub mod errors;
 pub mod host;
+mod json;
+mod mcp;
 
 pub use host::HostAllowlist;
 
@@ -95,6 +94,8 @@ pub async fn fetch(
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
+    } else if request_path == "/mcp" {
+        mcp::handle(&env, request, &correlation_id).await
     } else if request_path == "/api/funnels" {
         funnel_collection_response(&env, request, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/publish") {
@@ -189,12 +190,7 @@ fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
         .var("ALLOWED_HOSTS")
         .map(|value| value.to_string())
         .unwrap_or_default();
-    let request_host = headers
-        .get("host")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-
-    HostAllowlist::parse(&configured_hosts).allows(request_host)
+    HostAllowlist::parse(&configured_hosts).allows_headers(headers)
 }
 
 const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
@@ -330,21 +326,7 @@ fn publication_command_parameters(
     command_id: &str,
     body: &str,
 ) -> Result<String, EditorCommandParametersError> {
-    let duplicate_object_key = Cell::new(false);
-    let mut deserializer = serde_json::Deserializer::from_str(body);
-    if UniqueJsonValue(&duplicate_object_key)
-        .deserialize(&mut deserializer)
-        .is_err()
-    {
-        return Err(if duplicate_object_key.get() {
-            EditorCommandParametersError::DuplicateObjectKey
-        } else {
-            EditorCommandParametersError::InvalidJson
-        });
-    }
-    deserializer
-        .end()
-        .map_err(|_| EditorCommandParametersError::InvalidJson)?;
+    validate_unique_json(body).map_err(EditorCommandParametersError::from)?;
     let mut value: Value =
         serde_json::from_str(body).map_err(|_| EditorCommandParametersError::InvalidJson)?;
     let object = value
@@ -678,80 +660,12 @@ enum EditorCommandParametersError {
     DuplicateObjectKey,
 }
 
-struct UniqueJsonValue<'a>(&'a Cell<bool>);
-
-impl<'de> DeserializeSeed<'de> for UniqueJsonValue<'_> {
-    type Value = ();
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(UniqueJsonVisitor(self.0))
-    }
-}
-
-struct UniqueJsonVisitor<'a>(&'a Cell<bool>);
-
-impl<'de> Visitor<'de> for UniqueJsonVisitor<'_> {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value without duplicate object keys")
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        while sequence
-            .next_element_seed(UniqueJsonValue(self.0))?
-            .is_some()
-        {}
-        Ok(())
-    }
-
-    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut keys = HashSet::new();
-        while let Some(key) = object.next_key::<String>()? {
-            if !keys.insert(key) {
-                self.0.set(true);
-                return Err(de::Error::custom("duplicate JSON object key"));
-            }
-            object.next_value_seed(UniqueJsonValue(self.0))?;
+impl From<JsonValidationError> for EditorCommandParametersError {
+    fn from(error: JsonValidationError) -> Self {
+        match error {
+            JsonValidationError::Invalid => Self::InvalidJson,
+            JsonValidationError::DuplicateObjectKey => Self::DuplicateObjectKey,
         }
-        Ok(())
     }
 }
 
@@ -759,21 +673,7 @@ fn editor_command_parameters(
     funnel_id: &str,
     body: &str,
 ) -> Result<String, EditorCommandParametersError> {
-    let duplicate_object_key = Cell::new(false);
-    let mut deserializer = serde_json::Deserializer::from_str(body);
-    if UniqueJsonValue(&duplicate_object_key)
-        .deserialize(&mut deserializer)
-        .is_err()
-    {
-        return Err(if duplicate_object_key.get() {
-            EditorCommandParametersError::DuplicateObjectKey
-        } else {
-            EditorCommandParametersError::InvalidJson
-        });
-    }
-    deserializer
-        .end()
-        .map_err(|_| EditorCommandParametersError::InvalidJson)?;
+    validate_unique_json(body).map_err(EditorCommandParametersError::from)?;
 
     let mut value: Value =
         serde_json::from_str(body).map_err(|_| EditorCommandParametersError::InvalidJson)?;

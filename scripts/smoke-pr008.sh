@@ -189,7 +189,7 @@ head_status="$(curl --silent --show-error --output /dev/null --write-out '%{http
   -H "Host: localhost:$port" "$base_url/assets/dashboard.css")"
 test "$head_status" = 200
 
-for path in /api/funnels /mcp /__local/probe /funnels/demo-1/extra; do
+for path in /api/funnels /__local/probe /funnels/demo-1/extra; do
   status="$(request_status "$path" "$state_dir/not-found.json" "$state_dir/not-found.headers")"
   python3 - "$state_dir/not-found.json" "$status" <<'PY'
 import json
@@ -227,4 +227,4 @@ assert sys.argv[2] == "403", (sys.argv[2], body)
 assert body["code"] == "authorization/host_not_allowed", body
 PY
 
-printf 'unknown-api-probe-mcp-routes=404\nunknown-host=403\n'
+printf 'unknown-api-probe-routes=404\nunknown-host=403\n'
