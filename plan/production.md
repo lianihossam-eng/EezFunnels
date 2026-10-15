@@ -1,5 +1,7 @@
 # Eez Funnel — Plan final de production
 
+> **Historical plan (2026-10-13).** This document records the earlier v0.1.0 plan and is retained as project history. Its `/assets/* -> Assets R2` routing, hosted-product assumptions, phase order, and readiness targets are not the current architecture or roadmap. The current Worker-first static asset route is documented in [architecture.md](architecture.md); R2 customer media upload is not implemented and remains planned in [product-roadmap.md](product-roadmap.md). Use the current architecture and roadmap for implementation decisions. Cloudflare production deployment and Claude Desktop compatibility remain unverified.
+
 **Version** : 1.0
 **Date** : 2026-10-13
 **Nom commercial** : Eez Funnel

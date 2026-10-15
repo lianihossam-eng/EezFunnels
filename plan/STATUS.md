@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-020 Release v0.1.0 (`release/v0.1.0`; local verification complete, hosted review pending)
+Current phase: PR-021 Shared product boundary and roadmap (three adversarial passes completed; pass-3 corrections integrated into a revised candidate; targeted confirmation and exact-head PR review pending; feature work remains gated)
 Last updated: 2026-10-15
 
 ## Phases
@@ -25,7 +25,8 @@ Last updated: 2026-10-15
 - [x] PR-017 MCP server (PR #18 merged at `dc976f3ec6ffd4b18937cac23748b38b2ef38405`)
 - [x] PR-018 Documentation (PR #19 merged at `756511c4aed7521249b65ee98f28d5ad6497a6d7`)
 - [x] PR-019 Tests E2E + quality (merged as PR #20 at `f85cf8fe030024066149a0c4e9264bd277d7e9fa`)
-- [ ] PR-020 Release v0.1.0
+- [x] PR-020 Release v0.1.0 (PR #21 merged; GitHub release published)
+- [ ] PR-021 Shared product boundary and roadmap (documentation, local adversarial review, and exact-head PR review; no feature implementation)
 
 ## Verified locally
 
@@ -43,7 +44,9 @@ PR-018 documentation merged as PR #19 at `756511c4aed7521249b65ee98f28d5ad6497a6
 
 PR-019 adds a local-only Playwright create → edit → publish → visit workflow. Dashboard create/edit/save uses keyboard input (41 observed actions, zero pointer events); publication uses the local API because the dashboard has no publish control. Axe-core checks dashboard home, funnel dashboard, and the published funnel. The deterministic JSON fuzz suite exercises 10,000 inputs each through duplicate-key validation, editor/publication command parsing, and MCP message parsing without panics. The isolated local Worker/D1 load check creates and publishes 100 funnels, then makes 1,000 public reads; measured p95 was 9.78 ms (max 40.61 ms), below the 100 ms limit. Signal-aware, idempotent SIGINT/SIGTERM teardown removes the Worker process group, temporary D1 state, and Wrangler config during startup or after readiness; the browser runner closes Chromium before Worker teardown, and its finalizer always stops the Worker if browser close throws. Regressions cover both signal phases and synchronous browser-close failure. `cargo fmt --all -- --check`, `cargo xtask check`, `cargo xtask ci`, the PR-010 migration and browser suites, PR-011/012 browser aliases, and all PR-019 suites pass. Axe reported zero critical findings; the dashboard has one serious color-contrast rule affecting four nodes, recorded in the captured output. No application behavior, contract, migration, dependency, or lockfile changed. Fingerprinted evidence is in `plan/verification/PR-019/`. No remote D1 operation, deployment, or environment publication ran.
 
-PR-020 prepares v0.1.0 release notes and Linux x86_64, macOS Apple Silicon, and Windows x86_64 CLI assets. Pull requests build and test all three native targets with read-only repository access. Only a push of the `v0.1.0` tag packages and uploads release assets; a separate tag-guarded job generates `SHA256SUMS` and creates the GitHub Release using `gh` and the repository token. The version is already 0.1.0, so Cargo manifests remain unchanged. Release notes include selected-entry checksum commands so users can verify a single downloaded platform binary, plus concrete install, executable-mode, and PATH steps. Linux/macOS checksum and install examples pass isolated checks; Windows PowerShell commands are structurally validated against a generated manifest, but PowerShell is unavailable on the Linux validation host. `actionlint`, release-workflow structure checks, `cargo fmt --all -- --check`, `cargo xtask check`, and `cargo xtask ci` pass. The local Linux release binary builds and tests, runs `--help`, and verifies against its generated checksum. PR #21 is open; hosted checks, including the macOS/Windows matrix, are pending on the final PR head. Fingerprinted command and log evidence is in `plan/verification/PR-020/`. No v0.1.0 tag or release has been created, and no Cloudflare action is part of this task.
+PR-020 prepared v0.1.0 release notes and Linux x86_64, macOS Apple Silicon, and Windows x86_64 CLI assets. PR #21 merged at 2026-10-15 03:35:40Z as `3d46ecaf4fc6dd0411ae047841b1001f1ab1f8e6`. Its hosted check run `38676533684` and native release matrix run `38676533683` passed. The `v0.1.0` tag workflow run `38677096705` passed on the merge commit. The GitHub Release was published at 03:38:27Z with `eez-v0.1.0-linux-x86_64`, `eez-v0.1.0-macos-aarch64`, `eez-v0.1.0-windows-x86_64.exe`, and `SHA256SUMS`. Fingerprinted local verification is in `plan/verification/PR-020/`. This release confirms published CLI artifacts only. It does not verify Cloudflare production bindings, deployment, or `PRODUCTION_READY` status.
+
+PR-021 records the user-confirmed shared-product boundary, current release baseline, eight phases, 28 phase pairs, six combined journeys, version register, and canonical Task-ID ledger (`PR-021`–`PR-052`): this documentation task plus 31 future feature tasks. The ledger specifies branches, conventional commit subjects, dependencies, UI/API/CLI/MCP surfaces, migrations/compatibility, tests, and evidence gates. Four independent first-pass reviews, four cross-reviews, and four exact-candidate pass-3 reports are integrated. Pass 3 returned `CORRECTIONS_REQUIRED`; this revised candidate adds restore-surviving deletion gates, fail-closed domain routing and transfer, explicit path-alias behavior, source/projection/UTM policy, payment/email provider separation, job-detail recovery UX, concrete cost fixtures, immutable frozen-contract handling, and an external private overlay pinned to the public core. The targeted correction review and exact-head PR review remain pending. Review provenance, P3 submission-versus-Lead arbitration, prototype outputs, report hashes, and limits are in `plan/verification/PR-021/review-ledger.md`. The DeepSeek share redirected to sign-in; zero prompts were sent, and the user chose local review. Feature implementation remains gated on final plan review.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -300,10 +303,17 @@ migration, or deployment was used for these local checks.
 
 - Cloudflare production binding IDs and credentials are unavailable. No remote deployment or
   production binding check has been run.
+- Claude Desktop interoperability has not been verified.
+- The DeepSeek share was not accessible through the available browser path; zero prompts were sent.
+  The user explicitly chose local adversarial review, which is the active process and is not blocked
+  on DeepSeek.
+- Rust Worker/D1 queue runtime, provider behavior, account topology, restore-safe deletion/effect
+  evidence, Cloudflare production configuration, and real workload pricing remain unverified or
+  `NEEDS_PROTOTYPE`; the roadmap does not claim these results.
 - C-01's `validation/schema_version_missing` is now included in C-04 and mapped by `ApiError` to
   validation/400. Other domain-local diagnostics remain outside the C-04 registry until a later API
   integration defines their transport mapping.
 
 ## Next action
 
-Wait for CI and review on PR #21, then merge before creating the separate `v0.1.0` tag. Keep Cloudflare production setup and deployment unverified until credentials and resource IDs are available.
+Complete targeted confirmation against the revised manifest in `plan/verification/PR-021/candidate-hashes.sha256`, run structural/document checks and repository CI on this documentation-only diff, then open PR-021 and request Sol's exact-head review. Do not begin business feature implementation until the consolidated plan passes review. Keep Cloudflare production checks separate until the required credentials, resource IDs, and scope are available.
