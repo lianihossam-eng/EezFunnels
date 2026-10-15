@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-016 CLI (`feat/016_cli`; based on merged main `af25dec5e0469e796016906e9210e85f86ca2fd9`)
+Current phase: PR-017 MCP (`feat/017_mcp`; local implementation verified, review pending)
 Last updated: 2026-10-14
 
 ## Phases
@@ -21,7 +21,7 @@ Last updated: 2026-10-14
 - [x] PR-013 Responsive preview (merged into `main` at `41f0df225650c32878dfb14000f7116784aad765`)
 - [x] PR-014 Publication /f/:slug (PR #15 merged at `89fc2397233f67f5797bd8736cfd50b41a6b8eab`; hosted CI `38630162138` and exact-head Sol/@codex reviews passed; four review threads resolved)
 - [x] PR-015 Command registry (PR #16 merged at `af25dec5e0469e796016906e9210e85f86ca2fd9`)
-- [ ] PR-016 CLI
+- [x] PR-016 CLI (merged)
 - [ ] PR-017 MCP server
 - [ ] PR-018 Documentation
 - [ ] PR-019 Tests E2E + quality
@@ -36,6 +36,8 @@ PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` re
 PR-015 adds a closed registry for the nine existing executable command IDs. Each entry defines its actor, short description, handler, and idempotency-key policy; the Worker dispatches through that table, and public command IDs are shared constants. Four focused tests cover inventory/handler parity, actors, C-04 rejection, and required/malformed idempotency keys. `cargo xtask check`, `cargo xtask ci`, and the PR-010–013 browser suite pass on the current source; local Worker/D1 smokes cover command create/list/delete and publication flows. No frozen contract, migration, dependency, lockfile, or renderer changed. The original plan's count of 15 has no definitions for six extra commands; D19 records why this PR registers only executable behavior and keeps section edits in `funnel.revision.save`.
 
 PR-016 implements the native `eez` CLI: endpoint configuration, funnel list/create/publish through the Worker API, durable immutable retry tickets for ambiguous mutations, and `wrangler deploy` argument/exit forwarding. `cargo xtask check`, full `cargo xtask ci`, standalone `cargo +1.88.0 audit`, and the isolated local Worker/D1 smoke passed; the CLI has 6 unit and 11 process tests. RustSec scanned 355 locked dependencies against 1,329 advisories with no findings. The release matrix builds and tests natively on Linux, Apple Silicon macOS, and Windows, with artifact upload remaining tag-only. PR #17 checks passed on exact head `32dd5bd7240e37d865a0b7c6b9ee78a690c741ac` (CI run `38641945016`, release matrix run `38641945005`), and `@codex` reviewed that exact head with no major issues. No remote migration, deployment, or cloud environment publication ran. Fingerprinted evidence is in `plan/verification/PR-016/`.
+
+PR-017 implements a Worker-native stateless Streamable HTTP endpoint with case-insensitive Bearer auth, bounded JSON-RPC/tool messages, supplied-Origin checks, the four-tool table, and command dispatch through the registry and `Session`. D21 records why the RMCP dependency is omitted to preserve the Rust 1.85 contract and avoid Tokio in the Worker. March-version JSON-RPC batches accept request/notification-only arrays and response-only arrays; they reject `initialize` and mixed response/request-or-notification shapes before dispatch. June-version requests remain single-message. Unknown tools return `-32602`; MCP HTTP errors and command failures preserve all four C-04 fields (`code`, `category`, `message`, and `correlation_id`). Regression tests assert exact status and C-04 fields for every MCP HTTP error path and prove prohibited batches, including those with a sibling tool call, fail during parsing. `cargo fmt --all -- --check`, `cargo xtask check`, `bash scripts/smoke-pr017.sh`, and `cargo xtask ci` pass locally. PR #18 is open; hosted checks passed on exact head `60244b5a22742abedddd7440329bdd6d59248862` before this batch-shape correction, which awaits updated hosted checks and independent review. Claude Desktop manual verification and merge remain pending. No remote D1 operation, deployment, or environment publication ran.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -298,4 +300,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Open PR-016 against `main` and tag @codex with a clear exact-head review request. Merge only after hosted CI and the exact-head @codex review pass. Keep database and deployment checks local; do not publish the cloud environment as part of this PR.
+Review and open PR-017 against `main`, then tag @codex with a clear exact-head review request. Merge only after hosted CI and the exact-head review pass. Keep database and deployment checks local; do not publish the cloud environment as part of this PR.
