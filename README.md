@@ -1,96 +1,70 @@
 # Eez Funnel
 
-> Self-hosted funnel builder. Rust + Cloudflare Workers + D1 + R2. MIT.
+A single-user funnel builder that you run on your own Cloudflare account. The current codebase implements the v0.1 core workflow; it is still under development and has not shipped as a stable release. Cloudflare usage is billed under your account where applicable.
 
 [![CI](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Current status
+## What you can do
 
-PR-000 supplies the Rust workspace and development checks. The Worker, dashboard, funnel commands, and deployment are not implemented yet. The v0.1.0 features below describe the planned application.
+- Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
+- Reorder the starter sections, edit their supported text, links, image URL and theme settings, and preview at mobile, tablet, and desktop widths.
+- Undo or redo editor changes and save them as immutable revisions.
+- Publish a saved revision at `/f/:slug`.
+- Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
+- Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-## What is Eez Funnel?
+The app has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, image uploads, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
 
-A funnel builder you deploy on your own Cloudflare account. Open the URL, land on the dashboard, build funnels, publish them on `/f/:slug`. No signup, no SaaS account, no monthly fee.
+## Demo
 
-**Single-user by design.** v0.1.0 assumes you are the only user. Auth, landing page, and custom subdomains are planned for v0.2.
+This animated capture shows the current dashboard, the webinar creation form, and its editor with the mobile preview selected. The sample content was created through the running local app.
 
-## Planned features (v0.1.0)
-
-- Dashboard at `/`
-- 5 sections: hero, features, testimonials, cta, footer
-- 5 themes: minimal, bold, elegant, playful, corporate
-- Visual editor with drag-and-drop, keyboard navigation, undo/redo
-- Responsive preview (mobile, tablet, desktop)
-- Publication at `/f/:slug`
-- CLI: `eez funnels list`, `eez deploy`
-- MCP server at `/mcp` with `execute_command`
+![Eez Funnel dashboard, webinar creation, and mobile editor demo](docs/assets/demo.gif)
 
 ## Quickstart
 
-### Prerequisites
+### Requirements
 
-The bootstrap requires Rust 1.85.0. The later Cloudflare workflow also requires Node.js 20+, a Cloudflare account, and Wrangler.
+- Rust 1.85.0 with `rustfmt`, `clippy`, and the `wasm32-unknown-unknown` target. The checked-in `rust-toolchain.toml` pins these for the workspace.
+- Node.js 22 or newer and npm. Wrangler is installed from the locked npm dependencies.
+- A Cloudflare account is needed only for a remote deployment. Local development uses local D1/R2/KV bindings.
 
-### Planned deployment workflow
+### Run locally
 
-These commands require the Worker implementation and Cloudflare resource IDs from later phases. They do not run the PR-000 workspace.
+From the repository root:
 
-```bash
-git clone https://github.com/lianihossam-eng/EezFunnels.git
-cd EezFunnels
-wrangler login
-wrangler d1 create eezfunnel
-wrangler d1 migrations apply eezfunnel --remote
-wrangler deploy
+```sh
+npm ci
+./scripts/install-worker-build.sh
+npx wrangler d1 migrations apply DB --local --env dev
+npm run dev -- --env dev
 ```
 
-Live at `https://eezfunnel-<your-subdomain>.workers.dev`.
+Open <http://localhost:8787>. In the prepared Codex cloud environment, run `source .project-tools/env.sh` first when that file exists. The Wrangler build command installs the pinned `wasm-bindgen` tool if it is missing. The separate `worker-build` CLI is installed by the script above; the application itself stays on Rust 1.85.0.
 
-### Develop the bootstrap workspace
+Run `cargo xtask check` for formatting, clippy, workspace tests, and layer validation. For the full local CI workflow, install the pinned audit tool with `./scripts/install-cargo-audit.sh`, then run `cargo xtask ci`.
 
-Install Rust 1.85.0 with rustfmt, clippy, and the wasm32-unknown-unknown target. In the prepared cloud environment, activate the project-local installation first.
-
-```bash
-source .project-tools/env.sh
-cargo xtask check
-cargo build -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --locked
-cargo run -p eez-cli --locked -- --help
-```
-
-On a machine with rustup on PATH, omit the first command. The checked-in rust-toolchain.toml selects the compiler and components. The WASM build validates packaging; it does not start a dashboard.
-
-See docs/getting-started.md for the current development workflow.
+See [Getting started](docs/getting-started.md) for CLI and local workflow details, and [Deploy](docs/deploy.md) before creating or changing remote Cloudflare resources.
 
 ## Architecture
 
-```
-Cloudflare Worker (Rust, Axum)
-  GET /              -> Dashboard (Dioxus WASM)
-  GET /f/:slug       -> Funnel published (SSR)
-  /api/*             -> REST API
-  /mcp               -> MCP server (HTTP)
-  /assets/*          -> Assets from R2
-  Bindings: D1, R2, KV
-```
+The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 stores funnels, revisions, and command receipts; R2 and KV bindings are configured by the Worker. The dashboard assets are built into `apps/dashboard/dist`.
 
-See `plan/architecture.md`.
+| Path | Current behavior |
+|:---|:---|
+| `/`, `/funnels`, `/funnels/:id` | Dashboard, funnel list, and editor |
+| `/api/funnels` | List or create funnels |
+| `/api/funnels/:id` | Read or delete a funnel |
+| `/api/funnels/:id/preview` | Preview proposed editor state |
+| `/api/funnels/:id/revisions` | Save an editor revision |
+| `/api/funnels/:id/publish` and `/unpublish` | Change the published revision pointer |
+| `/f/:slug` | Render a published funnel |
+| `/mcp` | Stateless Streamable HTTP MCP endpoint |
+| `/health` | Worker health response |
 
-## Documentation
-
-- `docs/getting-started.md`
-- `docs/deploy.md`
-- `docs/commands.md`
-- `docs/mcp.md`
-- `docs/themes.md`
-- `docs/security.md`
-
-## Roadmap
-
-- **v0.1.0** - self-hosted single-user dashboard, editor, publication, MCP
-- **v0.2.0** - authentication, landing page, custom subdomains
-- **v0.3.0** - CRM, analytics, AI funnel generation
+Commands, the native CLI, and MCP behavior are documented in [Commands](docs/commands.md), [Themes](docs/themes.md), and [MCP setup](docs/mcp.md). The system design is in [plan/architecture.md](plan/architecture.md).
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
