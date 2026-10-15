@@ -660,8 +660,24 @@ fn parse_message(input: &str, protocol_version: &str) -> Result<ParsedMessages, 
         {
             return Err(ParseError::InvalidRequest(None));
         }
+        let contains_initialize = batch.iter().any(|message| {
+            message
+                .get("method")
+                .and_then(Value::as_str)
+                .is_some_and(|method| method == "initialize")
+        });
+        let messages = batch.iter().map(parse_message_value).collect::<Vec<_>>();
+        let has_response = messages
+            .iter()
+            .any(|message| matches!(message, ClientMessage::Response));
+        let is_response_only = messages
+            .iter()
+            .all(|message| matches!(message, ClientMessage::Response));
+        if contains_initialize || (has_response && !is_response_only) {
+            return Err(ParseError::InvalidRequest(None));
+        }
         return Ok(ParsedMessages {
-            messages: batch.iter().map(parse_message_value).collect(),
+            messages,
             is_batch: true,
         });
     }

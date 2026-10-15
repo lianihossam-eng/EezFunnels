@@ -66,15 +66,41 @@ fn march_protocol_accepts_bounded_batches_and_june_rejects_them() {
 }
 
 #[test]
-fn batch_items_preserve_invalid_request_responses_and_ignore_client_responses() {
-    let batch = r#"[null,{"jsonrpc":"2.0","id":"response-1","result":{}},{"jsonrpc":"2.0","id":4,"method":"ping"}]"#;
-    let parsed = parse_message(batch, "2025-03-26").expect("valid batch envelope");
-    assert!(matches!(
-        parsed.messages[0],
-        ClientMessage::InvalidRequest(None)
-    ));
-    assert_eq!(parsed.messages[1], ClientMessage::Response);
-    assert!(matches!(parsed.messages[2], ClientMessage::Request(_)));
+fn march_batches_reject_initialize_and_mixed_responses_before_tool_dispatch() {
+    let initialize_with_tool_call = r#"[{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}},{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"execute_command","arguments":{"command_id":"funnel.create","parameters":{"name":"must-not-run","slug":"must-not-run"},"idempotency_key":"must-not-run"}}}]"#;
+    assert_eq!(
+        parse_message(initialize_with_tool_call, "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+
+    let invalid_initialize_with_tool_call = r#"[{"jsonrpc":"2.0","id":"init","method":"initialize","params":null},{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"execute_command","arguments":{"command_id":"funnel.create","parameters":{"name":"must-not-run","slug":"must-not-run"},"idempotency_key":"must-not-run"}}}]"#;
+    assert_eq!(
+        parse_message(invalid_initialize_with_tool_call, "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+
+    let response_with_tool_call = r#"[{"jsonrpc":"2.0","id":"response-1","result":{}},{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"execute_command","arguments":{"command_id":"funnel.create","parameters":{"name":"must-not-run","slug":"must-not-run"},"idempotency_key":"must-not-run"}}}]"#;
+    assert_eq!(
+        parse_message(response_with_tool_call, "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+
+    let response_with_notification = r#"[{"jsonrpc":"2.0","id":"response-1","result":{}},{"jsonrpc":"2.0","method":"notifications/initialized"}]"#;
+    assert_eq!(
+        parse_message(response_with_notification, "2025-03-26"),
+        Err(ParseError::InvalidRequest(None))
+    );
+}
+
+#[test]
+fn march_batch_accepts_response_only_batches() {
+    let responses = r#"[{"jsonrpc":"2.0","id":"response-1","result":{}},{"jsonrpc":"2.0","id":"response-2","error":{"code":-32600,"message":"Invalid request."}}]"#;
+    let parsed = parse_message(responses, "2025-03-26").expect("response-only batch is valid");
+    assert!(parsed.is_batch);
+    assert_eq!(
+        parsed.messages,
+        vec![ClientMessage::Response, ClientMessage::Response]
+    );
 }
 
 #[test]
