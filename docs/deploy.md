@@ -53,7 +53,7 @@ Confirm the health route and dashboard after deployment:
 curl --fail --show-error https://eezfunnel.<account-subdomain>.workers.dev/health
 ```
 
-A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. Publish it from the editor workflow or with `eez funnels publish <funnel-id>`; its public page is available at `/f/<slug>`.
+A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor saves revisions but cannot publish them yet. Publish with `eez funnels publish <funnel-id>`, the `POST /api/funnels/:funnel_id/publish` route, or the MCP `execute_command` tool using `funnel.publish`; see [CLI](commands.md#native-cli), [HTTP routes](commands.md#http-routes), and [command registry](commands.md#executable-command-registry). Its public page is available at `/f/<slug>`.
 
 ## Optional MCP secret
 
