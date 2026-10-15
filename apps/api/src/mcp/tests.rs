@@ -3,13 +3,14 @@ use serde_json::{json, Value};
 
 use super::{
     authorized, bounded_response_value, command_error_tool_result, command_parameters_bytes,
-    has_json_content_type, has_streamable_http_accept, list_commands_result,
+    has_json_content_type, has_streamable_http_accept, list_commands_result, mcp_http_error_parts,
     negotiate_protocol_version, origin_matches_host, parse_message, protocol_version_header,
-    response_protocol_version, tools_list_result, ClientMessage, JsonRpcId, ParseError,
-    MAX_BATCH_MESSAGES, MAX_COMMAND_PARAMETERS_BYTES, MAX_RESPONSE_BYTES, MCP_PROTOCOL_VERSION,
-    TOOL_SPECS,
+    response_protocol_version, tools_list_result, ClientMessage, JsonRpcId, McpHttpError,
+    ParseError, MAX_BATCH_MESSAGES, MAX_COMMAND_PARAMETERS_BYTES, MAX_RESPONSE_BYTES,
+    MCP_PROTOCOL_VERSION, TOOL_SPECS,
 };
-use crate::errors::ApiError;
+use crate::errors::{ApiError, ErrorCategory};
+use axum::http::StatusCode;
 use eez_commands::command_registry;
 
 #[test]
@@ -341,4 +342,84 @@ fn command_tool_errors_preserve_the_c04_error_fields() {
     assert_eq!(error["category"], "validation");
     assert_eq!(error["message"], "The request is invalid.");
     assert_eq!(error["correlation_id"], "request-123");
+}
+
+#[test]
+fn mcp_http_errors_emit_exact_c04_envelopes_for_every_status_path() {
+    let expected = [
+        (
+            McpHttpError::InvalidOrigin,
+            StatusCode::FORBIDDEN,
+            "request/invalid_origin",
+            ErrorCategory::Validation,
+            "The request Origin is not allowed.",
+        ),
+        (
+            McpHttpError::InvalidPath,
+            StatusCode::BAD_REQUEST,
+            "request/invalid_path",
+            ErrorCategory::Validation,
+            "Only the exact /mcp path is supported.",
+        ),
+        (
+            McpHttpError::UnsupportedMediaType,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request/unsupported_media_type",
+            ErrorCategory::Validation,
+            "Content-Type must be application/json.",
+        ),
+        (
+            McpHttpError::UnsupportedAccept,
+            StatusCode::NOT_ACCEPTABLE,
+            "request/unsupported_accept",
+            ErrorCategory::Validation,
+            "Accept must include application/json and text/event-stream.",
+        ),
+        (
+            McpHttpError::InvalidProtocolVersion,
+            StatusCode::BAD_REQUEST,
+            "request/invalid_protocol_version",
+            ErrorCategory::Validation,
+            "The MCP protocol version is unsupported.",
+        ),
+        (
+            McpHttpError::RequestTooLarge,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request/too_large",
+            ErrorCategory::Validation,
+            "The request body exceeds the configured size limit.",
+        ),
+        (
+            McpHttpError::ResponseTooLarge,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response/too_large",
+            ErrorCategory::Internal,
+            "The response exceeds the configured size limit.",
+        ),
+        (
+            McpHttpError::InternalUnexpected,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal/unexpected",
+            ErrorCategory::Internal,
+            "The request could not be completed.",
+        ),
+    ];
+
+    assert_eq!(McpHttpError::ALL.len(), expected.len());
+    for (error_kind, status, code, category, message) in expected {
+        assert!(McpHttpError::ALL.contains(&error_kind));
+        assert_eq!(error_kind.details(), (status, code, category, message));
+
+        let (actual_status, body) = mcp_http_error_parts(error_kind, "request-456");
+        assert_eq!(actual_status, status);
+        let body_text = std::str::from_utf8(&body).expect("JSON error body is UTF-8");
+        assert!(!body_text.contains("secret-token"));
+        assert!(!body_text.contains("sensitive request body"));
+        let value = serde_json::from_slice::<Value>(&body).expect("C-04 JSON error envelope");
+        assert_eq!(value.as_object().map(|object| object.len()), Some(4));
+        assert_eq!(value["code"], code);
+        assert_eq!(value["category"], serde_json::to_value(category).unwrap());
+        assert_eq!(value["message"], message);
+        assert_eq!(value["correlation_id"], "request-456");
+    }
 }

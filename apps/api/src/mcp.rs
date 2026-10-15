@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use worker::{Env, HttpRequest};
 
-use crate::errors::ApiError;
+use crate::errors::{ApiError, ErrorCategory};
 use crate::json::{validate_unique_json, JsonValidationError};
 use crate::HostAllowlist;
 
@@ -169,18 +169,10 @@ pub(crate) async fn handle(
         return api_error_response("authorization/token_invalid", correlation_id);
     }
     if !origin_matches_host(request.headers(), request.uri().scheme_str()) {
-        return mcp_http_error(
-            StatusCode::FORBIDDEN,
-            "request/invalid_origin",
-            "The request Origin is not allowed.",
-        );
+        return mcp_http_error(McpHttpError::InvalidOrigin, correlation_id);
     }
     if request.uri().path() != "/mcp" || request.uri().query().is_some() {
-        return mcp_http_error(
-            StatusCode::BAD_REQUEST,
-            "request/invalid_path",
-            "Only the exact /mcp path is supported.",
-        );
+        return mcp_http_error(McpHttpError::InvalidPath, correlation_id);
     }
     if request.method() != Method::POST {
         let mut response = api_error_response("validation/operation_not_supported", correlation_id);
@@ -190,39 +182,19 @@ pub(crate) async fn handle(
         return response;
     }
     if !has_json_content_type(request.headers()) {
-        return mcp_http_error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "request/unsupported_media_type",
-            "Content-Type must be application/json.",
-        );
+        return mcp_http_error(McpHttpError::UnsupportedMediaType, correlation_id);
     }
     if !has_streamable_http_accept(request.headers()) {
-        return mcp_http_error(
-            StatusCode::NOT_ACCEPTABLE,
-            "request/unsupported_accept",
-            "Accept must include application/json and text/event-stream.",
-        );
+        return mcp_http_error(McpHttpError::UnsupportedAccept, correlation_id);
     }
     let request_protocol_version = match protocol_version_header(request.headers()) {
         Ok(version) => version,
-        Err(()) => {
-            return mcp_http_error(
-                StatusCode::BAD_REQUEST,
-                "request/invalid_protocol_version",
-                "The MCP protocol version is unsupported.",
-            )
-        }
+        Err(()) => return mcp_http_error(McpHttpError::InvalidProtocolVersion, correlation_id),
     };
 
     let body = match to_bytes(Body::new(request.into_body()), MAX_REQUEST_BYTES).await {
         Ok(body) => body,
-        Err(_) => {
-            return mcp_http_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "request/too_large",
-                "The request body exceeds the configured size limit.",
-            )
-        }
+        Err(_) => return mcp_http_error(McpHttpError::RequestTooLarge, correlation_id),
     };
     let body = match std::str::from_utf8(&body) {
         Ok(body) => body,
@@ -230,13 +202,14 @@ pub(crate) async fn handle(
             return json_rpc_error_response(
                 ParseError::Parse,
                 request_protocol_version.unwrap_or(DEFAULT_PROTOCOL_VERSION),
+                correlation_id,
             )
         }
     };
     let protocol_version = request_protocol_version.unwrap_or(DEFAULT_PROTOCOL_VERSION);
     let messages = match parse_message(body, protocol_version) {
         Ok(messages) => messages,
-        Err(error) => return json_rpc_error_response(error, protocol_version),
+        Err(error) => return json_rpc_error_response(error, protocol_version, correlation_id),
     };
 
     let response_protocol_version = messages
@@ -261,11 +234,7 @@ pub(crate) async fn handle(
                     Err((id, code, message)) => bounded_error_response_value(id, code, message),
                 };
                 let Some(response) = response else {
-                    return mcp_http_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "response/too_large",
-                        "The response exceeds the configured size limit.",
-                    );
+                    return mcp_http_error(McpHttpError::ResponseTooLarge, correlation_id);
                 };
                 responses.push(response);
             }
@@ -276,11 +245,7 @@ pub(crate) async fn handle(
                     "Invalid request.",
                 );
                 let Some(response) = response else {
-                    return mcp_http_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "response/too_large",
-                        "The response exceeds the configured size limit.",
-                    );
+                    return mcp_http_error(McpHttpError::ResponseTooLarge, correlation_id);
                 };
                 responses.push(response);
             }
@@ -303,11 +268,7 @@ pub(crate) async fn handle(
         Some(bytes) => {
             json_bytes_response_with_protocol(StatusCode::OK, bytes, response_protocol_version)
         }
-        None => mcp_http_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "response/too_large",
-            "The response exceeds the configured size limit.",
-        ),
+        None => mcp_http_error(McpHttpError::ResponseTooLarge, correlation_id),
     }
 }
 
@@ -762,7 +723,11 @@ fn parse_message_value(value: &Value) -> ClientMessage {
     }
 }
 
-fn json_rpc_error_response(error: ParseError, protocol_version: &'static str) -> Response<Body> {
+fn json_rpc_error_response(
+    error: ParseError,
+    protocol_version: &'static str,
+    correlation_id: &str,
+) -> Response<Body> {
     let response = match error {
         ParseError::Parse => RpcResponse::failure(Value::Null, -32700, "Parse error."),
         ParseError::InvalidRequest(id) => {
@@ -771,11 +736,7 @@ fn json_rpc_error_response(error: ParseError, protocol_version: &'static str) ->
     };
     match serde_json::to_vec(&response) {
         Ok(bytes) => json_bytes_response_with_protocol(StatusCode::OK, bytes, protocol_version),
-        Err(_) => mcp_http_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal/unexpected",
-            "The request could not be completed.",
-        ),
+        Err(_) => mcp_http_error(McpHttpError::InternalUnexpected, correlation_id),
     }
 }
 
@@ -949,9 +910,99 @@ fn api_error_response(code: &str, correlation_id: &str) -> Response<Body> {
     super::error_response(&error, correlation_id.to_owned())
 }
 
-fn mcp_http_error(status: StatusCode, code: &str, message: &'static str) -> Response<Body> {
-    let response = serde_json::json!({ "code": code, "message": message });
-    let body = serde_json::to_vec(&response).unwrap_or_default();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum McpHttpError {
+    InvalidOrigin,
+    InvalidPath,
+    UnsupportedMediaType,
+    UnsupportedAccept,
+    InvalidProtocolVersion,
+    RequestTooLarge,
+    ResponseTooLarge,
+    InternalUnexpected,
+}
+
+impl McpHttpError {
+    #[cfg(test)]
+    const ALL: [Self; 8] = [
+        Self::InvalidOrigin,
+        Self::InvalidPath,
+        Self::UnsupportedMediaType,
+        Self::UnsupportedAccept,
+        Self::InvalidProtocolVersion,
+        Self::RequestTooLarge,
+        Self::ResponseTooLarge,
+        Self::InternalUnexpected,
+    ];
+
+    fn details(self) -> (StatusCode, &'static str, ErrorCategory, &'static str) {
+        match self {
+            Self::InvalidOrigin => (
+                StatusCode::FORBIDDEN,
+                "request/invalid_origin",
+                ErrorCategory::Validation,
+                "The request Origin is not allowed.",
+            ),
+            Self::InvalidPath => (
+                StatusCode::BAD_REQUEST,
+                "request/invalid_path",
+                ErrorCategory::Validation,
+                "Only the exact /mcp path is supported.",
+            ),
+            Self::UnsupportedMediaType => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request/unsupported_media_type",
+                ErrorCategory::Validation,
+                "Content-Type must be application/json.",
+            ),
+            Self::UnsupportedAccept => (
+                StatusCode::NOT_ACCEPTABLE,
+                "request/unsupported_accept",
+                ErrorCategory::Validation,
+                "Accept must include application/json and text/event-stream.",
+            ),
+            Self::InvalidProtocolVersion => (
+                StatusCode::BAD_REQUEST,
+                "request/invalid_protocol_version",
+                ErrorCategory::Validation,
+                "The MCP protocol version is unsupported.",
+            ),
+            Self::RequestTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request/too_large",
+                ErrorCategory::Validation,
+                "The request body exceeds the configured size limit.",
+            ),
+            Self::ResponseTooLarge => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response/too_large",
+                ErrorCategory::Internal,
+                "The response exceeds the configured size limit.",
+            ),
+            Self::InternalUnexpected => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal/unexpected",
+                ErrorCategory::Internal,
+                "The request could not be completed.",
+            ),
+        }
+    }
+}
+
+fn mcp_http_error_parts(error: McpHttpError, correlation_id: &str) -> (StatusCode, Vec<u8>) {
+    let (status, code, category, message) = error.details();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "code": code,
+        "category": category,
+        "message": message,
+        "correlation_id": correlation_id,
+    }))
+    .unwrap_or_default();
+    (status, body)
+}
+
+fn mcp_http_error(error: McpHttpError, correlation_id: &str) -> Response<Body> {
+    let (status, body) = mcp_http_error_parts(error, correlation_id);
     json_bytes_response(status, body)
 }
 
