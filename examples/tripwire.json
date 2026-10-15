@@ -1,1 +1,45 @@
-{"schema_version": 1, "name": "tripwire", "sections": []}
+{
+  "format_version": 1,
+  "schema_version": 1,
+  "blueprint": "tripwire",
+  "theme_id": "playful",
+  "sections": [
+    {"id": "hero", "type": "hero", "order": 1},
+    {"id": "features", "type": "features", "order": 2},
+    {"id": "cta", "type": "cta", "order": 3}
+  ],
+  "contents": {
+    "hero": {
+      "type": "hero",
+      "title": "The launch checklist",
+      "subtitle": "A compact guide to the decisions and page sections to prepare before opening registration.",
+      "cta_label": "Get the checklist",
+      "cta_url": "https://example.com/offer",
+      "image": null
+    },
+    "features": {
+      "type": "features",
+      "items": [
+        {
+          "title": "Clarify the offer",
+          "description": "Write down the audience, outcome, and terms in one place."
+        },
+        {
+          "title": "Prepare the page",
+          "description": "Use a concise checklist to review the headline, proof, and call to action."
+        },
+        {
+          "title": "Choose the next step",
+          "description": "Make the action after purchase or sign-up clear to the buyer."
+        }
+      ]
+    },
+    "cta": {
+      "type": "cta",
+      "title": "Start with the checklist",
+      "body": "Replace this example with the actual contents, price, and delivery details for your offer.",
+      "cta_label": "Review the offer",
+      "cta_url": "https://example.com/offer"
+    }
+  }
+}
