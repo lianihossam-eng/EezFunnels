@@ -1,6 +1,6 @@
 # Eez Funnel
 
-A single-user funnel builder that you run on your own Cloudflare account. The current codebase implements the v0.1 core workflow; it is still under development and has not shipped as a stable release. Cloudflare usage is billed under your account where applicable.
+An open source, single-owner funnel builder that you run on your own Cloudflare account. The v0.1.0 GitHub Release is published with CLI binaries for Linux, macOS, and Windows. The application is still under development, and the release does not verify a Cloudflare production deployment. Cloudflare usage is billed under your account where applicable.
 
 [![CI](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,7 +14,11 @@ A single-user funnel builder that you run on your own Cloudflare account. The cu
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The app has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, image uploads, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, image uploads, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+
+## Product direction
+
+The funnel builder and its business features remain one shared open source product. Future private distributions pin and use the same released public core without forking business behavior; platform accounts, authentication, and private platform administration live in a separate private overlay in the final roadmap phase. The owner dashboard remains common. Cloudflare Access may protect a self hosted instance; the hosted identity model is not chosen. See the [product roadmap](plan/product-roadmap.md) for the phased plan and review status.
 
 ## Demo
 
@@ -49,7 +53,7 @@ See [Getting started](docs/getting-started.md) for CLI and local workflow detail
 
 ## Architecture
 
-The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 stores funnels, revisions, and command receipts; R2 and KV bindings are configured by the Worker. The dashboard assets are built into `apps/dashboard/dist`.
+The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 stores funnels, revisions, and command receipts; R2 and KV bindings are configured by the Worker. The dashboard assets are built into `apps/dashboard/dist`. Cloudflare production bindings and deployment remain unverified.
 
 | Path | Current behavior |
 |:---|:---|

@@ -1,0 +1,10 @@
+PASS roadmap has the eight ordered phases
+PASS pair matrix contains each of the 28 unique phase pairs
+PASS roadmap contains six ordered combined journeys
+PASS ledger has 32 unique sequential Task-IDs PR-021 through PR-052 (31 future feature tasks)
+PASS dependency parser expands direct, slash-separated, and range references
+PASS all 32 task entries have unique branches, dependency fields, and 112 Conventional Commit subjects
+PASS every planned dependency points to a completed or earlier Task-ID; no forward edge or cycle
+PASS private account/auth/admin implementation is confined to Phase 8
+PASS frozen contracts, restore gate, and external private overlay boundaries are explicit
+PASS ledger names separate transport/schema versions, submission event, and unknown external-effect state
