@@ -6,6 +6,7 @@ use super::model::{
     BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FieldId, FormField,
     FormId, FormResult, FormV2, PageId, PageV2, SectionId, SectionKind, SectionV2, ValidationRange,
 };
+use super::theme::ThemeOverrides;
 use crate::ThemePreset;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +106,9 @@ pub enum Edit {
     },
     SetThemePreset {
         preset: ThemePreset,
+    },
+    SetThemeOverrides {
+        overrides: Box<ThemeOverrides>,
     },
     AddSection {
         page: PageId,
@@ -314,6 +318,10 @@ impl DocumentV2 {
             }
             Edit::SetThemePreset { preset } => {
                 data.theme.preset_id = preset;
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetThemeOverrides { overrides } => {
+                data.theme.overrides = *overrides;
                 FocusTarget::Page(data.entry_page_id.clone())
             }
             Edit::AddSection {

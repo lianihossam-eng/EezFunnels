@@ -1,27 +1,23 @@
-# Themes and editor settings
+# Funnel themes
 
-Every funnel starts with one of five built-in theme presets. Open a funnel from **Funnels**, then use the editor's **Theme** controls to choose a preset, set a primary color, or toggle square button corners. Save the change as a new revision when it is ready.
+Every funnel starts with one of five built-in presets. In the typed V2 editor, choose a preset, then customize its colors, typography, spacing, content width, card corners, button shape, and shadow. Each setting can return to the selected preset's value. Changes update the responsive preview and become part of the next immutable revision.
 
-| Preset ID | Included visual tokens |
+| Preset ID | Style |
 |:---|:---|
 | `minimal` | Light slate colors, system font, rounded cards, compact shadow |
-| `bold` | Dark surfaces, orange primary color, larger type and spacing, square cards and buttons |
-| `elegant` | Warm neutral colors, Georgia serif font, rounded cards, soft shadow |
+| `bold` | Dark surfaces, orange accents, larger type and spacing, square cards |
+| `elegant` | Warm neutrals, Georgia serif font, soft shadow |
 | `playful` | Pink accents, rounded cards and buttons, larger spacing |
 | `corporate` | Cool blue palette, Arial font, compact corners and shadow |
 
-The preset defines the page background, surfaces, text and border colors, font family and scale, button/card corners, card shadow, and section spacing. The editor can override the primary color and button-corner toggle while retaining the selected preset. Reset the color control to restore the preset's primary color.
+The color controls cover the page background, cards and forms, main and secondary text, buttons and accents, text on buttons, and borders. The editor checks the current main-text, secondary-text, and button-text combinations against a 4.5:1 contrast target and reports combinations that fall below it. The warning updates as colors change; it does not prevent a deliberate brand choice.
 
-## Edit section content
+Style controls include four text scales, five system font families, five section-spacing scales, five card-corner scales, three content widths, four button shapes, and three card shadows. The settings apply across the desktop, tablet, and mobile preview sizes.
 
-Select a section in the left outline to expose its settings in the inspector. Available fields depend on the section. Current controls include text, color, select, toggle, and image fields. Examples include the hero headline and subheading, feature and testimonial text, call-to-action label and URL, footer links, and hero image URL and alternative text.
-
-The preview refreshes as you edit. It offers Mobile (375 px), Tablet (768 px), and Desktop (1280 px) widths. A hero image appears as a safe placeholder in the editor preview; a saved published page loads the configured image URL. The browser will make that request to the image host when a visitor opens the page.
-
-Use **Undo** or **Redo** before saving to move through editor changes. **Save revision** stores an immutable revision; the editor has no publish action yet. To publish the latest saved revision, use `eez funnels publish <funnel-id>`. API clients can call `POST /api/funnels/:funnel_id/publish`, and MCP clients can run `funnel.publish` through `execute_command`. See [CLI](commands.md#native-cli), [HTTP routes](commands.md#http-routes), and [command registry](commands.md#executable-command-registry).
+Save a revision when the preview is ready. The V2 editor can publish the latest saved revision or unpublish the live revision. V1 funnels keep their existing theme and publication flows.
 
 ## Current limits
 
-You can select presets and adjust the supported primary-color and square-button overrides. User-defined presets, custom CSS, custom font uploads, and theme import/export are not available. The theme settings are part of each saved revision; they are not global account settings.
+Per-device theme overrides, user-defined presets, custom CSS, uploaded fonts, and theme import/export are not available in the dashboard. Fonts use system stacks and do not require an external font request. Theme settings belong to each funnel revision; they are not shared account preferences.
 
-For the exact snapshot examples and the supported JSON shape, see [`examples/`](../examples/). The example files show revision data for reference; Eez Funnel does not currently import them.
+For the exact snapshot examples and supported JSON shape, see [`examples/`](../examples/). The example files show revision data for reference; Eez Funnel does not currently import them.

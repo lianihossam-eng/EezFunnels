@@ -388,7 +388,7 @@ fn preset_tokens(preset: ThemePreset) -> BTreeMap<String, String> {
             "#f0d8fb",
             "#715a81",
             "#ffffff",
-            "#d946ef",
+            "#c026d3",
             "#ffffff",
             "#38204d",
             "system-ui, sans-serif",
