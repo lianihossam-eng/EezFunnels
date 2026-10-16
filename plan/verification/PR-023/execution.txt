@@ -1,5 +1,5 @@
 Task-ID: PR-023
-Purpose: compare the local V2 staged-upload wire candidates; both candidates persist the same complete canonical document, and separately check legacy V1 snapshot compatibility.
+Purpose: compare the local V2 staged-upload wire candidates; both candidates persist the same complete canonical document, separately check legacy V1 snapshot shapes, and model restore-safe sequence allocation and bounded sweeps across D1 restore.
 
 Reported Node benchmark
 - Timestamp: 2026-10-16T02:45:29.035Z.
@@ -62,8 +62,7 @@ Follow-up review of bounded admission and finite tombstone cleanup
 
 Follow-up exact-head sweep fairness correction
 - Sol's review of exact head `495eabd95ffffa17b980fd28655b28e292ac4897` found that a cursor-only R2 sweep could miss a late object inserted behind its saved cursor indefinitely if newer keys prevented the listing from reaching EOF.
-- D22 now assigns each attempt a monotonic installation sequence in its unique R2 key and fixes a high-water sequence at the start of every sweep pass. Later admissions cannot extend that pass; each completed pass starts again at the prefix beginning, so late objects behind a cursor remain eligible. The D1 restore rule requires preserving the sequence counter or registering a fresh R2 namespace.
-- The lifecycle prototype now pages two keys at a time and asserts a sequence-2 late insertion behind cursor 3, continued admissions at sequences 7 and 8, completion at the fixed sequence-6 boundary, age-gating at 24 hours, and deletion of the late object on a later pass. This remains a deterministic Node model, not an R2/Cron integration test.
+- The initial fairness proposal used namespace-qualified keys and a retained namespace registry, then the following exact-head restore review exposed that a registry kept only in D1 would itself roll back. The correction below replaces that proposal with an external R2 sequence counter.
 - Timestamp: 2026-10-16T02:41Z.
 - `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed. Full `cargo xtask ci` passed, including Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
 - All Worker/D1 validation used local bindings. No remote Cloudflare account, R2 bucket, Cron schedule, or deployment was exercised. Updated-head Sol/@codex reviews and hosted checks remain required.
@@ -75,6 +74,22 @@ Follow-up exact-head benchmark acceptance correction
 - The corrected artifact records these two distinct latency summaries and exposes the failed per-fixture gate. D22, research, roadmap, and status now state the V1 fixture scope, the Node-only limitation, and the per-fixture p95 failure. This candidate comparison remains non-production evidence.
 - `node --check scripts/benchmark-pr023-transport.mjs`, the full benchmark run, benchmark-artifact assertions, and the focused lifecycle test passed. Full `cargo xtask ci` passed at 2026-10-16T02:52Z, including Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
 - No remote Cloudflare account, D1 database, R2 bucket, Cron schedule, or deployment was used. Updated-head exact reviews and hosted checks remain required.
+
+Follow-up exact-head restore-safe allocator correction
+- Codex's review thread on `6723bba612d37ff2324e242e8d43a9ecfac051a0` identified that a late writer could be stranded if D1 restore rolled back the only namespace/high-water registry. Official Cloudflare D1 docs say Time Travel overwrites all D1 data in place. R2's current consistency docs say conditional writes are evaluated atomically and R2 reads/writes/lists are strongly consistent globally.
+- D22 now puts the authoritative monotonic attempt sequence in `private/stage-control/sequence-v1`, outside restorable D1 state. The Worker reserves the D1 attempt row, advances the R2 counter with an ETag-conditional write, persists the assigned sequence/key in D1, and only then starts the stage-object PUT. Failed allocations leave safe gaps and fail closed; the counter is never reset to zero. Stage keys use the fixed-width sequence and unique attempt ID under `private/stage/`.
+- The lifecycle regression starts a pass through sequence 6, restores D1 (resetting the saved cursor but keeping the simulated R2 counter), materializes an old sequence-2 writer after restore, then admits sequences 7–9 outside the current pass. The next pass revisits the late object, enforces the 24-hour age gate, and deletes all eligible objects. This proves the deterministic model only.
+- `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed. PR-024 must verify the Worker binding's conditional-write contention, counter integrity/fail-closed recovery, sequence persistence before R2 writes, a real D1 restore with a late writer, bounded Cron pagination, and R2 cleanup behavior.
+- No remote Cloudflare account, D1 restore, R2 bucket, Cron schedule, or deployment was exercised. Updated-head exact reviews and hosted checks remain required.
+
+Follow-up adversarial closure for D1 restore state
+- Two independent quota/cleanup reviews found restore-model gaps: an unresolved R2 writer was lost when D1 state reset; resetting quota counters while retaining retired rows could make cleanup decrement below zero; and a completed object held by a retired stage was omitted from the modeled sweep inventory.
+- `RESTORE_D1` now rebuilds all D1-owned state and quota counts from the same initial snapshot while preserving the external R2 sequence, pending writer operations, and existing object inventory. It also copies any still-present object from current or retired stage/attempt records into orphan inventory, deduplicated by R2 key and retaining its original object time.
+- New headless regressions execute upload → restore → late completion → sweep, completed upload → restore → age-gated sweep, save → retire stage → restore → sweep, late sequence-2 insertion behind a persisted cursor, and the restore/quota reset path. The sequence-6 pass stays bounded while sequences 7–9 wait for a later pass.
+- Both independent follow-up reviews reported no remaining findings; the no-comments audit remains clean.
+- Timestamp: 2026-10-16T03:20Z. `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed.
+- `cargo xtask ci` passed: Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
+- CI and lifecycle validation used only local bindings and in-memory deterministic models. No remote D1 restore, R2 bucket, Cron schedule, account credential, or deployment was used. PR-024 retains the real Worker/R2 CAS, D1 restore, writer timing, and Cron/sweep integration gates.
 
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.

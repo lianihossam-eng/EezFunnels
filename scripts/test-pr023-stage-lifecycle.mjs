@@ -63,29 +63,54 @@ assert.notEqual(deadlineRejected.stage.status, "uploaded");
 const tombstoneRetiredBeforeLateWrite = runScenario("late-write-after-tombstone-retirement", 7);
 assert.equal(tombstoneRetiredBeforeLateWrite.attempt, null);
 assert.equal(tombstoneRetiredBeforeLateWrite.outstandingAttemptSlots, 0);
-assert.deepEqual(Array.from(tombstoneRetiredBeforeLateWrite.pendingLateWriterKeys, (writer) => writer.key), [stageObjectKey(1)]);
+assert.deepEqual(Array.from(tombstoneRetiredBeforeLateWrite.unsettledR2Writers, (writer) => writer.key), [stageObjectKey(1)]);
 assert.equal(tombstoneRetiredBeforeLateWrite.orphanObjects.length, 0);
 const lateWriteCompleted = runScenario("late-write-after-tombstone-retirement", 8);
 assert.equal(lateWriteCompleted.attempt, null);
 assert.equal(lateWriteCompleted.outstandingAttemptSlots, 0);
-assert.equal(lateWriteCompleted.pendingLateWriterKeys.length, 0);
+assert.equal(lateWriteCompleted.unsettledR2Writers.length, 0);
 assert.equal(lateWriteCompleted.orphanObjects.length, 1);
 assert.equal(lateWriteCompleted.orphanObjects[0].key, stageObjectKey(1));
 assert.equal(lateWriteCompleted.orphanObjects[0].sequence, 1);
-assert.match(lateWriteCompleted.lastEvent, /completed after its D1 attempt row retired/);
+assert.match(lateWriteCompleted.lastEvent, /completed after its D1 attempt row became unavailable/);
 const retiredTombstoneLateWrite = runScenario("late-write-after-tombstone-retirement");
 assert.equal(retiredTombstoneLateWrite.retiredAttempts.length, 0);
 assert.equal(retiredTombstoneLateWrite.attempt, null);
 assert.equal(retiredTombstoneLateWrite.outstandingAttemptSlots, 0);
 assert.equal(retiredTombstoneLateWrite.outstandingStageSlots, 0);
-assert.equal(retiredTombstoneLateWrite.pendingLateWriterKeys.length, 0);
+assert.equal(retiredTombstoneLateWrite.unsettledR2Writers.length, 0);
 assert.equal(retiredTombstoneLateWrite.orphanObjects.length, 0);
 assert.ok(retiredTombstoneLateWrite.events.some((event) => /removed 1 unreferenced object/.test(event)));
-assert.match(run(["LATE_WRITE_AFTER_TOMBSTONE_RETIRE"]).lastEvent, /no unresolved external writer remains/);
+assert.match(run(["COMPLETE_UNRESOLVED_R2_WRITE"]).lastEvent, /no unresolved external writer remains/);
+
+const lateWriterAcrossRestore = run(["MINT", "BEGIN_UPLOAD", "RESTORE_D1"]);
+assert.equal(lateWriterAcrossRestore.r2SequenceHighWatermark, 1);
+assert.equal(lateWriterAcrossRestore.attempt, null);
+assert.deepEqual(Array.from(lateWriterAcrossRestore.unsettledR2Writers, (writer) => writer.key), [stageObjectKey(1)]);
+const lateWriteAfterRestore = reduce(lateWriterAcrossRestore, { type: "COMPLETE_UNRESOLVED_R2_WRITE" });
+assert.equal(lateWriteAfterRestore.unsettledR2Writers.length, 0);
+assert.equal(lateWriteAfterRestore.orphanObjects.length, 1);
+assert.equal(lateWriteAfterRestore.orphanObjects[0].key, stageObjectKey(1));
+assert.match(lateWriteAfterRestore.lastEvent, /completed after its D1 attempt row became unavailable/);
+
+const completedObjectBeforeRestore = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD"]);
+const completedObjectKey = completedObjectBeforeRestore.stage.objectKey;
+assert.equal(completedObjectBeforeRestore.unsettledR2Writers.length, 0);
+const completedObjectAfterRestore = reduce(completedObjectBeforeRestore, { type: "RESTORE_D1" });
+assert.equal(completedObjectAfterRestore.stage, null);
+assert.equal(completedObjectAfterRestore.orphanObjects.length, 1);
+assert.equal(completedObjectAfterRestore.orphanObjects[0].key, completedObjectKey);
+assert.equal(completedObjectAfterRestore.orphanObjects[0].createdAt, 0);
+
+const retiredStageObjectBeforeRestore = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "MINT"]);
+const retiredStageObjectKey = retiredStageObjectBeforeRestore.retiredStages[0].stage.objectKey;
+assert.equal(retiredStageObjectBeforeRestore.retiredStages[0].stage.objectPresent, true);
+const retiredStageObjectAfterRestore = reduce(retiredStageObjectBeforeRestore, { type: "RESTORE_D1" });
+assert.ok(retiredStageObjectAfterRestore.orphanObjects.some((object) => object.key === retiredStageObjectKey));
 
 const fairSweep = initialState();
 fairSweep.minute = 1440;
-fairSweep.attemptSequence = 7;
+fairSweep.r2SequenceHighWatermark = 6;
 fairSweep.orphanObjects = [1, 3, 4, 5, 6].map((sequence) => ({
   key: stageObjectKey(sequence), sequence, createdAt: 0,
 }));
@@ -99,7 +124,7 @@ sweepState.orphanObjects.push(
   { key: stageObjectKey(7), sequence: 7, createdAt: sweepState.minute },
   { key: stageObjectKey(8), sequence: 8, createdAt: sweepState.minute },
 );
-sweepState.attemptSequence = 9;
+sweepState.r2SequenceHighWatermark = 8;
 sweepState = reduce(sweepState, { type: "SWEEP_R2" });
 assert.equal(sweepState.sweepHighWatermark, 6);
 assert.equal(sweepState.sweepCursorKey, stageObjectKey(5));
@@ -116,16 +141,94 @@ assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequenc
 sweepState = reduce(sweepState, { type: "ADVANCE_1440" });
 sweepState = reduce(sweepState, { type: "SWEEP_R2" });
 assert.equal(sweepState.sweepHighWatermark, null);
+assert.equal(sweepState.sweepCursorKey, null);
 assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [2, 7]);
 sweepState = reduce(sweepState, { type: "SWEEP_R2" });
 assert.equal(sweepState.sweepHighWatermark, null);
 assert.equal(sweepState.orphanObjects.length, 0);
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, null);
+assert.equal(sweepState.orphanObjects.length, 0);
+
+function finishSweepPass(state) {
+  let result = state;
+  let invocations = 0;
+  do {
+    result = reduce(result, { type: "SWEEP_R2" });
+    invocations += 1;
+    assert.ok(invocations <= 10, "R2 sequence sweep pass exceeded its bounded fixture");
+  } while (result.sweepHighWatermark !== null);
+  return result;
+}
+
+lateWriteAfterRestore.minute = 1440;
+const sweptLateWriteAfterRestore = finishSweepPass(lateWriteAfterRestore);
+assert.equal(sweptLateWriteAfterRestore.orphanObjects.length, 0);
+
+completedObjectAfterRestore.minute = 1440;
+const sweptCompletedObjectAfterRestore = finishSweepPass(completedObjectAfterRestore);
+assert.equal(sweptCompletedObjectAfterRestore.orphanObjects.length, 0);
+
+retiredStageObjectAfterRestore.minute = 1440;
+const sweptRetiredStageObjectAfterRestore = finishSweepPass(retiredStageObjectAfterRestore);
+assert.equal(sweptRetiredStageObjectAfterRestore.orphanObjects.length, 0);
+
+const restoreSweep = initialState();
+restoreSweep.minute = 1440;
+restoreSweep.r2SequenceHighWatermark = 1;
+let restoreSweepState = reduce(restoreSweep, { type: "MINT" });
+restoreSweepState = reduce(restoreSweepState, { type: "BEGIN_UPLOAD" });
+assert.equal(restoreSweepState.attempt.sequence, 2);
+restoreSweepState.r2SequenceHighWatermark = 6;
+restoreSweepState.orphanObjects = [1, 3, 4, 5, 6].map((sequence) => ({
+  key: stageObjectKey(sequence), sequence, createdAt: 0,
+}));
+restoreSweepState = reduce(restoreSweepState, { type: "SWEEP_R2" });
+assert.equal(restoreSweepState.sweepCursorKey, stageObjectKey(3));
+restoreSweepState = reduce(restoreSweepState, { type: "RESTORE_D1" });
+assert.equal(restoreSweepState.r2SequenceHighWatermark, 6);
+assert.equal(restoreSweepState.sweepCursorKey, null);
+assert.deepEqual(Array.from(restoreSweepState.unsettledR2Writers, (writer) => writer.sequence), [2]);
+restoreSweepState = reduce(restoreSweepState, { type: "SWEEP_R2" });
+assert.equal(restoreSweepState.sweepHighWatermark, 6);
+assert.equal(restoreSweepState.sweepCursorKey, stageObjectKey(5));
+restoreSweepState = reduce(restoreSweepState, { type: "COMPLETE_UNRESOLVED_R2_WRITE" });
+assert.equal(restoreSweepState.unsettledR2Writers.length, 0);
+assert.ok(restoreSweepState.orphanObjects.some((object) => object.key === stageObjectKey(2, "attempt-1")));
+restoreSweepState.orphanObjects.push(
+  ...[7, 8, 9].map((sequence) => ({
+    key: stageObjectKey(sequence),
+    sequence,
+    createdAt: restoreSweepState.minute,
+  })),
+);
+restoreSweepState.r2SequenceHighWatermark = 9;
+restoreSweepState = finishSweepPass(restoreSweepState);
+assert.equal(restoreSweepState.r2SequenceHighWatermark, 9);
+assert.ok(restoreSweepState.orphanObjects.some((object) => object.key === stageObjectKey(2, "attempt-1")));
+assert.deepEqual(
+  Array.from(restoreSweepState.orphanObjects.filter((object) => object.sequence > 6), (object) => object.sequence).sort((a, b) => a - b),
+  [7, 8, 9],
+);
+restoreSweepState = finishSweepPass(restoreSweepState);
+assert.ok(restoreSweepState.orphanObjects.some((object) => object.key === stageObjectKey(2, "attempt-1")));
+restoreSweepState = reduce(restoreSweepState, { type: "ADVANCE_1440" });
+restoreSweepState = finishSweepPass(restoreSweepState);
+assert.equal(restoreSweepState.orphanObjects.length, 0);
 
 const expiredMint = run(["MINT", "ADVANCE_16", "CLEANUP", "REPLAY_MINT", "BEGIN_UPLOAD"]);
 assert.equal(expiredMint.stage.status, "expired");
 assert.equal(expiredMint.stage.metadataRemoved, true);
 assert.equal(expiredMint.outstandingStageSlots, 0);
 assert.match(expiredMint.lastEvent, /Upload denied/);
+
+const quotaRestore = run(["MINT", "BEGIN_UPLOAD", "ADVANCE_5", "CLEANUP", "ADVANCE_16", "MINT", "RESTORE_D1", "CLEANUP"]);
+assert.equal(quotaRestore.outstandingStageSlots, 0);
+assert.equal(quotaRestore.outstandingAttemptSlots, 0);
+assert.equal(quotaRestore.retiredStages.length, 0);
+assert.equal(quotaRestore.retiredAttempts.length, 0);
+assert.ok(quotaRestore.outstandingStageSlots >= 0);
+assert.ok(quotaRestore.outstandingAttemptSlots >= 0);
 
 const consumedMint = run([
   "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "SAVE", "CLEANUP", "REPLAY_MINT", "REPLAY_SAVE",
@@ -293,4 +396,4 @@ assert.equal(uploadRetry.stage.status, "uploaded");
 assert.equal(uploadRetry.stage.objectPresent, true);
 assert.equal(uploadRetry.revisionCount, 7);
 
-process.stdout.write("PR-023 stage lifecycle assertions passed: ten-slot stage and attempt quotas, exclusive upload deadline, 24-hour tombstone retirement, late-orphan prefix sweeping, mint/save receipt replay and expiry, distinct consecutive save keys, changed-payload rejection, stale-head recovery, replacement cleanup, retry-before-remint cleanup, and retry identity.\n");
+process.stdout.write("PR-023 stage lifecycle assertions passed: ten-slot stage and attempt quotas, exclusive upload deadline, 24-hour tombstone retirement, late-orphan sweeps across D1 restore with an external R2 sequence, mint/save receipt replay and expiry, distinct consecutive save keys, changed-payload rejection, stale-head recovery, replacement cleanup, retry-before-remint cleanup, and retry identity.\n");

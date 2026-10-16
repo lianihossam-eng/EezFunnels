@@ -171,34 +171,61 @@ establish Cloudflare production behavior.
    tombstone retention.
 
    A scheduled R2 stage-prefix sweeper reconciles temporary objects after
-   tombstone retirement. Allocate each attempt a monotonically increasing
-   installation sequence atomically with its D1 row, and put that sequence as
-   fixed-width decimal text before the unique attempt ID in the R2 key under
-   `private/stage/`. At the start of each sweep pass, read and persist the
-   highest allocated sequence as a fixed high-water mark. Paginate in key order
-   only through that sequence; attempts admitted later have a higher sequence
-   and cannot extend the in-progress pass. Bound each Cron invocation, persist
-   its R2 cursor, and resume it on the next invocation. Stop a pass as soon as
-   listing reaches a key whose sequence exceeds its high-water mark, or when
-   the current listing reaches its end; then start a new pass from the
-   beginning with a newly captured high-water mark. Never retire an old
-   sequence range from future passes: a late writer may create an
-   object behind the saved cursor after a pass has already visited that key.
-   Its finite attempt key is eligible again on the next pass, regardless of
-   newer admissions. Retry a failed list/delete page without advancing past
-   unprocessed keys. The sequence must never regress or be reused within the
-   same R2 namespace; a D1 restore must preserve its high-water counter or
-   rotate and register a fresh namespace before V2 staging resumes.
+   tombstone retirement. Keep the authoritative monotonically increasing
+   attempt sequence in a small control object under
+   `private/stage-control/sequence-v1`, outside restorable D1 state. Allocate a
+   sequence by reading that R2 object and conditionally replacing it with an
+   ETag precondition; retry a lost compare-and-set with the latest value. The
+   one-time installation bootstrap creates the initial object with create-only
+   conditional semantics before stage routes are enabled. Sequence gaps are
+   safe. If the control object is missing at runtime, malformed, or cannot be
+   updated, fail closed before any R2 stage write; never recreate it at zero.
+   R2's conditional-write and strong-consistency guarantees are documented,
+   but allocator contention and behavior through the Worker binding remain
+   PR-024 integration gates.
 
-   Each pass lists only `private/stage/`, uses the provider `uploaded`
+   Reserve the attempt quota slot and create its D1 row before allocating the
+   sequence. Persist the returned sequence and fixed-width key
+   `private/stage/<20-digit-sequence>/<attempt-id>` on that row before issuing
+   the R2 `PUT`. If D1 reservation, the R2 compare-and-set, or recording the
+   sequence fails, do not write the stage object; a consumed but unreferenced
+   sequence is a harmless gap. The R2 counter, not any copy in D1, is the
+   source of truth. D1 Time Travel overwrites all D1 data and cancels in-flight
+   queries, but does not roll back the separate R2 control object. Thus a
+   restored D1 sequence or attempt row cannot lower the allocator or cause a
+   later sequence to be reused.
+
+   At the start of each sweep pass, read and persist the R2 counter's current
+   value as a fixed high-water mark. Paginate the `private/stage/` prefix in
+   key order only through that sequence; attempts allocated later cannot
+   extend the pass. Bound each Cron invocation, persist the fixed high-water
+   mark and R2 cursor, and resume them on the next invocation. Stop at the
+   first listed key whose sequence exceeds the fixed high-water mark or at the
+   current end of the list. Then restart from the prefix beginning with a new
+   high-water mark. Never retire old sequence ranges: an unresolved writer can
+   create an object behind a saved cursor after that key was visited. Its
+   sequence remains below the R2 control counter, so a later full pass revisits
+   it. A D1 restore may reset an in-progress cursor to the beginning; repeated
+   listing and deletion are idempotent. If a restored cursor resumes an older
+   fixed high-water mark, finish that bounded pass and capture the current R2
+   counter on the next pass. Retry a failed list/delete page without advancing
+   past unprocessed keys.
+
+   Each pass uses the provider `uploaded`
    timestamp, excludes any live D1 stage reference, and deletes unreferenced
    objects at least 24 hours old. A late write that completes after an earlier
-   pass has a new upload timestamp and is removed in a later pass. The sweep
-   cursor, fixed high-water mark, failure retry, namespace restore rule, and
-   late insertion behind the cursor are required PR-024 behaviors; local
-   Wrangler tests cannot establish production Cron or R2 scheduling. D1
-   tombstone retirement never depends on a post-quiescence absence check.
-   No object key is written to R2 before its attempt row exists.
+   pass has a new upload timestamp and is removed in a later pass. Durable
+   conditional sequence allocation, high-water capture, bounded cursor
+   persistence, failure retry, D1 restore with a late writer, and late
+   insertion behind a cursor are required PR-024 behaviors; local Wrangler
+   tests cannot establish production Cron or R2 scheduling. D1 tombstone
+   retirement never depends on a post-quiescence absence check. No object key
+   is written to R2 before its attempt row exists and its sequence is durable
+   in the separate R2 control object. A D1 restore resets D1-owned rows,
+   receipts, quotas, and sweep cursor together; completed R2 objects remain
+   discoverable under the prefix and unresolved writes keep their allocated
+   keys. The model preserves those external operations and objects through a
+   restore. PR-024 must verify these interleavings with an actual D1 restore.
 
    Stage expiration first changes the stage to terminal `expired` in D1 and
    denies new attempt completion or finalization; an already-running PUT may

@@ -77,6 +77,7 @@
         <button type="button" data-action="CLEANUP">Run cleanup</button>
         <button type="button" data-action="REPLAY_SAVE">Retry save with same key</button>
         <button type="button" data-action="REPLAY_PREVIOUS_SAVE">Retry previous save with same key</button>
+        <button type="button" data-action="RESTORE_D1">Simulate D1 restore with R2 sequence control intact</button>
         <button type="button" class="primary" data-action="RESET">Reset model</button>
       </div>
     </section>
@@ -173,7 +174,7 @@
             { label: "Advance one day", action: { type: "ADVANCE_1440" } },
             { label: "Expire stage metadata", action: { type: "CLEANUP" } },
             { label: "Compact the attempt tombstone", action: { type: "CLEANUP" } },
-            { label: "Complete the late R2 write", action: { type: "LATE_WRITE_AFTER_TOMBSTONE_RETIRE" } },
+            { label: "Complete the late R2 write", action: { type: "COMPLETE_UNRESOLVED_R2_WRITE" } },
             { label: "Advance one day", action: { type: "ADVANCE_1440" } },
             { label: "Run the scheduled stage-prefix sweep", action: { type: "SWEEP_R2" } },
           ],
@@ -305,10 +306,10 @@
           mintReceipts: [],
           retiredStages: [],
           retiredAttempts: [],
-          pendingLateWriterKeys: [],
+          unsettledR2Writers: [],
           saveReceipts: [],
           attemptSerial: 1,
-          attemptSequence: 1,
+          r2SequenceHighWatermark: 0,
           attempt: null,
           outstandingAttemptSlots: 0,
           orphanObjects: [],
@@ -349,16 +350,17 @@
 
       function retireAttemptTombstone(state, attempt) {
         if (attempt.capacityReleased) return;
-        if (!attempt.writerQuiescent) {
-          state.pendingLateWriterKeys.push({ key: attempt.objectKey, sequence: attempt.sequence });
-        }
         attempt.capacityReleased = true;
         state.outstandingAttemptSlots -= 1;
       }
 
+      function settleR2Writer(state, attempt) {
+        state.unsettledR2Writers = state.unsettledR2Writers.filter((writer) => writer.key !== attempt.objectKey);
+      }
+
       function retainR2Orphan(state, attempt) {
         if (!attempt.objectPresent) return;
-        state.orphanObjects.push({ key: attempt.objectKey, sequence: attempt.sequence, createdAt: state.minute });
+        state.orphanObjects.push({ key: attempt.objectKey, sequence: attempt.sequence, createdAt: attempt.objectCreatedAt ?? state.minute });
         attempt.objectPresent = false;
       }
 
@@ -455,11 +457,13 @@
             }
             const id = `attempt-${next.attemptSerial}`;
             next.attemptSerial += 1;
-            const sequence = next.attemptSequence;
-            next.attemptSequence += 1;
-            next.attempt = { id, sequence, stageId: next.stage.id, status: "receiving", objectKey: stageObjectKey(sequence, id), deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false, tombstoneRetireAt: null, capacityReleased: false };
+            const sequence = next.r2SequenceHighWatermark + 1;
+            next.r2SequenceHighWatermark = sequence;
+            const objectKey = stageObjectKey(sequence, id);
+            next.attempt = { id, sequence, stageId: next.stage.id, status: "receiving", objectKey, deadline: now + 2, objectPresent: false, objectCreatedAt: null, writerQuiescent: false, cleanupConfirmed: false, tombstoneRetireAt: null, capacityReleased: false };
+            next.unsettledR2Writers.push({ key: objectKey, sequence });
             next.outstandingAttemptSlots += 1;
-            return addEvent(next, `Upload attempt ${id} registered in D1 before its private R2 write.`);
+            return addEvent(next, `Upload attempt ${id} reserved sequence ${sequence} in the persistent R2 control object and recorded it in D1 before its stage-object write.`);
           }
           case "INTERRUPT_UPLOAD": {
             if (!next.attempt || next.attempt.status !== "receiving") {
@@ -472,7 +476,9 @@
             if (next.attempt.status === "abandoned") {
               if (next.attempt.writerQuiescent) return addEvent(next, "Late upload ignored: this writer is already quiescent; duplicate completion is ignored.");
               next.attempt.objectPresent = true;
+              next.attempt.objectCreatedAt = now;
               next.attempt.writerQuiescent = true;
+              settleR2Writer(next, next.attempt);
               next.stage.objectOrphaned = true;
               retainR2Orphan(next, next.attempt);
               return addEvent(next, "Late R2 write finished after its lease was retired. It is an orphan and cannot become the stage object.");
@@ -482,7 +488,9 @@
             }
             if (next.attempt.status !== "receiving") return addEvent(next, "Upload finish denied: the attempt is no longer receiving.");
             next.attempt.objectPresent = true;
+            next.attempt.objectCreatedAt = now;
             next.attempt.writerQuiescent = true;
+            settleR2Writer(next, next.attempt);
             if (now >= next.attempt.deadline || !next.stage || now >= next.stage.expiresAt || next.stage.status !== "issued") {
               markAttemptAbandoned(next, next.attempt);
               if (next.stage) next.stage.objectOrphaned = true;
@@ -493,6 +501,8 @@
             next.stage.status = "uploaded";
             next.stage.objectPresent = true;
             next.stage.objectKey = next.attempt.objectKey;
+            next.stage.sequence = next.attempt.sequence;
+            next.stage.objectCreatedAt = next.attempt.objectCreatedAt;
             return addEvent(next, "Upload completed. D1 now points the stage at the verified private object.");
           }
           case "FINISH_RETIRED_UPLOAD": {
@@ -502,8 +512,10 @@
             if (attempt) {
               markAttemptAbandoned(next, attempt);
               attempt.objectPresent = true;
+              attempt.objectCreatedAt = now;
               attempt.objectOrphaned = true;
               attempt.writerQuiescent = true;
+              settleR2Writer(next, attempt);
               retainR2Orphan(next, attempt);
               return addEvent(next, `Late R2 write for ${attempt.id} finished after its attempt was retired. Its object remains an orphan and cannot be finalized.`);
             }
@@ -536,21 +548,46 @@
           case "FILL_ATTEMPT_CAPACITY":
             next.outstandingAttemptSlots = MAX_OUTSTANDING_ATTEMPT_SLOTS;
             return addEvent(next, "Other upload attempts filled the installation's ten outstanding attempt slots.");
-          case "LATE_WRITE_AFTER_TOMBSTONE_RETIRE":
+          case "COMPLETE_UNRESOLVED_R2_WRITE":
             {
-              const writer = next.pendingLateWriterKeys.shift();
-              if (!writer) return addEvent(next, "Late R2 completion denied: no unresolved external writer remains after tombstone retirement.");
+              const writer = next.unsettledR2Writers.shift();
+              if (!writer) return addEvent(next, "Late R2 completion denied: no unresolved external writer remains.");
               next.orphanObjects.push({ ...writer, createdAt: now });
-              return addEvent(next, `The unresolved R2 operation for ${writer.key} completed after its D1 attempt row retired. Its unique key is now an orphan for the scheduled prefix sweep.`);
+              return addEvent(next, `The unresolved R2 operation for ${writer.key} completed after its D1 attempt row became unavailable. Its unique key is now an orphan for the scheduled prefix sweep.`);
             }
+          case "RESTORE_D1": {
+            const restored = initialState();
+            restored.minute = next.minute;
+            restored.r2SequenceHighWatermark = next.r2SequenceHighWatermark;
+            restored.unsettledR2Writers = next.unsettledR2Writers;
+            restored.orphanObjects = next.orphanObjects;
+            const d1Records = [
+              next.stage,
+              next.attempt,
+              ...next.retiredAttempts,
+              ...next.retiredStages.flatMap((entry) => [entry.stage, entry.attempt]),
+            ];
+            for (const record of d1Records) {
+              if (!record?.objectPresent || !record.objectKey) continue;
+              const restoredObject = {
+                key: record.objectKey,
+                sequence: record.sequence,
+                createdAt: record.objectCreatedAt ?? next.minute,
+              };
+              if (!restored.orphanObjects.some((object) => object.key === restoredObject.key)) {
+                restored.orphanObjects.push(restoredObject);
+              }
+            }
+            return addEvent(restored, `D1 restore reset D1 rows, quotas, receipts, and sweep state. The separate R2 sequence control remains at ${restored.r2SequenceHighWatermark}; pending writers and existing objects remain visible to a fresh prefix pass.`);
+          }
           case "SWEEP_R2": {
             if (next.sweepHighWatermark === null) {
-              next.sweepHighWatermark = next.attemptSequence - 1;
+              next.sweepHighWatermark = next.r2SequenceHighWatermark;
               next.sweepCursorKey = null;
             }
-            const highWatermark = next.sweepHighWatermark;
             const candidates = next.orphanObjects
-              .filter((object) => object.sequence <= highWatermark && (!next.sweepCursorKey || object.key > next.sweepCursorKey))
+              .filter((object) => object.sequence <= next.sweepHighWatermark
+                && (!next.sweepCursorKey || object.key > next.sweepCursorKey))
               .sort((left, right) => left.key.localeCompare(right.key));
             const page = candidates.slice(0, MAX_SWEEP_PAGE_ITEMS);
             const removableKeys = new Set(page
@@ -559,6 +596,7 @@
             const removed = removableKeys.size;
             next.orphanObjects = next.orphanObjects.filter((object) => !removableKeys.has(object.key));
             if (page.length > 0) next.sweepCursorKey = page.at(-1).key;
+            const highWatermark = next.sweepHighWatermark;
             const passComplete = candidates.length <= page.length;
             if (passComplete) {
               next.sweepHighWatermark = null;
@@ -572,6 +610,7 @@
             const attempt = trackedAttempts(next).find((item) => item.status === "abandoned" && !item.writerQuiescent);
             if (!attempt) return addEvent(next, "No abandoned writer is waiting for quiescence confirmation.");
             attempt.writerQuiescent = true;
+            settleR2Writer(next, attempt);
             return addEvent(next, `Writer ${attempt.id} is confirmed quiescent. Cleanup may now verify post-quiescence absence or delete its object.`);
           }
           case "CLEANUP": {
@@ -775,9 +814,10 @@
         addStateCard("Retired stages", String(state.retiredStages.length));
         const unresolvedRetiredAttempts = trackedAttempts(state).filter((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent).length;
         addStateCard("Retired upload attempts", `${state.retiredAttempts.length} · ${unresolvedRetiredAttempts} writer(s) unsettled`);
-        addStateCard("External R2 writes without a D1 row", String(state.pendingLateWriterKeys.length));
+        addStateCard("Unsettled R2 writer operations", String(state.unsettledR2Writers.length));
         addStateCard("Orphan objects in R2", String(state.orphanObjects.length));
-        addStateCard("R2 sweep pass", state.sweepHighWatermark === null ? "not in progress" : `through sequence ${state.sweepHighWatermark} · after ${state.sweepCursorKey ?? "start"}`);
+        addStateCard("R2 sequence control", `high-water ${state.r2SequenceHighWatermark} · ${state.sweepHighWatermark === null ? "no sweep pass" : `sweeping through ${state.sweepHighWatermark}`}`);
+        addStateCard("R2 sweep cursor", state.sweepCursorKey ?? "prefix start");
         const saveReceipt = state.saveReceipts.at(-1);
         addStateCard("Latest save receipt", saveReceipt ? `${saveReceipt.key} → ${saveReceipt.revisionId}` : "none");
         addStateCard("Retained save receipts", String(state.saveReceipts.length));
