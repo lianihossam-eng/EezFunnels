@@ -434,7 +434,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--json", "--command",
-                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email FROM public_form_submissions",
+                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email, (SELECT COUNT(*) FROM public_form_contexts) AS context_count, (SELECT context_json FROM public_form_contexts LIMIT 1) AS context_json FROM public_form_submissions",
             ],
             cwd=root,
             check=True,
@@ -451,6 +451,14 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert result["retention_seconds"] == 86_400, result
         assert result["unique_keys"] == 3, result
         assert result["stored_email"] == "ada@example.test", result
+        context = json.loads(result["context_json"])
+        assert result["context_count"] == 1, result
+        assert context["page_title"] == "Home", context
+        assert context["form_purpose"], context
+        assert [field["name"] for field in context["fields"]] == ["name", "email", "interest"], context
+        assert all(set(field) == {"name", "label", "kind"} for field in context["fields"]), context
+        assert "ada@example.test" not in result["context_json"], context
+        assert "options" not in result["context_json"], context
 
         subprocess.run(
             [
@@ -472,7 +480,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--json", "--command",
-                "SELECT COUNT(*) AS submissions FROM public_form_submissions",
+                "SELECT COUNT(*) AS submissions, (SELECT COUNT(*) FROM public_form_contexts) AS contexts FROM public_form_submissions",
             ],
             cwd=root,
             check=True,
@@ -483,6 +491,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         cleanup_result = find_mapping(json.loads(cleanup_query), "submissions")
         assert cleanup_result is not None, cleanup_query
         assert cleanup_result["submissions"] == 0, cleanup_result
+        assert cleanup_result["contexts"] == 0, cleanup_result
 
         log.close()
         assert "ada@example.test" not in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8")

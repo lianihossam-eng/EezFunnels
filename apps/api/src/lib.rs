@@ -8,7 +8,7 @@ use axum::routing::get;
 use axum::Router;
 use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
-    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
+    validate_form_submission, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
 use eez_render::document_v2::validate_revision_v2;
 use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
@@ -984,14 +984,9 @@ async fn public_form_submission_response(
     let Some(form) = document.form(&form_id) else {
         return funnel_slug_not_found_response(&correlation_id);
     };
-    let form_is_placed_on_page = page.sections().iter().any(|section| {
-        section.blocks().iter().any(|block| {
-            matches!(block, BlockV2::Form { form_id: placed_id, .. } if placed_id == &form_id)
-        })
-    });
-    if !form_is_placed_on_page {
+    let Some(context) = document.form_submission_context(&page_id, &form_id) else {
         return funnel_slug_not_found_response(&correlation_id);
-    }
+    };
 
     let submission = match validate_form_submission(
         form,
@@ -1019,6 +1014,7 @@ async fn public_form_submission_response(
             form_id: form_id.as_str(),
             submission_key: &submission_key,
             field_values_json: &field_values_json,
+            context: &context,
             request_consent_copy_version: request_consent.copy_version().as_str(),
             request_consent_copy: request_consent.copy(),
             marketing_opt_in: submission.marketing_opt_in(),

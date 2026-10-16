@@ -363,6 +363,60 @@ impl FormV2 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct FormSubmissionContext {
+    page_title: String,
+    form_purpose: String,
+    fields: Vec<SubmittedFieldContext>,
+}
+
+impl FormSubmissionContext {
+    pub fn page_title(&self) -> &str {
+        &self.page_title
+    }
+
+    pub fn form_purpose(&self) -> &str {
+        &self.form_purpose
+    }
+
+    pub fn fields(&self) -> &[SubmittedFieldContext] {
+        &self.fields
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedFieldContext {
+    name: String,
+    label: String,
+    kind: SubmittedFieldKind,
+}
+
+impl SubmittedFieldContext {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn kind(&self) -> SubmittedFieldKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmittedFieldKind {
+    Text,
+    Email,
+    Phone,
+    Checkbox,
+    Select,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsentCopy {
     pub(crate) copy_version: StableDocumentId,
     pub(crate) copy: String,
@@ -498,6 +552,23 @@ pub enum FormField {
         required: bool,
         options: Vec<String>,
     },
+}
+
+impl FormField {
+    fn submission_context(&self) -> SubmittedFieldContext {
+        let (name, label, kind) = match self {
+            Self::Text { name, label, .. } => (name, label, SubmittedFieldKind::Text),
+            Self::Email { name, label, .. } => (name, label, SubmittedFieldKind::Email),
+            Self::Phone { name, label, .. } => (name, label, SubmittedFieldKind::Phone),
+            Self::Checkbox { name, label, .. } => (name, label, SubmittedFieldKind::Checkbox),
+            Self::Select { name, label, .. } => (name, label, SubmittedFieldKind::Select),
+        };
+        SubmittedFieldContext {
+            name: name.clone(),
+            label: label.clone(),
+            kind,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -691,6 +762,32 @@ impl DocumentV2 {
             .forms
             .get(id)
             .and_then(|position| self.data.forms.get(*position))
+    }
+
+    pub fn form_submission_context(
+        &self,
+        page_id: &PageId,
+        form_id: &FormId,
+    ) -> Option<FormSubmissionContext> {
+        let page = self.page(page_id)?;
+        let form = self.form(form_id)?;
+        let is_placed = page.sections().iter().any(|section| {
+            section.blocks().iter().any(
+                |block| matches!(block, BlockV2::Form { form_id: placed_id, .. } if placed_id == form_id),
+            )
+        });
+        if !is_placed {
+            return None;
+        }
+        Some(FormSubmissionContext {
+            page_title: page.title().to_owned(),
+            form_purpose: form.purpose().to_owned(),
+            fields: form
+                .fields()
+                .iter()
+                .map(FormField::submission_context)
+                .collect(),
+        })
     }
 
     pub fn field(&self, id: &FieldId) -> Option<&FormField> {

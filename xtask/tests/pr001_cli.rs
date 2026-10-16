@@ -41,6 +41,11 @@ mod unix {
             fs::write(workspace.join("scripts/smoke-pr033-public-forms.sh"), "")
                 .expect("write public forms smoke placeholder");
             fs::write(
+                workspace.join("scripts/test-public-form-context-migration.py"),
+                "import os\nwith open(os.environ['XTASK_CAPTURE'], 'a', encoding='utf-8') as capture:\n    capture.write('form-context-migration\\n')\n",
+            )
+            .expect("write public form context migration placeholder");
+            fs::write(
                 workspace.join("crates/dashboard-presentation/assets/bootstrap.js"),
                 "export {};\n",
             )
@@ -264,7 +269,7 @@ mod unix {
             .expect("read Cargo invocations");
         assert_eq!(
             actual,
-            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --release --locked\naudit\n"
+            "fmt --all -- --check\nclippy --workspace --all-targets --locked -- -D warnings\ntest --workspace --locked\nmetadata --all-features --format-version 1 --locked\nbuild -p eez-api --target wasm32-unknown-unknown --locked\nbuild -p eez-dashboard --target wasm32-unknown-unknown --no-default-features --features browser --release --locked\nform-context-migration\naudit\n"
         );
     }
 
@@ -309,6 +314,10 @@ mod unix {
             .iter()
             .position(|line| *line == "forms-smoke")
             .expect("public forms smoke gate");
+        let form_context_migration_position = lines
+            .iter()
+            .position(|line| *line == "form-context-migration")
+            .expect("public form context migration gate");
         let mcp_smoke_position = lines
             .iter()
             .position(|line| *line == "mcp-smoke")
@@ -319,7 +328,14 @@ mod unix {
             .expect("audit gate");
         assert!(smoke_position < mcp_smoke_position, "{actual}");
         assert!(smoke_position < forms_smoke_position, "{actual}");
-        assert!(forms_smoke_position < mcp_smoke_position, "{actual}");
+        assert!(
+            forms_smoke_position < form_context_migration_position,
+            "{actual}"
+        );
+        assert!(
+            form_context_migration_position < mcp_smoke_position,
+            "{actual}"
+        );
         assert!(mcp_smoke_position < audit_position, "{actual}");
     }
 

@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 
+use eez_domain::document_v2::FormSubmissionContext;
 use serde::{Deserialize, Serialize};
 use worker::d1::D1Type;
 use worker::{D1Database, Error};
@@ -223,6 +224,7 @@ pub struct NewPublicFormSubmission<'a> {
     pub form_id: &'a str,
     pub submission_key: &'a str,
     pub field_values_json: &'a str,
+    pub context: &'a FormSubmissionContext,
     pub request_consent_copy_version: &'a str,
     pub request_consent_copy: &'a str,
     pub marketing_opt_in: bool,
@@ -1123,6 +1125,11 @@ impl<'a> Repository<'a> {
         if input.field_values_json.len() > crate::MAX_PUBLIC_FORM_SUBMISSION_BYTES {
             return Err(RepositoryError::PayloadTooLarge);
         }
+        let context_json =
+            serde_json::to_string(input.context).map_err(|_| RepositoryError::InvalidJson)?;
+        if context_json.len() > crate::MAX_PUBLIC_FORM_CONTEXT_BYTES {
+            return Err(RepositoryError::PayloadTooLarge);
+        }
         let field_values: serde_json::Value = serde_json::from_str(input.field_values_json)
             .map_err(|_| RepositoryError::InvalidJson)?;
         if !field_values.is_object() {
@@ -1155,6 +1162,7 @@ impl<'a> Repository<'a> {
         let form_id = D1Type::Text(input.form_id);
         let submission_key = D1Type::Text(input.submission_key);
         let field_values_json = D1Type::Text(input.field_values_json);
+        let context_json = D1Type::Text(&context_json);
         let request_consent_copy_version = D1Type::Text(input.request_consent_copy_version);
         let request_consent_copy = D1Type::Text(input.request_consent_copy);
         let marketing_opt_in = D1Type::Boolean(input.marketing_opt_in);
@@ -1169,10 +1177,27 @@ impl<'a> Repository<'a> {
         let retention_seconds = D1Type::Integer(input.retention_seconds);
         let limit_per_minute = D1Type::Integer(input.limit_per_minute);
 
-        let inserted = self
+        let insert_context = self
             .database
             .prepare(
-                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_key, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
+                "INSERT INTO public_form_contexts (funnel_id, revision_id, page_id, form_id, context_json) SELECT funnels.id, ?, ?, ?, ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND NOT EXISTS (SELECT 1 FROM public_form_submissions WHERE funnel_id = funnels.id AND form_id = ? AND submission_key = ?) AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, revision_id, page_id, form_id) DO NOTHING",
+            )
+            .bind_refs([
+                &revision_id,
+                &page_id,
+                &form_id,
+                &context_json,
+                &funnel_id,
+                &funnel_slug,
+                &revision_id,
+                &form_id,
+                &submission_key,
+                &limit_per_minute,
+            ])?;
+        let insert_submission = self
+            .database
+            .prepare(
+                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_key, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND EXISTS (SELECT 1 FROM public_form_contexts WHERE funnel_id = funnels.id AND revision_id = revisions.id AND page_id = ? AND form_id = ? AND context_json = ?) AND NOT EXISTS (SELECT 1 FROM public_form_submissions WHERE funnel_id = funnels.id AND form_id = ? AND submission_key = ?) AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING",
             )
             .bind_refs([
                 &submission_id,
@@ -1191,11 +1216,25 @@ impl<'a> Repository<'a> {
                 &funnel_id,
                 &funnel_slug,
                 &revision_id,
+                &page_id,
+                &form_id,
+                &context_json,
+                &form_id,
+                &submission_key,
                 &limit_per_minute,
-            ])?
-            .first::<String>(Some("submission_id"))
+            ])?;
+        self.database
+            .batch(vec![insert_context, insert_submission])
             .await?;
-        if inserted.is_some() {
+
+        let inserted = self
+            .database
+            .prepare("SELECT EXISTS(SELECT 1 FROM public_form_submissions WHERE submission_id = ?) AS was_inserted")
+            .bind_refs([&submission_id])?
+            .first::<i64>(Some("was_inserted"))
+            .await?
+            .unwrap_or(0);
+        if inserted == 1 {
             return Ok(PublicFormSubmissionResult::Stored);
         }
 
@@ -1237,6 +1276,23 @@ impl<'a> Repository<'a> {
                 .database
                 .prepare(
                     "DELETE FROM public_form_submissions WHERE submission_id IN (SELECT submission_id FROM public_form_submissions WHERE expires_at <= unixepoch() ORDER BY expires_at LIMIT ?)",
+                )
+                .bind_refs([&batch_size])?
+                .run()
+                .await?
+                .meta()?
+                .and_then(|meta| meta.changes)
+                .unwrap_or(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE as usize);
+            if deleted < PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE as usize {
+                break;
+            }
+        }
+        for _ in 0..PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES {
+            let batch_size = D1Type::Integer(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE);
+            let deleted = self
+                .database
+                .prepare(
+                    "DELETE FROM public_form_contexts WHERE rowid IN (SELECT contexts.rowid FROM public_form_contexts AS contexts WHERE NOT EXISTS (SELECT 1 FROM public_form_submissions AS submissions WHERE submissions.funnel_id = contexts.funnel_id AND submissions.revision_id = contexts.revision_id AND submissions.page_id = contexts.page_id AND submissions.form_id = contexts.form_id) LIMIT ?)",
                 )
                 .bind_refs([&batch_size])?
                 .run()

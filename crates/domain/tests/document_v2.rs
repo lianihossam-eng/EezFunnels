@@ -474,6 +474,74 @@ fn typed_form_schema_rejects_reserved_names_and_accepts_the_closed_valid_shape()
     assert!(DocumentV2::decode(&serialized, "funnel-01").is_err());
 }
 
+#[test]
+fn form_submission_context_is_typed_ordered_and_scoped_to_its_page() {
+    let document = document_with_lead_form();
+    let page_id =
+        eez_domain::document_v2::PageId::parse("page-home".to_owned()).expect("valid page id");
+    let form_id = FormId::parse("form-lead".to_owned()).expect("valid form id");
+    let context = document
+        .form_submission_context(&page_id, &form_id)
+        .expect("form is placed on this page");
+
+    assert_eq!(context.page_title(), "Home");
+    assert_eq!(context.form_purpose(), "Contact request");
+    assert_eq!(
+        context
+            .fields()
+            .iter()
+            .map(|field| (field.name(), field.label(), field.kind()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "name",
+                "Name",
+                eez_domain::document_v2::SubmittedFieldKind::Text
+            ),
+            (
+                "email",
+                "Email",
+                eez_domain::document_v2::SubmittedFieldKind::Email
+            ),
+            (
+                "phone",
+                "Phone",
+                eez_domain::document_v2::SubmittedFieldKind::Phone
+            ),
+            (
+                "topic",
+                "Topic",
+                eez_domain::document_v2::SubmittedFieldKind::Select
+            ),
+            (
+                "follow_up",
+                "May I follow up?",
+                eez_domain::document_v2::SubmittedFieldKind::Checkbox
+            ),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&context).expect("context is serializable"),
+        serde_json::json!({
+            "page_title": "Home",
+            "form_purpose": "Contact request",
+            "fields": [
+                {"name":"name", "label":"Name", "kind":"text"},
+                {"name":"email", "label":"Email", "kind":"email"},
+                {"name":"phone", "label":"Phone", "kind":"phone"},
+                {"name":"topic", "label":"Topic", "kind":"select"},
+                {"name":"follow_up", "label":"May I follow up?", "kind":"checkbox"}
+            ]
+        })
+    );
+
+    let unrelated_page =
+        eez_domain::document_v2::PageId::parse("page-other".to_owned()).expect("valid page id");
+    assert!(document
+        .form_submission_context(&unrelated_page, &form_id)
+        .is_none());
+}
+
 fn with_external_url(url: &str) -> DocumentV2 {
     with_external_url_result(url).expect("external URL fixture is valid")
 }
