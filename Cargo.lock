@@ -1019,6 +1019,7 @@ dependencies = [
  "eez-storage",
  "serde",
  "serde_json",
+ "sha2",
  "tower-service",
  "uuid",
  "worker",

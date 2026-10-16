@@ -72,6 +72,18 @@ fn unpublish_missing_expected_revision_is_classified_before_typed_deserializatio
 #[test]
 fn public_read_accepts_only_a_bounded_generated_slug() {
     assert!(FunnelPublicReadCommand::from_json(r#"{"slug":"quick-offer-revision-a"}"#).is_ok());
+    assert!(
+        FunnelPublicReadCommand::from_json(r#"{"slug":"quick-offer","page_slug":"checkout"}"#)
+            .is_ok()
+    );
+    assert_eq!(
+        FunnelPublicReadCommand::from_json(
+            r#"{"slug":"quick-offer","page_slug":"checkout%2fprivate"}"#
+        )
+        .expect_err("encoded separators cannot become page slugs")
+        .code(),
+        "not_found/slug"
+    );
     assert!(FunnelPublicReadCommand::from_json(r#"{"slug":"../private"}"#).is_err());
     assert!(FunnelPublicReadCommand::from_json(r#"{"slug":"Quick-offer"}"#).is_err());
     assert!(FunnelPublicReadCommand::from_json(

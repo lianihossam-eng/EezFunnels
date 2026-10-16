@@ -613,6 +613,9 @@ assert "<h1>First offer</h1>" in html, html
 assert "etag: \"" in headers, headers
 assert "cache-control: public" in headers, headers
 PY
+v1_child_route_status="$(request GET "/f/$funnel_slug/not-a-v1-page" "$state_dir/v1-child-route.json" \
+  "$state_dir/v1-child-route.headers")"
+assert_error_response "$state_dir/v1-child-route.json" "$v1_child_route_status" 404 not_found/slug
 invalid_publish_route_replay_status="$(request POST "/api/funnels/invalid!/publish" "$state_dir/invalid-publish-route-replay.json" "$state_dir/invalid-publish-route-replay.headers" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-1' --data "$publish_payload")"
 assert_error_response "$state_dir/invalid-publish-route-replay.json" "$invalid_publish_route_replay_status" 409 conflict/idempotency_payload_mismatch
@@ -744,13 +747,15 @@ race_published_status="$(request GET "/f/$funnel_slug" "$state_dir/published-rac
 test "$race_published_status" = 200
 race_etag="$(awk 'BEGIN{IGNORECASE=1} /^ETag:/ {gsub("\r", ""); sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' "$state_dir/published-race.headers")"
 python3 - "$state_dir/published-race.html" "$revision_3" "$revision_4" "$publish_winner_id" "$race_etag" <<'PY'
+import hashlib
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as file:
     html = file.read()
 winner_title = "Published race candidate three" if sys.argv[4] == sys.argv[2] else "Published race candidate four"
 assert f"<h1>{winner_title}</h1>" in html, html
-assert sys.argv[5] == f'"{sys.argv[4]}"', (sys.argv[5], sys.argv[4])
+expected_etag = f'"{hashlib.sha256(html.encode()).hexdigest()}"'
+assert sys.argv[5] == expected_etag, (sys.argv[5], expected_etag)
 PY
 stale_unpublish_status="$(request POST "/api/funnels/$funnel_id/unpublish" "$state_dir/stale-unpublish.json" "$state_dir/stale-unpublish.headers" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-unpublish-stale' \

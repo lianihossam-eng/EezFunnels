@@ -4,7 +4,7 @@ use eez_domain::document_v2::{ActionV2, BlockV2, DocumentV2, PageId, SectionKind
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v3";
+pub const RENDERER_VERSION_V2: &str = "renderer-v4";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
 pub const THEME_PROFILE_VERSION_V2: &str = "theme-profile-v1";
@@ -18,7 +18,6 @@ pub enum V2RenderError {
     UnsupportedRenderer,
     DigestMismatch,
     PageMissing,
-    MultiPagePublicRouteUnavailable,
     ImagesNotEnabled,
     FormsNotEnabled,
     SerializationFailed,
@@ -32,7 +31,6 @@ impl Display for V2RenderError {
             Self::UnsupportedRenderer => "validation/v2_renderer_unsupported",
             Self::DigestMismatch => "validation/v2_digest_mismatch",
             Self::PageMissing => "not_found/page",
-            Self::MultiPagePublicRouteUnavailable => "conflict/v2_page_routes_pending",
             Self::ImagesNotEnabled => "validation/v2_images_not_enabled",
             Self::FormsNotEnabled => "validation/v2_forms_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
@@ -145,6 +143,46 @@ pub fn render_published(
     data_json: &str,
     render_manifest_json: &str,
 ) -> Result<String, V2RenderError> {
+    render_published_route_with_slug(
+        row_schema_version,
+        row_funnel_id,
+        row_revision_id,
+        data_json,
+        render_manifest_json,
+        None,
+        None,
+    )
+}
+
+pub fn render_published_route(
+    row_schema_version: i64,
+    row_funnel_id: &str,
+    row_revision_id: &str,
+    data_json: &str,
+    render_manifest_json: &str,
+    public_funnel_slug: &str,
+    page_slug: Option<&str>,
+) -> Result<String, V2RenderError> {
+    render_published_route_with_slug(
+        row_schema_version,
+        row_funnel_id,
+        row_revision_id,
+        data_json,
+        render_manifest_json,
+        Some(public_funnel_slug),
+        page_slug,
+    )
+}
+
+fn render_published_route_with_slug(
+    row_schema_version: i64,
+    row_funnel_id: &str,
+    row_revision_id: &str,
+    data_json: &str,
+    render_manifest_json: &str,
+    public_funnel_slug: Option<&str>,
+    page_slug: Option<&str>,
+) -> Result<String, V2RenderError> {
     let document = validate_revision_v2(
         row_schema_version,
         row_funnel_id,
@@ -158,10 +196,23 @@ pub fn render_published(
     if document.has_forms() {
         return Err(V2RenderError::FormsNotEnabled);
     }
-    if document.pages().len() != 1 {
-        return Err(V2RenderError::MultiPagePublicRouteUnavailable);
-    }
-    render_page(&document, document.entry_page_id(), LinkMode::Published)
+    let page = match page_slug {
+        Some(slug) => document
+            .pages()
+            .iter()
+            .find(|page| page.slug() == slug)
+            .ok_or(V2RenderError::PageMissing)?,
+        None => document
+            .page(document.entry_page_id())
+            .ok_or(V2RenderError::PageMissing)?,
+    };
+    render_page(
+        &document,
+        page.id(),
+        LinkMode::Published {
+            funnel_slug: public_funnel_slug,
+        },
+    )
 }
 
 pub fn validate_revision_v2(
@@ -233,15 +284,15 @@ struct AssetDigestRecord {
 }
 
 #[derive(Clone, Copy)]
-enum LinkMode {
+enum LinkMode<'a> {
     Inert,
-    Published,
+    Published { funnel_slug: Option<&'a str> },
 }
 
 fn render_page(
     document: &DocumentV2,
     page_id: &PageId,
-    link_mode: LinkMode,
+    link_mode: LinkMode<'_>,
 ) -> Result<String, V2RenderError> {
     if document.has_images() {
         return Err(V2RenderError::ImagesNotEnabled);
@@ -322,14 +373,38 @@ fn render_page(
                     html.push_str("</ul>");
                 }
                 BlockV2::Button { label, action, .. } => match action {
-                    ActionV2::ExternalHttps { url } if matches!(link_mode, LinkMode::Published) => {
+                    ActionV2::ExternalHttps { url }
+                        if matches!(link_mode, LinkMode::Published { .. }) =>
+                    {
                         html.push_str("<a class=\"v2-button\" href=\"");
                         html.push_str(&crate::escape_html_attribute(url));
                         html.push_str("\" target=\"_blank\" rel=\"noopener noreferrer\">");
                         html.push_str(&crate::escape_html_text(label));
                         html.push_str("</a>");
                     }
-                    ActionV2::ExternalHttps { .. } | ActionV2::NavigatePage { .. } => {
+                    ActionV2::NavigatePage { page_id } => {
+                        if let LinkMode::Published {
+                            funnel_slug: Some(funnel_slug),
+                        } = link_mode
+                        {
+                            let target =
+                                document.page(page_id).ok_or(V2RenderError::PageMissing)?;
+                            html.push_str("<a class=\"v2-button\" href=\"/f/");
+                            html.push_str(&crate::escape_html_attribute(funnel_slug));
+                            if target.id() != document.entry_page_id() {
+                                html.push('/');
+                                html.push_str(&crate::escape_html_attribute(target.slug()));
+                            }
+                            html.push_str("\">");
+                            html.push_str(&crate::escape_html_text(label));
+                            html.push_str("</a>");
+                        } else {
+                            html.push_str("<span class=\"v2-button\" aria-disabled=\"true\">");
+                            html.push_str(&crate::escape_html_text(label));
+                            html.push_str("</span>");
+                        }
+                    }
+                    ActionV2::ExternalHttps { .. } => {
                         html.push_str("<span class=\"v2-button\" aria-disabled=\"true\">");
                         html.push_str(&crate::escape_html_text(label));
                         html.push_str("</span>");

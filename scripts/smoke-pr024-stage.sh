@@ -95,7 +95,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         )
         assert status == 201, (status, content)
         result = json.loads(content)
-        return result["funnel"]["id"], result["initial_revision"]["id"]
+        return (
+            result["funnel"]["id"],
+            result["initial_revision"]["id"],
+            result["funnel"]["slug"],
+        )
 
     def mint_stage(funnel_id, revision_id, data, key):
         status, content = post_json(
@@ -303,10 +307,41 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
             stale_conversion_content,
         )
 
-        first_funnel, first_revision = create_funnel("stage-first-create")
-        first_data = (
-            root / "crates/domain/tests/fixtures/document_v2_minimal.json"
-        ).read_bytes().replace(b'"funnel-01"', f'"{first_funnel}"'.encode())
+        first_funnel, first_revision, first_slug = create_funnel("stage-first-create")
+        first_document = json.loads(
+            (root / "crates/domain/tests/fixtures/document_v2_minimal.json").read_bytes()
+        )
+        first_document["funnel_id"] = first_funnel
+        first_document["pages"][0]["sections"][0]["blocks"].append(
+            {
+                "id": "block-next",
+                "kind": "button",
+                "label": "Next",
+                "action": {"kind": "navigate_page", "page_id": "page-next"},
+            }
+        )
+        first_document["pages"].append(
+            {
+                "id": "page-next",
+                "slug": "next",
+                "title": "Next step",
+                "sections": [
+                    {
+                        "id": "section-next",
+                        "type": "hero",
+                        "blocks": [
+                            {
+                                "id": "block-next-title",
+                                "kind": "heading",
+                                "level": 1,
+                                "text": "Next step content",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        first_data = json.dumps(first_document, separators=(",", ":")).encode()
         first_stage = mint_stage(first_funnel, first_revision, first_data, "stage-first-mint")
         assert len(first_stage) == 64
         first_upload = upload(first_funnel, first_stage, first_data)
@@ -380,6 +415,46 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         second_saved_revision = json.loads(second_save_content)
         assert second_saved_revision["base_revision_id"] == saved_revision["revision_id"]
 
+        publish_status, publish_content = request(
+            "POST",
+            f"/api/funnels/{first_funnel}/publish",
+            json.dumps(
+                {
+                    "revision_id": second_saved_revision["revision_id"],
+                    "expected_published_revision_id": None,
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json", "Idempotency-Key": "stage-first-publish"},
+        )
+        assert publish_status == 200, (publish_status, publish_content)
+        entry_status, entry_html = request("GET", f"/f/{first_slug}")
+        assert entry_status == 200, entry_html
+        assert b'<a class="v2-button" href="/f/' + first_slug.encode() + b'/next">Next</a>' in entry_html
+        entry_etag = f'"{hashlib.sha256(entry_html).hexdigest()}"'
+        next_status, next_html = request(
+            "GET",
+            f"/f/{first_slug}/next",
+            headers={"If-None-Match": entry_etag},
+        )
+        assert next_status == 200, (next_status, next_html)
+        assert b"<title>Next step</title>" in next_html, next_html
+        assert b"Next step content" in next_html, next_html
+        next_etag = f'"{hashlib.sha256(next_html).hexdigest()}"'
+        assert next_etag != entry_etag
+        next_cached_status, next_cached_body = request(
+            "GET",
+            f"/f/{first_slug}/next",
+            headers={"If-None-Match": next_etag},
+        )
+        assert next_cached_status == 304, (next_cached_status, next_cached_body)
+        assert next_cached_body == b"", next_cached_body
+        missing_page_status, missing_page_content = request(
+            "GET", f"/f/{first_slug}/not-a-page"
+        )
+        assert missing_page_status == 404, (missing_page_status, missing_page_content)
+        assert json.loads(missing_page_content)["code"] == "not_found/slug", missing_page_content
+
         history_status, history_content = request(
             "GET", f"/api/funnels/{first_funnel}/revisions-v2"
         )
@@ -397,7 +472,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         status, content = request("POST", "/__local/stage-control/bootstrap")
         assert status == 204, (status, content)
 
-        second_funnel, second_revision = create_funnel("stage-second-create")
+        second_funnel, second_revision, _second_slug = create_funnel("stage-second-create")
         second_data = b"second bounded stage snapshot"
         second_stage = mint_stage(second_funnel, second_revision, second_data, "stage-second-mint")
         second_upload = upload(second_funnel, second_stage, second_data)
