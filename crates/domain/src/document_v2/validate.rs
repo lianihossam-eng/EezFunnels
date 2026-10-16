@@ -916,7 +916,6 @@ fn hex_value(byte: u8) -> u8 {
 }
 
 trait FormFieldValidation {
-    fn id(&self) -> &super::FieldId;
     fn values(
         &self,
     ) -> (
@@ -930,16 +929,6 @@ trait FormFieldValidation {
 }
 
 impl FormFieldValidation for FormField {
-    fn id(&self) -> &super::FieldId {
-        match self {
-            FormField::Text { id, .. }
-            | FormField::Email { id, .. }
-            | FormField::Phone { id, .. }
-            | FormField::Checkbox { id, .. }
-            | FormField::Select { id, .. } => id,
-        }
-    }
-
     fn values(
         &self,
     ) -> (

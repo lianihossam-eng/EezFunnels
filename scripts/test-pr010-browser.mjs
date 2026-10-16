@@ -1095,6 +1095,50 @@ try {
   await page.getByRole("link", { name: "Open typed editor" }).waitFor();
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+
+  await page.locator(".editor-section-list .text-button").first().click();
+  const addFormButton = page.getByRole("button", { name: "Add form" });
+  await addFormButton.waitFor();
+  assert.equal(await addFormButton.isEnabled(), true);
+  const createFormResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await addFormButton.click();
+  const createdForm = await createFormResponse.catch(async (error) => {
+    const alerts = await page.getByRole("alert").allTextContents();
+    throw new Error(`${error}; alerts=${alerts.join(" | ")}`);
+  });
+  assert.equal(createdForm.status(), 200, await createdForm.text());
+  await page.getByRole("group", { name: "Form settings" }).waitFor();
+  await page.getByLabel("Submission purpose").waitFor();
+  await page.getByLabel("Required request consent").waitFor();
+  const previewForm = page.frameLocator(".editor-preview-frame").locator("form[data-preview='true']");
+  await previewForm.waitFor();
+  assert.equal(await previewForm.getAttribute("action"), null);
+  assert.equal(await previewForm.getByRole("button", { name: "Send" }).getAttribute("type"), "button");
+
+  const addDropdownResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await page.getByRole("button", { name: "Add dropdown field" }).click();
+  const addedDropdown = await addDropdownResponse;
+  assert.equal(addedDropdown.status(), 200, await addedDropdown.text());
+  await previewForm.getByRole("combobox").waitFor();
+  assert.equal(await previewForm.getByRole("option", { name: "Option 1" }).count(), 1);
+
+  const marketingConsentResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await page.getByLabel("Offer separate, optional marketing consent").check();
+  const marketingConsent = await marketingConsentResponse;
+  assert.equal(marketingConsent.status(), 200, await marketingConsent.text());
+  await page.getByLabel("Optional marketing consent wording").waitFor();
+  assert.equal(await previewForm.locator('input[name="_request_consent"]').count(), 1);
+  assert.equal(await previewForm.locator('input[name="_marketing_opt_in"]').count(), 1);
+
   await page.addScriptTag({ content: require("axe-core").source });
   const convertedAxe = await page.evaluate(async () => {
     const result = await window.axe.run(document, {
@@ -1106,6 +1150,7 @@ try {
 
   console.log(`PR-010/011/012/013/024 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
+  console.error(`Browser diagnostics:\n${pageDiagnostics.slice(-60).join("\n")}\nWrangler log:\n${workerLog.slice(-10000)}`);
   await writeFile(
     failureLogPath,
     `Error: ${error?.stack ?? error}\n\nBrowser diagnostics:\n${pageDiagnostics.join("\n")}\n\nWrangler log:\n${workerLog}\n`,

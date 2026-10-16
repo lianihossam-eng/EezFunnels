@@ -23,7 +23,6 @@ pub enum V2RenderError {
     DigestMismatch,
     PageMissing,
     ImagesNotEnabled,
-    FormsNotEnabled,
     SerializationFailed,
 }
 
@@ -36,7 +35,6 @@ impl Display for V2RenderError {
             Self::DigestMismatch => "validation/v2_digest_mismatch",
             Self::PageMissing => "not_found/page",
             Self::ImagesNotEnabled => "validation/v2_images_not_enabled",
-            Self::FormsNotEnabled => "validation/v2_forms_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -418,10 +416,13 @@ fn render_page(
                         let form = document
                             .form(form_id)
                             .ok_or(V2RenderError::IdentityMismatch)?;
-                        push_form(&mut html, form, page.id(), funnel_slug);
+                        push_form(&mut html, form, page.id(), Some(funnel_slug));
                     }
                     LinkMode::Inert | LinkMode::Published { funnel_slug: None } => {
-                        return Err(V2RenderError::FormsNotEnabled)
+                        let form = document
+                            .form(form_id)
+                            .ok_or(V2RenderError::IdentityMismatch)?;
+                        push_form(&mut html, form, page.id(), None);
                     }
                 },
             }
@@ -432,19 +433,24 @@ fn render_page(
     Ok(html)
 }
 
-fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: &str) {
+fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: Option<&str>) {
     let form_id = form.id().as_str();
     let form_dom_id = format!("form-{form_id}");
-    let action = format!(
-        "/api/public/funnels/{}/pages/{}/forms/{}/submissions?key={PUBLIC_FORM_SUBMISSION_KEY_MARKER}",
-        funnel_slug,
-        page_id.as_str(),
-        form_id,
-    );
-
-    html.push_str("<form class=\"v2-form\" method=\"post\" enctype=\"application/x-www-form-urlencoded\" accept-charset=\"UTF-8\" action=\"");
-    html.push_str(&crate::escape_html_attribute(&action));
-    html.push_str("\"><fieldset><legend>");
+    html.push_str("<form class=\"v2-form\"");
+    if let Some(funnel_slug) = funnel_slug {
+        let action = format!(
+            "/api/public/funnels/{}/pages/{}/forms/{}/submissions?key={PUBLIC_FORM_SUBMISSION_KEY_MARKER}",
+            funnel_slug,
+            page_id.as_str(),
+            form_id,
+        );
+        html.push_str(" method=\"post\" enctype=\"application/x-www-form-urlencoded\" accept-charset=\"UTF-8\" action=\"");
+        html.push_str(&crate::escape_html_attribute(&action));
+        html.push('"');
+    } else {
+        html.push_str(" data-preview=\"true\"");
+    }
+    html.push_str("><fieldset><legend>");
     html.push_str(&crate::escape_html_text(form.purpose()));
     html.push_str("</legend>");
     for field in form.fields() {
@@ -472,7 +478,11 @@ fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: &s
         html.push_str("</label></div>");
     }
 
-    html.push_str("<button class=\"v2-button\" type=\"submit\">Send</button></form>");
+    if funnel_slug.is_some() {
+        html.push_str("<button class=\"v2-button\" type=\"submit\">Send</button></form>");
+    } else {
+        html.push_str("<button class=\"v2-button\" type=\"button\" aria-disabled=\"true\" title=\"Preview only\">Send</button></form>");
+    }
     if let FormResult::Inline { message } = form.result() {
         html.push_str("<p class=\"v2-form-result\" id=\"form-success-");
         html.push_str(&crate::escape_html_attribute(form_id));

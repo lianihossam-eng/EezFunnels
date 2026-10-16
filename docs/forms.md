@@ -1,8 +1,10 @@
 # Public forms
 
-Published V2 documents can render native HTML forms and accept submissions on the same Worker. A form has a closed field schema, a required request acknowledgement, optional separate marketing opt-in, and either an inline confirmation or a success-page result. The renderer uses native input types and associated labels so browser validation and keyboard interaction work without client-side JavaScript.
+The typed dashboard editor can add a form to a page section, configure its purpose, and edit its fields. Supported fields are text, email, phone, checkbox, and dropdown, with editable submission keys, visible labels, optional help, required status, text-length limits where supported, and dropdown options. Fields can be reordered and removed; every form keeps at least one field. The editor also lets an owner change required request-consent wording and separately enable and word optional marketing consent. Changing required consent wording creates a new copy version for later evidence.
 
-The dashboard does not yet create or edit form definitions, and there is no dashboard or public API for reading submitted leads. Configure a form in a typed V2 document before publishing it. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence.
+Published V2 documents render these definitions as native HTML forms and accept submissions on the same Worker. The renderer uses native input types and associated labels so browser validation and keyboard interaction work without client-side JavaScript. The dashboard currently configures inline confirmation text; creating multiple pages and selecting a success page remain part of the page-routing work.
+
+There is no dashboard or public API for reading submitted leads. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence.
 
 ## Submission behavior
 

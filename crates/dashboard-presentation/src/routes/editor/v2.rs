@@ -3,7 +3,9 @@ use eez_domain::document_v2::{
     ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, IdKind, IdSource, NewBlock, SectionKind,
 };
 #[cfg(feature = "browser")]
-use eez_domain::document_v2::{BlockId, PageId, SectionId};
+use eez_domain::document_v2::{
+    BlockId, FormField, FormResult, FormV2, NewFormField, PageId, SectionId, ValidationRange,
+};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
 use serde::{Deserialize, Serialize};
@@ -235,6 +237,111 @@ impl V2NewBlockKind {
     }
 }
 
+#[cfg(feature = "browser")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum V2NewFormFieldKind {
+    #[default]
+    Text,
+    Email,
+    Phone,
+    Checkbox,
+    Select,
+}
+
+#[cfg(feature = "browser")]
+impl V2NewFormFieldKind {
+    const ALL: [Self; 5] = [
+        Self::Text,
+        Self::Email,
+        Self::Phone,
+        Self::Checkbox,
+        Self::Select,
+    ];
+
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Email => "email",
+            Self::Phone => "phone",
+            Self::Checkbox => "checkbox",
+            Self::Select => "select",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text",
+            Self::Email => "Email",
+            Self::Phone => "Phone",
+            Self::Checkbox => "Checkbox",
+            Self::Select => "Dropdown",
+        }
+    }
+
+    fn from_id(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|item| item.id() == value)
+    }
+
+    fn create(self, form: &FormV2) -> NewFormField {
+        let mut suffix = form.fields().len() + 1;
+        let name = loop {
+            let candidate = format!("field_{suffix}");
+            if !form
+                .fields()
+                .iter()
+                .any(|field| form_field_name(field) == candidate)
+            {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        let label = match self {
+            Self::Text => "New text field",
+            Self::Email => "Email address",
+            Self::Phone => "Phone number",
+            Self::Checkbox => "Checkbox",
+            Self::Select => "Choose an option",
+        }
+        .to_owned();
+        match self {
+            Self::Text => NewFormField::Text {
+                name,
+                label,
+                help: None,
+                required: false,
+                validation: None,
+            },
+            Self::Email => NewFormField::Email {
+                name,
+                label,
+                help: None,
+                required: false,
+                validation: None,
+            },
+            Self::Phone => NewFormField::Phone {
+                name,
+                label,
+                help: None,
+                required: false,
+                validation: None,
+            },
+            Self::Checkbox => NewFormField::Checkbox {
+                name,
+                label,
+                help: None,
+                required: false,
+            },
+            Self::Select => NewFormField::Select {
+                name,
+                label,
+                help: None,
+                required: false,
+                options: vec!["Option 1".to_owned()],
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct V2EditCapture {
     route_epoch: u64,
@@ -383,7 +490,17 @@ impl V2EditorState {
             operation_id: operation_id.clone(),
             next: 0,
         };
-        let outcome = document.apply(edit.clone(), &mut ids).ok()?;
+        let outcome = match document.apply(edit.clone(), &mut ids) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.error = Some(format!(
+                    "This change cannot be applied yet ({})",
+                    error.code()
+                ));
+                self.status = None;
+                return None;
+            }
+        };
         let document_json = outcome.document.canonical_json();
         if document_json == document.canonical_json() {
             return None;
@@ -1417,6 +1534,284 @@ fn block_value_with_text(block: &BlockV2, text: String) -> Option<NewBlock> {
     }
 }
 
+#[cfg(feature = "browser")]
+fn form_field_name(field: &FormField) -> &str {
+    match field {
+        FormField::Text { name, .. }
+        | FormField::Email { name, .. }
+        | FormField::Phone { name, .. }
+        | FormField::Checkbox { name, .. }
+        | FormField::Select { name, .. } => name,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_label(field: &FormField) -> &str {
+    match field {
+        FormField::Text { label, .. }
+        | FormField::Email { label, .. }
+        | FormField::Phone { label, .. }
+        | FormField::Checkbox { label, .. }
+        | FormField::Select { label, .. } => label,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_help(field: &FormField) -> Option<&str> {
+    match field {
+        FormField::Text { help, .. }
+        | FormField::Email { help, .. }
+        | FormField::Phone { help, .. }
+        | FormField::Checkbox { help, .. }
+        | FormField::Select { help, .. } => help.as_deref(),
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_required(field: &FormField) -> bool {
+    match field {
+        FormField::Text { required, .. }
+        | FormField::Email { required, .. }
+        | FormField::Phone { required, .. }
+        | FormField::Checkbox { required, .. }
+        | FormField::Select { required, .. } => *required,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_kind_id(field: &FormField) -> &'static str {
+    match field {
+        FormField::Text { .. } => "text",
+        FormField::Email { .. } => "email",
+        FormField::Phone { .. } => "phone",
+        FormField::Checkbox { .. } => "checkbox",
+        FormField::Select { .. } => "select",
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_options(field: &FormField) -> Option<&[String]> {
+    match field {
+        FormField::Select { options, .. } => Some(options),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_validation(field: &FormField) -> Option<&ValidationRange> {
+    match field {
+        FormField::Text { validation, .. }
+        | FormField::Email { validation, .. }
+        | FormField::Phone { validation, .. } => validation.as_ref(),
+        FormField::Checkbox { .. } | FormField::Select { .. } => None,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_validation_cap(field: &FormField) -> Option<u32> {
+    match field {
+        FormField::Text { .. } => Some(8192),
+        FormField::Email { .. } => Some(320),
+        FormField::Phone { .. } => Some(64),
+        FormField::Checkbox { .. } | FormField::Select { .. } => None,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn validation_range_update(field: &FormField, min: &str, max: &str) -> Option<NewFormField> {
+    let parse = |value: &str| {
+        if value.is_empty() {
+            Some(None)
+        } else {
+            value.parse::<u32>().ok().map(Some)
+        }
+    };
+    let min_length = parse(min)?;
+    let max_length = parse(max)?;
+    let cap = form_field_validation_cap(field)?;
+    if min_length.is_some_and(|value| value > cap)
+        || max_length.is_some_and(|value| value == 0 || value > cap)
+        || min_length
+            .zip(max_length)
+            .is_some_and(|(min, max)| min > max)
+    {
+        return None;
+    }
+    let validation = (min_length.is_some() || max_length.is_some()).then_some(ValidationRange {
+        min_length,
+        max_length,
+    });
+    let name = form_field_name(field).to_owned();
+    let label = form_field_label(field).to_owned();
+    let help = form_field_help(field).map(str::to_owned);
+    let required = form_field_required(field);
+    match field {
+        FormField::Text { .. } => Some(NewFormField::Text {
+            name,
+            label,
+            help,
+            required,
+            validation,
+        }),
+        FormField::Email { .. } => Some(NewFormField::Email {
+            name,
+            label,
+            help,
+            required,
+            validation,
+        }),
+        FormField::Phone { .. } => Some(NewFormField::Phone {
+            name,
+            label,
+            help,
+            required,
+            validation,
+        }),
+        FormField::Checkbox { .. } | FormField::Select { .. } => None,
+    }
+}
+
+#[cfg(feature = "browser")]
+fn new_form_field_with_common(
+    field: &FormField,
+    name: String,
+    label: String,
+    help: Option<String>,
+    required: bool,
+) -> NewFormField {
+    match field {
+        FormField::Text { validation, .. } => NewFormField::Text {
+            name,
+            label,
+            help,
+            required,
+            validation: validation.clone(),
+        },
+        FormField::Email { validation, .. } => NewFormField::Email {
+            name,
+            label,
+            help,
+            required,
+            validation: validation.clone(),
+        },
+        FormField::Phone { validation, .. } => NewFormField::Phone {
+            name,
+            label,
+            help,
+            required,
+            validation: validation.clone(),
+        },
+        FormField::Checkbox { .. } => NewFormField::Checkbox {
+            name,
+            label,
+            help,
+            required,
+        },
+        FormField::Select { options, .. } => NewFormField::Select {
+            name,
+            label,
+            help,
+            required,
+            options: options.clone(),
+        },
+    }
+}
+
+#[cfg(feature = "browser")]
+fn new_form_field_as_kind(field: &FormField, kind: V2NewFormFieldKind) -> NewFormField {
+    let name = form_field_name(field).to_owned();
+    let label = form_field_label(field).to_owned();
+    let help = form_field_help(field).map(str::to_owned);
+    let required = form_field_required(field);
+    match kind {
+        V2NewFormFieldKind::Text => NewFormField::Text {
+            name,
+            label,
+            help,
+            required,
+            validation: None,
+        },
+        V2NewFormFieldKind::Email => NewFormField::Email {
+            name,
+            label,
+            help,
+            required,
+            validation: None,
+        },
+        V2NewFormFieldKind::Phone => NewFormField::Phone {
+            name,
+            label,
+            help,
+            required,
+            validation: None,
+        },
+        V2NewFormFieldKind::Checkbox => NewFormField::Checkbox {
+            name,
+            label,
+            help,
+            required,
+        },
+        V2NewFormFieldKind::Select => NewFormField::Select {
+            name,
+            label,
+            help,
+            required,
+            options: form_field_options(field)
+                .map(<[String]>::to_vec)
+                .unwrap_or_else(|| vec!["Option 1".to_owned()]),
+        },
+    }
+}
+
+#[cfg(feature = "browser")]
+fn form_field_with_options(field: &FormField, options: Vec<String>) -> Option<NewFormField> {
+    let FormField::Select {
+        name,
+        label,
+        help,
+        required,
+        ..
+    } = field
+    else {
+        return None;
+    };
+    Some(NewFormField::Select {
+        name: name.clone(),
+        label: label.clone(),
+        help: help.clone(),
+        required: *required,
+        options,
+    })
+}
+
+#[cfg(feature = "browser")]
+fn valid_form_field_name_input(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 64
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+#[cfg(feature = "browser")]
+fn parse_form_options(value: &str) -> Option<Vec<String>> {
+    let options = value
+        .lines()
+        .map(str::trim)
+        .filter(|option| !option.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if !(1..=50).contains(&options.len())
+        || options.iter().any(|option| option.len() > 1024)
+        || options
+            .iter()
+            .enumerate()
+            .any(|(index, option)| options[..index].contains(option))
+    {
+        return None;
+    }
+    Some(options)
+}
+
 fn revision_comparison(current: &DocumentV2, previous: &DocumentV2) -> Vec<String> {
     let mut changes = Vec::new();
     if current.theme() != previous.theme() {
@@ -1530,6 +1925,13 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                 .find(|section| Some(section.id().as_str()) == view.selected_section.as_deref())
         })
         .cloned();
+    let add_block_location = selected_section.as_ref().map(|section| {
+        (
+            section.id().clone(),
+            section.blocks().last().map(|block| block.id().clone()),
+        )
+    });
+    let add_form_location = add_block_location.clone();
     let locked = !view.can_edit();
     let dirty = view.has_unsaved_changes();
     let recovered_document = view
@@ -2006,13 +2408,23 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                         disabled: locked,
                                         onclick: move |_| {
                                             let kind = state.with(|state| state.new_block_kind);
-                                            dispatch_v2_edit(state, Edit::AddBlock {
-                                                section: section.id().clone(),
-                                                after: section.blocks().last().map(|block| block.id().clone()),
-                                                block: kind.create(),
-                                            });
+                                            let block = kind.create();
+                                            if let Some((section, after)) = add_block_location.clone() {
+                                                dispatch_v2_edit(state, Edit::AddBlock { section, after, block });
+                                            }
                                         },
                                         "Add block"
+                                    }
+                                    button {
+                                        class: "secondary-button",
+                                        r#type: "button",
+                                        disabled: locked,
+                                        onclick: move |_| {
+                                            if let Some((section, after)) = add_form_location.clone() {
+                                                dispatch_v2_edit(state, Edit::CreateForm { section, after });
+                                            }
+                                        },
+                                        "Add form"
                                     }
                                 }
                             }
@@ -2118,6 +2530,447 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
 
 #[cfg(feature = "browser")]
 #[component]
+fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: bool) -> Element {
+    let form_id = form.id().clone();
+    let form_id_purpose = form_id.clone();
+    let form_id_result = form_id.clone();
+    let form_id_consent = form_id.clone();
+    let form_id_marketing = form_id.clone();
+    let form_id_marketing_copy = form_id.clone();
+    let purpose = form.purpose().to_owned();
+    let request_consent_copy = form.request_consent().copy().to_owned();
+    let marketing_copy = form.marketing_opt_in().map(|copy| copy.copy().to_owned());
+    let marketing_enabled = marketing_copy.is_some();
+    let marketing_copy_for_toggle = marketing_copy.clone();
+    let result_message = match form.result() {
+        FormResult::Inline { message } => Some(message.clone()),
+        FormResult::SuccessPage { .. } => None,
+    };
+    let fields = form.fields().to_vec();
+
+    rsx! {
+        fieldset { class: "editor-form-builder", "aria-label": "Form settings",
+            legend { "Form settings" }
+            p { class: "editor-keyboard-help", "Submission purpose, required request consent, and optional marketing consent are stored separately." }
+            label { class: "editor-setting-control",
+                "Submission purpose"
+                textarea {
+                    rows: "2",
+                    value: "{purpose}",
+                    disabled: locked,
+                    onchange: move |event| {
+                        let value = event.value();
+                        if !value.trim().is_empty() && value.len() <= 1024 {
+                            dispatch_v2_edit(state, Edit::SetFormPurpose { form: form_id_purpose.clone(), purpose: value });
+                        }
+                    },
+                }
+            }
+            if let Some(message) = result_message {
+                label { class: "editor-setting-control",
+                    "After submission"
+                    textarea {
+                        rows: "2",
+                        value: "{message}",
+                        disabled: locked,
+                        onchange: move |event| {
+                            let value = event.value();
+                            if !value.trim().is_empty() && value.len() <= 1024 {
+                                dispatch_v2_edit(state, Edit::SetFormResult {
+                                    form: form_id_result.clone(),
+                                    result: FormResult::Inline { message: value },
+                                });
+                            }
+                        },
+                    }
+                }
+            } else {
+                if let FormResult::SuccessPage { page_id } = form.result() {
+                    p { class: "editor-keyboard-help", "After submission, visitors go to page {page_id.as_str()}." }
+                }
+            }
+            label { class: "editor-setting-control",
+                "Required request consent"
+                textarea {
+                    rows: "2",
+                    value: "{request_consent_copy}",
+                    disabled: locked,
+                    onchange: move |event| {
+                        let value = event.value();
+                        if !value.trim().is_empty() && value.len() <= 1024 {
+                            dispatch_v2_edit(state, Edit::SetFormRequestConsent {
+                                form: form_id_consent.clone(),
+                                copy: value,
+                            });
+                        }
+                    },
+                }
+            }
+            label { class: "editor-form-checkbox",
+                input {
+                    r#type: "checkbox",
+                    checked: marketing_enabled,
+                    disabled: locked,
+                    onchange: move |event| {
+                        let value = if event.checked() {
+                            Some(marketing_copy_for_toggle.clone().unwrap_or_else(|| "Send me occasional product updates.".to_owned()))
+                        } else {
+                            None
+                        };
+                        dispatch_v2_edit(state, Edit::SetFormMarketingOptIn {
+                            form: form_id_marketing.clone(),
+                            copy: value,
+                        });
+                    },
+                }
+                "Offer separate, optional marketing consent"
+            }
+            if let Some(copy) = marketing_copy {
+                label { class: "editor-setting-control",
+                    "Optional marketing consent wording"
+                    textarea {
+                        rows: "2",
+                        value: "{copy}",
+                        disabled: locked,
+                        onchange: move |event| {
+                            let value = event.value();
+                            if !value.trim().is_empty() && value.len() <= 1024 {
+                                dispatch_v2_edit(state, Edit::SetFormMarketingOptIn {
+                                    form: form_id_marketing_copy.clone(),
+                                    copy: Some(value),
+                                });
+                            }
+                        },
+                    }
+                }
+            }
+        }
+        fieldset { class: "editor-form-builder", "aria-label": "Form fields",
+            legend { "Fields ({fields.len()}/50)" }
+            div { class: "editor-form-field-list", role: "list", "aria-label": "Form fields",
+                for (index, field) in fields.iter().enumerate() {
+                    {
+                        let field_id = field.id().clone();
+                        let field_name_id = field.id().as_str().to_owned();
+                        let type_id = format!("form-{}-field-{}-type", form_id.as_str(), field_name_id);
+                        let name_id = format!("form-{}-field-{}-name", form_id.as_str(), field_name_id);
+                        let label_id = format!("form-{}-field-{}-label", form_id.as_str(), field_name_id);
+                        let help_id = format!("form-{}-field-{}-help", form_id.as_str(), field_name_id);
+                        let options_id = format!("form-{}-field-{}-options", form_id.as_str(), field_name_id);
+                        let current_name = form_field_name(field).to_owned();
+                        let current_label = form_field_label(field).to_owned();
+                        let current_help = form_field_help(field).unwrap_or_default().to_owned();
+                        let current_required = form_field_required(field);
+                        let current_kind = form_field_kind_id(field).to_owned();
+                        let current_options = form_field_options(field)
+                            .map(|values| values.join("\n"))
+                            .unwrap_or_default();
+                        let current_validation = form_field_validation(field).cloned();
+                        let current_min_length = current_validation
+                            .as_ref()
+                            .and_then(|value| value.min_length)
+                            .map(|value| value.to_string())
+                            .unwrap_or_default();
+                        let current_max_length = current_validation
+                            .as_ref()
+                            .and_then(|value| value.max_length)
+                            .map(|value| value.to_string())
+                            .unwrap_or_default();
+                        let current_min_length_for_update = current_min_length.clone();
+                        let current_max_length_for_update = current_max_length.clone();
+                        let field_for_type = field.clone();
+                        let field_for_name = field.clone();
+                        let field_for_label = field.clone();
+                        let field_for_help = field.clone();
+                        let field_for_required = field.clone();
+                        let field_for_options = field.clone();
+                        let field_for_min = field.clone();
+                        let field_for_max = field.clone();
+                        let form_for_type = form_id.clone();
+                        let form_for_name = form_id.clone();
+                        let form_for_label = form_id.clone();
+                        let form_for_help = form_id.clone();
+                        let form_for_required = form_id.clone();
+                        let form_for_options = form_id.clone();
+                        let form_for_min = form_id.clone();
+                        let form_for_max = form_id.clone();
+                        let id_for_name = field_id.clone();
+                        let id_for_label = field_id.clone();
+                        let id_for_help = field_id.clone();
+                        let id_for_required = field_id.clone();
+                        let id_for_type = field_id.clone();
+                        let id_for_options = field_id.clone();
+                        let id_for_min = field_id.clone();
+                        let id_for_max = field_id.clone();
+                        let field_ids = fields.iter().map(|item| item.id().clone()).collect::<Vec<_>>();
+                        let field_ids_up = field_ids.clone();
+                        let field_ids_down = field_ids;
+                        let form_for_up = form_id.clone();
+                        let form_for_down = form_id.clone();
+                        let form_for_delete = form_id.clone();
+                        let field_for_delete = field_id.clone();
+                        let count = fields.len();
+                        let help_value = current_help.clone();
+                        rsx! {
+                            div { class: "editor-form-field-row", role: "listitem",
+                                fieldset { class: "editor-form-field",
+                                    legend { "Field {index + 1}" }
+                                label { class: "editor-setting-control", r#for: "{type_id}",
+                                    "Field type"
+                                    select {
+                                        id: "{type_id}",
+                                        value: "{current_kind}",
+                                        disabled: locked,
+                                        onchange: move |event| {
+                                            if let Some(kind) = V2NewFormFieldKind::from_id(&event.value()) {
+                                                dispatch_v2_edit(state, Edit::SetFormField {
+                                                    form: form_for_type.clone(),
+                                                    field: id_for_type.clone(),
+                                                    value: new_form_field_as_kind(&field_for_type, kind),
+                                                });
+                                            }
+                                        },
+                                        for kind in V2NewFormFieldKind::ALL {
+                                            option { value: "{kind.id()}", "{kind.label()}" }
+                                        }
+                                    }
+                                }
+                                label { class: "editor-setting-control", r#for: "{name_id}",
+                                    "Submission key"
+                                    input {
+                                        id: "{name_id}",
+                                        value: "{current_name}",
+                                        disabled: locked,
+                                        onchange: move |event| {
+                                            let value = event.value();
+                                            if valid_form_field_name_input(&value) {
+                                                dispatch_v2_edit(state, Edit::SetFormField {
+                                                    form: form_for_name.clone(),
+                                                    field: id_for_name.clone(),
+                                                    value: new_form_field_with_common(
+                                                        &field_for_name,
+                                                        value,
+                                                        form_field_label(&field_for_name).to_owned(),
+                                                        form_field_help(&field_for_name).map(str::to_owned),
+                                                        form_field_required(&field_for_name),
+                                                    ),
+                                                });
+                                            }
+                                        },
+                                    }
+                                }
+                                label { class: "editor-setting-control", r#for: "{label_id}",
+                                    "Visible label"
+                                    input {
+                                        id: "{label_id}",
+                                        value: "{current_label}",
+                                        disabled: locked,
+                                        onchange: move |event| {
+                                            let value = event.value();
+                                            if !value.trim().is_empty() && value.len() <= 1024 {
+                                                dispatch_v2_edit(state, Edit::SetFormField {
+                                                    form: form_for_label.clone(),
+                                                    field: id_for_label.clone(),
+                                                    value: new_form_field_with_common(
+                                                        &field_for_label,
+                                                        form_field_name(&field_for_label).to_owned(),
+                                                        value,
+                                                        form_field_help(&field_for_label).map(str::to_owned),
+                                                        form_field_required(&field_for_label),
+                                                    ),
+                                                });
+                                            }
+                                        },
+                                    }
+                                }
+                                label { class: "editor-setting-control", r#for: "{help_id}",
+                                    "Help text (optional)"
+                                    input {
+                                        id: "{help_id}",
+                                        value: "{help_value}",
+                                        disabled: locked,
+                                        onchange: move |event| {
+                                            let value = event.value();
+                                            if value.len() <= 1024 {
+                                                dispatch_v2_edit(state, Edit::SetFormField {
+                                                    form: form_for_help.clone(),
+                                                    field: id_for_help.clone(),
+                                                    value: new_form_field_with_common(
+                                                        &field_for_help,
+                                                        form_field_name(&field_for_help).to_owned(),
+                                                        form_field_label(&field_for_help).to_owned(),
+                                                        (!value.is_empty()).then_some(value),
+                                                        form_field_required(&field_for_help),
+                                                    ),
+                                                });
+                                            }
+                                        },
+                                    }
+                                }
+                                label { class: "editor-form-checkbox",
+                                    input {
+                                        r#type: "checkbox",
+                                        checked: current_required,
+                                        disabled: locked,
+                                        onchange: move |event| {
+                                            dispatch_v2_edit(state, Edit::SetFormField {
+                                                form: form_for_required.clone(),
+                                                field: id_for_required.clone(),
+                                                value: new_form_field_with_common(
+                                                    &field_for_required,
+                                                    form_field_name(&field_for_required).to_owned(),
+                                                    form_field_label(&field_for_required).to_owned(),
+                                                    form_field_help(&field_for_required).map(str::to_owned),
+                                                    event.checked(),
+                                                ),
+                                            });
+                                        },
+                                    }
+                                    "Required"
+                                }
+                                if form_field_validation_cap(field).is_some() {
+                                    div { class: "editor-form-length-row",
+                                        label { class: "editor-setting-control",
+                                            "Minimum characters"
+                                            input {
+                                                r#type: "number",
+                                                min: "0",
+                                                max: "{form_field_validation_cap(field).unwrap_or_default()}",
+                                                value: "{current_min_length}",
+                                                disabled: locked,
+                                                onchange: move |event| {
+                                                    if let Some(value) = validation_range_update(
+                                                        &field_for_min,
+                                                        &event.value(),
+                                                        &current_max_length_for_update,
+                                                    ) {
+                                                        dispatch_v2_edit(state, Edit::SetFormField {
+                                                            form: form_for_min.clone(),
+                                                            field: id_for_min.clone(),
+                                                            value,
+                                                        });
+                                                    }
+                                                },
+                                            }
+                                        }
+                                        label { class: "editor-setting-control",
+                                            "Maximum characters"
+                                            input {
+                                                r#type: "number",
+                                                min: "1",
+                                                max: "{form_field_validation_cap(field).unwrap_or_default()}",
+                                                value: "{current_max_length}",
+                                                disabled: locked,
+                                                onchange: move |event| {
+                                                    if let Some(value) = validation_range_update(
+                                                        &field_for_max,
+                                                        &current_min_length_for_update,
+                                                        &event.value(),
+                                                    ) {
+                                                        dispatch_v2_edit(state, Edit::SetFormField {
+                                                            form: form_for_max.clone(),
+                                                            field: id_for_max.clone(),
+                                                            value,
+                                                        });
+                                                    }
+                                                },
+                                            }
+                                        }
+                                    }
+                                }
+                                if matches!(field, FormField::Select { .. }) {
+                                    label { class: "editor-setting-control", r#for: "{options_id}",
+                                        "Dropdown options (one per line)"
+                                        textarea {
+                                            id: "{options_id}",
+                                            rows: "3",
+                                            value: "{current_options}",
+                                            disabled: locked,
+                                            onchange: move |event| {
+                                                if let Some(options) = parse_form_options(&event.value()) {
+                                                    if let Some(updated) = form_field_with_options(&field_for_options, options) {
+                                                        dispatch_v2_edit(state, Edit::SetFormField {
+                                                            form: form_for_options.clone(),
+                                                            field: id_for_options.clone(),
+                                                            value: updated,
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                                div { class: "editor-section-actions",
+                                    button {
+                                        class: "editor-move-button",
+                                        r#type: "button",
+                                        disabled: locked || index == 0,
+                                        "aria-label": "Move form field {index + 1} up",
+                                        onclick: move |_| {
+                                            let mut ordered = field_ids_up.clone();
+                                            if index > 0 { ordered.swap(index, index - 1); }
+                                            dispatch_v2_edit(state, Edit::ReorderFormFields { form: form_for_up.clone(), ordered });
+                                        },
+                                        "Up"
+                                    }
+                                    button {
+                                        class: "editor-move-button",
+                                        r#type: "button",
+                                        disabled: locked || index + 1 >= count,
+                                        "aria-label": "Move form field {index + 1} down",
+                                        onclick: move |_| {
+                                            let mut ordered = field_ids_down.clone();
+                                            if index + 1 < ordered.len() { ordered.swap(index, index + 1); }
+                                            dispatch_v2_edit(state, Edit::ReorderFormFields { form: form_for_down.clone(), ordered });
+                                        },
+                                        "Down"
+                                    }
+                                    button {
+                                        class: "editor-move-button",
+                                        r#type: "button",
+                                        disabled: locked || count <= 1,
+                                        "aria-label": "Delete form field {index + 1}",
+                                        onclick: move |_| dispatch_v2_edit(state, Edit::DeleteFormField {
+                                            form: form_for_delete.clone(),
+                                            field: field_for_delete.clone(),
+                                        }),
+                                        "Delete"
+                                    }
+                                }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "editor-form-add-fields", "aria-label": "Add a form field",
+                for kind in V2NewFormFieldKind::ALL {
+                    {
+                        let form_for_add = form_id.clone();
+                        let field = fields.last().map(|field| field.id().clone());
+                        let form_for_field = form.clone();
+                        rsx! {
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: locked || fields.len() >= 50,
+                                onclick: move |_| dispatch_v2_edit(state, Edit::AddFormField {
+                                    form: form_for_add.clone(),
+                                    after: field.clone(),
+                                    field: kind.create(&form_for_field),
+                                }),
+                                "Add {kind.label().to_lowercase()} field"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     section_id: SectionId,
@@ -2128,6 +2981,15 @@ fn V2BlockEditor(
 ) -> Element {
     let block_id = block.id().clone();
     let text = block_text(&block);
+    let form = match &block {
+        BlockV2::Form { form_id, .. } => state.with(|state| {
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.form(form_id).cloned())
+        }),
+        _ => None,
+    };
     let label = block_kind_label(&block);
     let control_label = format!("{label} content");
     let section_up = section_id.clone();
@@ -2148,8 +3010,10 @@ fn V2BlockEditor(
                 strong { "{label}" }
                 code { "{block.id().as_str()}" }
             }
-            if matches!(block, BlockV2::Image { .. } | BlockV2::Form { .. }) {
+            if matches!(block, BlockV2::Image { .. }) {
                 p { class: "editor-keyboard-help", "{text}" }
+            } else if let Some(form) = form {
+                V2FormEditor { state, form, locked }
             } else {
                 label { class: "editor-setting-control",
                     "{control_label}"

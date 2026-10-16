@@ -153,7 +153,7 @@ fn owner_preview_escapes_text_and_never_follows_external_links() {
 }
 
 #[test]
-fn v2_image_and_form_content_are_not_saved_or_rendered_before_their_gates() {
+fn v2_images_remain_blocked_and_form_previews_are_inert_until_published() {
     let mut image_value: serde_json::Value = serde_json::from_str(
         std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
     )
@@ -184,10 +184,11 @@ fn v2_image_and_form_content_are_not_saved_or_rendered_before_their_gates() {
     }]);
     let form_json = serde_json::to_vec(&form_value).expect("document serialization");
     let form_document = DocumentV2::decode(&form_json, "funnel-01").expect("form node schema");
-    assert!(matches!(
-        render_owner_preview(&form_document, form_document.entry_page_id()),
-        Err(V2RenderError::FormsNotEnabled)
-    ));
+    let preview = render_owner_preview(&form_document, form_document.entry_page_id())
+        .expect("owner preview renders a form without a live submission target");
+    assert!(preview.contains("data-preview=\"true\""));
+    assert!(preview.contains("type=\"button\" aria-disabled=\"true\""));
+    assert!(!preview.contains("/submissions?key="));
 }
 
 #[test]

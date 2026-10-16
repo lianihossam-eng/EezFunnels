@@ -170,37 +170,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             (root / "crates/domain/tests/fixtures/document_v2_minimal.json").read_bytes()
         )
         document["funnel_id"] = funnel_id
-        document["pages"][0]["sections"][0]["blocks"].append(
-            {"id": "block-form", "kind": "form", "form_id": "form-lead"}
-        )
-        document["forms"] = [
-            {
-                "id": "form-lead",
-                "fields": [
-                    {
-                        "id": "field-name", "kind": "text", "name": "name",
-                        "label": "Name", "required": True,
-                        "validation": {"min_length": 2, "max_length": 40},
-                    },
-                    {
-                        "id": "field-email", "kind": "email", "name": "email",
-                        "label": "Email", "required": True,
-                    },
-                ],
-                "purpose": "Contact request",
-                "request_consent": {
-                    "copy_version": "request-v1",
-                    "copy": "I agree to be contacted about this request.",
-                },
-                "marketing_opt_in": {
-                    "copy_version": "marketing-v1",
-                    "copy": "Send me occasional product news.",
-                },
-                "result": {"kind": "inline", "message": "Thanks for getting in touch."},
-            }
-        ]
+        document["forms"] = []
         data = json.dumps(document, separators=(",", ":")).encode()
-        stage_id = mint_stage(funnel_id, base_revision_id, data, "pr033-form-stage")
+        stage_id = mint_stage(funnel_id, base_revision_id, data, "pr034-form-base-stage")
         assert upload(funnel_id, stage_id, data)[0] == 204
         status, content, _ = post_json(
             f"/api/funnels/{funnel_id}/revisions-v2",
@@ -210,7 +182,120 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 "expected_length": len(data),
                 "expected_sha256": hashlib.sha256(data).hexdigest(),
             },
-            "pr033-form-save",
+            "pr034-form-base-save",
+        )
+        assert status == 201, (status, content)
+        saved_base_revision_id = json.loads(content)["revision_id"]
+        current_document = [data.decode()]
+
+        def edit_document(operation_id, edit):
+            edit_request = {
+                "base_revision_id": saved_base_revision_id,
+                "page_id": "page-home",
+                "document_json": current_document[0],
+                "operation_id": operation_id,
+                "edit": edit,
+            }
+            edit_status, edit_content, _ = request(
+                "POST",
+                f"/api/funnels/{funnel_id}/edit-v2",
+                json.dumps(edit_request, separators=(",", ":")).encode(),
+                {"Content-Type": "application/json"},
+            )
+            assert edit_status == 200, (operation_id, edit_status, edit_content)
+            current_document[0] = json.loads(edit_content)["document_json"]
+            return json.loads(current_document[0])
+
+        document = edit_document(
+            "a" * 32,
+            {
+                "operation": "create_form",
+                "section": "section-hero",
+                "after": "block-copy",
+            },
+        )
+        form = document["forms"][0]
+        form_id = form["id"]
+        name_field, email_field = form["fields"]
+        edit_document(
+            "b" * 32,
+            {
+                "operation": "set_form_field",
+                "form": form_id,
+                "field": name_field["id"],
+                "value": {
+                    "kind": "text",
+                    "name": "name",
+                    "label": "Name",
+                    "required": True,
+                    "validation": {"min_length": 2, "max_length": 40},
+                },
+            },
+        )
+        edit_document(
+            "c" * 32,
+            {
+                "operation": "set_form_field",
+                "form": form_id,
+                "field": email_field["id"],
+                "value": {
+                    "kind": "email",
+                    "name": "email",
+                    "label": "Email",
+                    "required": True,
+                },
+            },
+        )
+        edit_document(
+            "d" * 32,
+            {
+                "operation": "add_form_field",
+                "form": form_id,
+                "after": email_field["id"],
+                "field": {
+                    "kind": "select",
+                    "name": "interest",
+                    "label": "Topic",
+                    "help": "Choose one topic.",
+                    "required": False,
+                    "options": ["Consulting", "Training"],
+                },
+            },
+        )
+        edit_document(
+            "e" * 32,
+            {
+                "operation": "set_form_request_consent",
+                "form": form_id,
+                "copy": "I agree to be contacted about this request.",
+            },
+        )
+        edit_document(
+            "f" * 32,
+            {
+                "operation": "set_form_marketing_opt_in",
+                "form": form_id,
+                "copy": "Send me occasional product news.",
+            },
+        )
+
+        edited_data = current_document[0].encode()
+        stage_id = mint_stage(
+            funnel_id,
+            saved_base_revision_id,
+            edited_data,
+            "pr034-form-ready-stage",
+        )
+        assert upload(funnel_id, stage_id, edited_data)[0] == 204
+        status, content, _ = post_json(
+            f"/api/funnels/{funnel_id}/revisions-v2",
+            {
+                "base_revision_id": saved_base_revision_id,
+                "stage_id": stage_id,
+                "expected_length": len(edited_data),
+                "expected_sha256": hashlib.sha256(edited_data).hexdigest(),
+            },
+            "pr034-form-ready-save",
         )
         assert status == 201, (status, content)
         saved_revision_id = json.loads(content)["revision_id"]
@@ -234,13 +319,15 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert "etag" not in headers, headers
         assert b"type=\"email\"" in html, html
         assert b"request-v1" not in html, html
+        assert b"Consulting" in html and b"Training" in html, html
         action = re.search(
-            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/form-lead/submissions\?key=([0-9a-f-]{36}))"',
+            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/([^/]+)/submissions\?key=([0-9a-f-]{36}))"',
             html,
         )
         assert action is not None, html
         action_path = action.group(1).decode()
-        submission_key = action.group(2).decode()
+        form_id = action.group(2).decode()
+        submission_key = action.group(3).decode()
         second_status, second_html, second_headers = request("GET", f"/f/{slug}")
         assert second_status == 200, second_html
         assert second_headers.get("cache-control") == "no-store", second_headers
@@ -270,7 +357,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
         )
         assert status == 303, (status, body)
-        assert response_headers.get("location") == f"/f/{slug}#form-success-form-lead", response_headers
+        assert response_headers.get("location") == f"/f/{slug}#form-success-{form_id}", response_headers
         assert response_headers.get("cache-control") == "no-store", response_headers
         assert b"ada@example.test" not in body
 
@@ -337,7 +424,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert read_status == 405, (read_status, read_body)
         unknown_form_status, unknown_form_body, _ = request(
             "POST",
-            re.sub(r"/forms/form-lead/", "/forms/form-unknown/", action_path),
+            re.sub(rf"/forms/{re.escape(form_id)}/", "/forms/form-unknown/", action_path),
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
         )
