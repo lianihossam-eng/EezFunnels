@@ -592,6 +592,8 @@ impl FunnelUnpublishCommand {
 #[serde(deny_unknown_fields)]
 pub(super) struct FunnelPublicReadCommand {
     slug: String,
+    #[serde(default)]
+    page_slug: Option<String>,
 }
 
 impl FunnelPublicReadCommand {
@@ -608,6 +610,13 @@ impl FunnelPublicReadCommand {
         let command: Self = serde_json::from_str(parameters)?;
         if !valid_public_slug(&command.slug) {
             return Err(FunnelCommandError::InvalidParameters);
+        }
+        if command
+            .page_slug
+            .as_deref()
+            .is_some_and(|slug| !eez_domain::document_v2::is_valid_page_slug(slug))
+        {
+            return Err(FunnelCommandError::SlugNotFound);
         }
         Ok(command)
     }
@@ -1178,7 +1187,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.revision_id)
             .await?
             .ok_or(FunnelCommandError::RevisionNotFound)?;
-        render_published_revision(&record, &command.funnel_id)?;
+        render_published_revision(&record, &command.funnel_id, &funnel.slug, None)?;
         let result_json = serde_json::to_string(&serde_json::json!({
             "command_id": FunnelPublishCommand::ID,
             "funnel_id": command.funnel_id,
@@ -1270,7 +1279,12 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_published_revision_by_slug(&command.slug)
             .await?
             .ok_or(FunnelCommandError::SlugNotFound)?;
-        let html = render_published_revision(&record, &record.funnel_id)?;
+        let html = render_published_revision(
+            &record,
+            &record.funnel_id,
+            &command.slug,
+            command.page_slug.as_deref(),
+        )?;
         Ok(serde_json::json!({
             "command_id": FunnelPublicReadCommand::ID,
             "revision_id": record.id,
@@ -2467,27 +2481,32 @@ pub(crate) fn v2_page_projection(document: &DocumentV2) -> Vec<Value> {
 pub(crate) fn render_published_revision(
     record: &RevisionRecord,
     expected_funnel_id: &str,
+    public_funnel_slug: &str,
+    page_slug: Option<&str>,
 ) -> Result<String, FunnelCommandError> {
     match record.schema_version {
         1 => {
+            if page_slug.is_some() {
+                return Err(FunnelCommandError::SlugNotFound);
+            }
             let validated = decode_snapshot(record, expected_funnel_id)?;
             Renderer::new()
                 .render(&validated.revision, &validated.theme, &validated.contents)
                 .map_err(|_| FunnelCommandError::Internal)
         }
-        2 => render_v2::render_published(
+        2 => render_v2::render_published_route(
             record.schema_version,
             expected_funnel_id,
             &record.id,
             &record.data_json,
             &record.render_manifest_json,
+            public_funnel_slug,
+            page_slug,
         )
         .map_err(|error| match error {
+            render_v2::V2RenderError::PageMissing => FunnelCommandError::SlugNotFound,
             render_v2::V2RenderError::ImagesNotEnabled
-            | render_v2::V2RenderError::FormsNotEnabled
-            | render_v2::V2RenderError::MultiPagePublicRouteUnavailable => {
-                FunnelCommandError::V2PublicationBlocked
-            }
+            | render_v2::V2RenderError::FormsNotEnabled => FunnelCommandError::V2PublicationBlocked,
             _ => FunnelCommandError::Internal,
         }),
         _ => Err(FunnelCommandError::Internal),
