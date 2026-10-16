@@ -2267,6 +2267,51 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                             }
                         }
                         if let Some(page) = current_page {
+                            {
+                                let seo_title_page = page.id().clone();
+                                let seo_description_page = page.id().clone();
+                                let noindex_page = page.id().clone();
+                                rsx! {
+                                    fieldset { class: "editor-setting-group",
+                                        legend { "Page search and sharing" }
+                                        p { "Settings for {page.title()}. Save and publish to update the public page." }
+                                        label { class: "editor-setting-control",
+                                            "SEO title"
+                                            input {
+                                                r#type: "text",
+                                                value: page.seo_title().unwrap_or_default(),
+                                                placeholder: page.title(),
+                                                disabled: locked,
+                                                "aria-describedby": "v2-seo-title-help",
+                                                onchange: move |event| dispatch_v2_edit(state, Edit::SetPageSeoTitle { page: seo_title_page.clone(), value: event.value() }),
+                                            }
+                                        }
+                                        p { id: "v2-seo-title-help", "Up to 120 Unicode scalar values. Whitespace is collapsed. Leave blank to use the page title." }
+                                        label { class: "editor-setting-control",
+                                            "Meta description"
+                                            textarea {
+                                                value: page.seo_description().unwrap_or_default(),
+                                                rows: 3,
+                                                disabled: locked,
+                                                "aria-describedby": "v2-seo-description-help",
+                                                onchange: move |event| dispatch_v2_edit(state, Edit::SetPageSeoDescription { page: seo_description_page.clone(), value: event.value() }),
+                                            }
+                                        }
+                                        p { id: "v2-seo-description-help", "Up to 320 Unicode scalar values. Whitespace is collapsed. Leave blank to omit the description." }
+                                        label { class: "editor-setting-control",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: page.noindex(),
+                                                disabled: locked,
+                                                "aria-describedby": "v2-seo-noindex-help",
+                                                onchange: move |event| dispatch_v2_edit(state, Edit::SetPageNoIndex { page: noindex_page.clone(), noindex: event.checked() }),
+                                            }
+                                            "Ask search engines not to index this page"
+                                        }
+                                        p { id: "v2-seo-noindex-help", "Noindex is an indexing preference, not access control. Anyone with the public URL can still open this page." }
+                                    }
+                                }
+                            }
                             div { class: "editor-section-list", role: "list", "aria-label": "Sections on this page",
                                 for (index, section) in page.sections().iter().enumerate() {
                                     {

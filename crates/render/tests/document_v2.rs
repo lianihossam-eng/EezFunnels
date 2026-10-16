@@ -14,12 +14,12 @@ fn document() -> DocumentV2 {
 }
 
 #[test]
-fn renderer_v6_manifest_binds_row_document_theme_and_assets() {
+fn renderer_v7_manifest_binds_row_document_theme_and_assets() {
     let document = document();
     let prepared = prepare_revision(&document, "revision-v2-01", &ResolvedV2Assets::empty())
         .expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v6");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v7");
     assert!(!prepared.render_manifest_json.contains("\"assets\":"));
     assert!(prepared
         .render_manifest_json
@@ -123,7 +123,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v6", "renderer-v5-next");
+        .replace("renderer-v7", "renderer-v5-next");
     assert!(matches!(
         render_published(
             2,
@@ -146,10 +146,10 @@ fn legacy_image_free_manifests_remain_canonical_and_renderable() {
     )
     .expect("image-free revision");
 
-    for renderer in ["renderer-v4", "renderer-v5"] {
+    for renderer in ["renderer-v4", "renderer-v5", "renderer-v6"] {
         let legacy_manifest = prepared
             .render_manifest_json
-            .replace("renderer-v6", renderer);
+            .replace("renderer-v7", renderer);
         let html = render_published(
             2,
             "funnel-01",
@@ -159,6 +159,8 @@ fn legacy_image_free_manifests_remain_canonical_and_renderable() {
         )
         .expect("legacy image-free manifest remains supported");
         assert!(html.contains("Welcome to your new funnel"));
+        assert!(html.contains("<title>Home</title><style>"));
+        assert!(!html.contains("og:title"));
         assert!(!legacy_manifest.contains("\"assets\":"));
     }
 }
@@ -236,6 +238,31 @@ fn resolved_images_render_with_safe_urls_dimensions_and_alt_semantics() {
         "src=\"/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
     ));
     assert!(published.contains("alt=\"&lt;Product &amp; launch&gt;\""));
+    for renderer in ["renderer-v4", "renderer-v5", "renderer-v6"] {
+        let manifest = prepared
+            .render_manifest_json
+            .replace("renderer-v7", renderer);
+        let rendered = render_published(
+            2,
+            "funnel-01",
+            "revision-image-ready",
+            &prepared.data_json,
+            &manifest,
+        );
+        if renderer == "renderer-v6" {
+            let html = rendered.expect("v6 image revisions remain supported");
+            assert!(html.contains(
+                "src=\"/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+            ));
+            assert!(html.contains("<title>Home</title><style>"));
+            assert!(!html.contains("og:title"));
+        } else {
+            assert_eq!(
+                rendered.expect_err("v4/v5 do not support images"),
+                V2RenderError::ImagesNotEnabled
+            );
+        }
+    }
 }
 
 #[test]
@@ -427,4 +454,163 @@ impl eez_domain::document_v2::IdSource for TestIds {
 fn sha256(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[test]
+fn v7_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["pages"][0]["seo_title"] = serde_json::json!("Offer <sale> & \"launch\"");
+    value["pages"][0]["seo_description"] = serde_json::json!("A \"quote\" & <tag> 'offer'");
+    value["pages"][0]["noindex"] = serde_json::json!(true);
+    let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
+        .expect("metadata document");
+    let prepared = prepare_revision(&document, "revision-seo", &ResolvedV2Assets::empty())
+        .expect("metadata revision");
+    let published = render_published(
+        2,
+        "funnel-01",
+        "revision-seo",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("public metadata");
+    let preview = render_owner_preview(
+        &document,
+        document.entry_page_id(),
+        &ResolvedV2Assets::empty(),
+    )
+    .expect("preview metadata");
+    for html in [&published, &preview] {
+        assert!(html.contains("<title>Offer &lt;sale&gt; &amp; \"launch\"</title>"));
+        assert!(html.contains("<meta property=\"og:type\" content=\"website\">"));
+        assert!(html.contains(
+            "<meta property=\"og:title\" content=\"Offer &lt;sale&gt; &amp; &quot;launch&quot;\">"
+        ));
+        assert!(html.contains("<meta name=\"description\" content=\"A &quot;quote&quot; &amp; &lt;tag&gt; &#39;offer&#39;\">"));
+        assert!(html.contains("<meta property=\"og:description\" content=\"A &quot;quote&quot; &amp; &lt;tag&gt; &#39;offer&#39;\">"));
+        assert!(html.contains("<meta name=\"robots\" content=\"noindex\">"));
+        assert!(!html.contains("<sale>"));
+        assert!(!html.contains("rel=\"canonical\""));
+        assert!(!html.contains("og:image"));
+    }
+    let changed_data = prepared.data_json.replace("&", "and");
+    assert_eq!(
+        render_published(
+            2,
+            "funnel-01",
+            "revision-seo",
+            &changed_data,
+            &prepared.render_manifest_json
+        )
+        .expect_err("metadata digest is bound"),
+        V2RenderError::DigestMismatch
+    );
+}
+
+#[test]
+fn v7_falls_back_to_page_title_and_omits_unset_description_and_robots() {
+    let document = document();
+    let prepared = prepare_revision(
+        &document,
+        "revision-default-seo",
+        &ResolvedV2Assets::empty(),
+    )
+    .expect("revision");
+    let html = render_published(
+        2,
+        "funnel-01",
+        "revision-default-seo",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("default metadata");
+    assert!(html.contains("<title>Home</title>"));
+    assert!(html.contains("<meta property=\"og:title\" content=\"Home\">"));
+    assert!(!html.contains("name=\"description\""));
+    assert!(!html.contains("og:description"));
+    assert!(!html.contains("name=\"robots\""));
+}
+
+#[test]
+fn page_metadata_stays_on_its_page_and_is_rejected_by_all_legacy_renderers() {
+    use eez_render::document_v2::render_published_route;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"next-button","kind":"button","label":"Next","action":{"kind":"navigate_page","page_id":"page-next"}}
+    ]);
+    value["pages"]
+        .as_array_mut()
+        .expect("pages")
+        .push(serde_json::json!({
+            "id":"page-next", "slug":"next", "title":"Next", "sections":[]
+        }));
+    for (field, metadata) in [
+        ("seo_title", serde_json::json!("Private offer title")),
+        (
+            "seo_description",
+            serde_json::json!("Next page description"),
+        ),
+        ("noindex", serde_json::json!(true)),
+    ] {
+        let mut with_metadata = value.clone();
+        with_metadata["pages"][1][field] = metadata;
+        let document = DocumentV2::decode(
+            &serde_json::to_vec(&with_metadata).expect("JSON"),
+            "funnel-01",
+        )
+        .expect("two pages");
+        let prepared = prepare_revision(&document, "revision-page-seo", &ResolvedV2Assets::empty())
+            .expect("revision");
+        let entry = render_published_route(
+            2,
+            "funnel-01",
+            "revision-page-seo",
+            &prepared.data_json,
+            &prepared.render_manifest_json,
+            "offer",
+            None,
+        )
+        .expect("entry");
+        let next = render_published_route(
+            2,
+            "funnel-01",
+            "revision-page-seo",
+            &prepared.data_json,
+            &prepared.render_manifest_json,
+            "offer",
+            Some("next"),
+        )
+        .expect("next");
+        assert!(entry.contains("<title>Home</title>"));
+        assert!(!entry.contains("Private offer title"));
+        assert!(!entry.contains("Next page description"));
+        assert!(!entry.contains("name=\"robots\""));
+        match field {
+            "seo_title" => assert!(next.contains("<title>Private offer title</title>")),
+            "seo_description" => assert!(
+                next.contains("<meta name=\"description\" content=\"Next page description\">")
+            ),
+            _ => assert!(next.contains("<meta name=\"robots\" content=\"noindex\">")),
+        }
+        for renderer in ["renderer-v4", "renderer-v5", "renderer-v6"] {
+            let manifest = prepared
+                .render_manifest_json
+                .replace("renderer-v7", renderer);
+            assert_eq!(
+                render_published_route(
+                    2,
+                    "funnel-01",
+                    "revision-page-seo",
+                    &prepared.data_json,
+                    &manifest,
+                    "offer",
+                    None
+                )
+                .expect_err("legacy renderer rejects SEO anywhere in document"),
+                V2RenderError::MetadataNotEnabled
+            );
+        }
+    }
 }

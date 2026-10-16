@@ -511,3 +511,204 @@ fn with_form(field_name: &str) -> Result<DocumentV2, eez_domain::document_v2::Do
     let serialized = serde_json::to_vec(&value).expect("JSON serialization");
     DocumentV2::decode(&serialized, "funnel-01")
 }
+
+fn decode_page_metadata(
+    field: &str,
+    value: serde_json::Value,
+) -> Result<DocumentV2, eez_domain::document_v2::DocumentError> {
+    let mut document: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture JSON");
+    document["pages"][0][field] = value;
+    DocumentV2::decode(&serde_json::to_vec(&document).expect("JSON"), "funnel-01")
+}
+
+#[test]
+fn page_metadata_defaults_and_blank_values_preserve_legacy_canonical_bytes() {
+    let legacy = decode(MINIMAL);
+    let page = &legacy.pages()[0];
+    assert_eq!(page.head_title(), "Home");
+    assert_eq!(page.seo_title(), None);
+    assert_eq!(page.seo_description(), None);
+    assert!(!page.noindex());
+    for (field, value) in [
+        ("seo_title", serde_json::json!(" \t\n\u{2003}")),
+        ("seo_description", serde_json::json!("")),
+        ("noindex", serde_json::json!(false)),
+    ] {
+        let document = decode_page_metadata(field, value).expect("default page metadata");
+        assert_eq!(document.canonical_bytes(), legacy.canonical_bytes());
+    }
+}
+
+#[test]
+fn page_metadata_normalizes_unicode_whitespace_and_enforces_scalar_bounds() {
+    for (field, maximum) in [("seo_title", 120), ("seo_description", 320)] {
+        let document =
+            decode_page_metadata(field, serde_json::json!("  Launch\n\t&\u{2003}learn  "))
+                .expect("whitespace is normalized");
+        let page = &document.pages()[0];
+        let actual = if field == "seo_title" {
+            page.seo_title()
+        } else {
+            page.seo_description()
+        };
+        assert_eq!(actual, Some("Launch & learn"));
+        let bounded = decode_page_metadata(field, serde_json::json!("🚀".repeat(maximum)))
+            .expect("Unicode scalar limit allows multibyte characters");
+        let round_trip = DocumentV2::decode(bounded.canonical_bytes(), "funnel-01")
+            .expect("normalized document round-trips");
+        assert_eq!(round_trip, bounded);
+        let error = decode_page_metadata(field, serde_json::json!("🚀".repeat(maximum + 1)))
+            .expect_err("overlong metadata is rejected without truncation");
+        assert_eq!(error.code(), "validation/page_metadata_length");
+        assert_eq!(error.path(), Some(format!("pages.{field}").as_str()));
+        for control in ['\0', '\u{001b}', '\u{007f}'] {
+            let error = decode_page_metadata(field, serde_json::json!(format!("a{control}b")))
+                .expect_err("non-whitespace control character");
+            assert_eq!(error.code(), "validation/page_metadata_control");
+        }
+    }
+}
+
+#[test]
+fn page_metadata_rejects_null_wrong_types_and_unknown_fields() {
+    for field in ["seo_title", "seo_description", "noindex"] {
+        let error = decode_page_metadata(field, serde_json::Value::Null)
+            .expect_err("explicit null is not a default");
+        assert_eq!(error.code(), "validation/document_invalid");
+    }
+    for (field, value) in [
+        ("seo_title", serde_json::json!(false)),
+        ("seo_description", serde_json::json!({})),
+        ("noindex", serde_json::json!("false")),
+        ("seo", serde_json::json!({})),
+    ] {
+        assert_eq!(
+            decode_page_metadata(field, value)
+                .expect_err("closed page wire")
+                .code(),
+            "validation/document_invalid"
+        );
+    }
+}
+
+#[test]
+fn page_metadata_edits_target_one_page_preserve_siblings_and_clear_to_defaults() {
+    use eez_domain::document_v2::{FocusTarget, PageId};
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"next-button","kind":"button","label":"Next","action":{"kind":"navigate_page","page_id":"page-next"}}
+    ]);
+    value["pages"]
+        .as_array_mut()
+        .expect("pages")
+        .push(serde_json::json!({
+            "id":"page-next", "slug":"next", "title":"Next", "sections":[],
+            "seo_title":"Existing title", "seo_description":"Existing description", "noindex":true
+        }));
+    let original = decode(&serde_json::to_string(&value).expect("JSON"));
+    let page = PageId::parse("page-next").expect("page ID");
+    let mut ids = TestIds(0);
+    let title = original
+        .apply(
+            Edit::SetPageSeoTitle {
+                page: page.clone(),
+                value: "  New\n title  ".into(),
+            },
+            &mut ids,
+        )
+        .expect("title edit");
+    assert_eq!(title.focus, FocusTarget::Page(page.clone()));
+    let changed = title.document.page(&page).expect("target page");
+    assert_eq!(changed.seo_title(), Some("New title"));
+    assert_eq!(changed.seo_description(), Some("Existing description"));
+    assert!(changed.noindex());
+    assert_eq!(title.document.pages()[0], original.pages()[0]);
+    let description = title
+        .document
+        .apply(
+            Edit::SetPageSeoDescription {
+                page: page.clone(),
+                value: "New description".into(),
+            },
+            &mut ids,
+        )
+        .expect("description edit");
+    assert_eq!(description.focus, FocusTarget::Page(page.clone()));
+    assert_eq!(
+        description
+            .document
+            .page(&page)
+            .expect("target")
+            .head_title(),
+        "New title"
+    );
+    let indexed = description
+        .document
+        .apply(
+            Edit::SetPageNoIndex {
+                page: page.clone(),
+                noindex: false,
+            },
+            &mut ids,
+        )
+        .expect("index edit");
+    assert_eq!(indexed.focus, FocusTarget::Page(page.clone()));
+    let target = indexed.document.page(&page).expect("target");
+    assert!(!target.noindex());
+    assert_eq!(target.seo_description(), Some("New description"));
+    assert_eq!(target.seo_title(), Some("New title"));
+    let cleared = indexed
+        .document
+        .apply(
+            Edit::SetPageSeoTitle {
+                page: page.clone(),
+                value: String::new(),
+            },
+            &mut ids,
+        )
+        .expect("clear title")
+        .document
+        .apply(
+            Edit::SetPageSeoDescription {
+                page: page.clone(),
+                value: " \t ".into(),
+            },
+            &mut ids,
+        )
+        .expect("clear description");
+    let target = cleared.document.page(&page).expect("target");
+    assert_eq!(target.head_title(), "Next");
+    assert_eq!(target.seo_title(), None);
+    assert_eq!(target.seo_description(), None);
+    assert_eq!(cleared.document.pages()[0], original.pages()[0]);
+    for edit in [
+        Edit::SetPageSeoTitle {
+            page: page.clone(),
+            value: "a".repeat(121),
+        },
+        Edit::SetPageSeoDescription {
+            page: page.clone(),
+            value: "a".repeat(321),
+        },
+        Edit::SetPageSeoTitle {
+            page: page.clone(),
+            value: "bad\0title".into(),
+        },
+        Edit::SetPageSeoDescription {
+            page: page.clone(),
+            value: "bad\u{1b}description".into(),
+        },
+        Edit::SetPageNoIndex {
+            page: PageId::parse("missing").expect("ID"),
+            noindex: true,
+        },
+    ] {
+        let wire = serde_json::to_vec(&edit).expect("edit JSON");
+        let decoded = serde_json::from_slice(&wire).expect("edit round-trip");
+        assert!(original.apply(decoded, &mut ids).is_err());
+    }
+    assert_eq!(
+        original.page(&page).expect("original").seo_title(),
+        Some("Existing title")
+    );
+}

@@ -432,6 +432,87 @@ try {
   await waitForThemePreview(previousPreview);
   console.log(`V2 theme controls: editable tokens, preset reset, axe=${JSON.stringify(v2Axe)}`);
 
+  const seoTitle = page.getByLabel("SEO title");
+  const seoDescription = page.getByLabel("Meta description");
+  const noindex = page.getByLabel("Ask search engines not to index this page");
+  const seoEditAxe = await page.evaluate(async () => {
+    const result = await window.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] },
+    });
+    return result.violations.map(({ id, impact, help, nodes }) => ({ id, impact, help, nodes: nodes.length }));
+  });
+  assert.deepEqual(seoEditAxe, [], `V2 SEO editor axe findings: ${JSON.stringify(seoEditAxe)}`);
+
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await seoTitle.fill("Spring & <Launch>");
+  await seoTitle.blur();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  assert.equal(await themeFrameDocument.locator("head title").textContent(), "Spring & <Launch>");
+  assert.equal(
+    await themeFrameDocument.locator('meta[property="og:title"]').getAttribute("content"),
+    "Spring & <Launch>",
+  );
+
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await seoDescription.fill("A fast & accessible launch.");
+  await seoDescription.blur();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  assert.equal(
+    await themeFrameDocument.locator('meta[name="description"]').getAttribute("content"),
+    "A fast & accessible launch.",
+  );
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await noindex.check();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  assert.equal(await themeFrameDocument.locator('meta[name="robots"]').getAttribute("content"), "noindex");
+
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await seoTitle.fill("");
+  await seoTitle.blur();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  assert.equal(await themeFrameDocument.locator("head title").textContent(), "Home");
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await seoTitle.fill("Spring & <Launch>");
+  await seoTitle.blur();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+
+  const v2SaveResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${themeFunnelId}/revisions-v2`),
+  );
+  await page.getByRole("button", { name: "Save revision" }).click();
+  const v2Save = await v2SaveResponse;
+  assert.equal(v2Save.status(), 201, await v2Save.text());
+  await page.getByText("Revision saved.").waitFor();
+
+  const v2PublishResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${themeFunnelId}/publish`),
+  );
+  await page.getByRole("button", { name: "Publish saved revision" }).click();
+  const v2Publish = await v2PublishResponse;
+  assert.equal(v2Publish.status(), 200, await v2Publish.text());
+  await page.getByText("Revision published.").waitFor();
+  const publishedSeoResponse = await page.goto(`${origin}/f/${themeFunnel.funnel.slug}`, { waitUntil: "networkidle" });
+  assert.equal(publishedSeoResponse.status(), 200);
+  assert.equal(await page.title(), "Spring & <Launch>");
+  assert.equal(await page.locator('meta[property="og:title"]').getAttribute("content"), "Spring & <Launch>");
+  assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "A fast & accessible launch.");
+  assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex");
+  assert.equal(await page.locator('meta[property="og:type"]').getAttribute("content"), "website");
+  assert.equal(await page.locator("title").count(), 1);
+  console.log(`V2 page SEO: edit, fallback, save, publish, rendered metadata, axe=${JSON.stringify(seoEditAxe)}`);
+
   await page.goto(`${origin}/funnels`, { waitUntil: "networkidle" });
   const primaryLink = page.getByRole("link", { name: "PR-010 browser editor" });
   try {

@@ -220,6 +220,12 @@ pub struct PageV2 {
     pub(crate) id: PageId,
     pub(crate) slug: String,
     pub(crate) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) seo_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) seo_description: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) noindex: bool,
     pub(crate) sections: Vec<SectionV2>,
 }
 
@@ -234,6 +240,12 @@ impl<'de> Deserialize<'de> for PageV2 {
             id: PageId,
             slug: String,
             title: String,
+            #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+            seo_title: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+            seo_description: Option<String>,
+            #[serde(default)]
+            noindex: bool,
             sections: Vec<SectionV2>,
         }
 
@@ -242,6 +254,9 @@ impl<'de> Deserialize<'de> for PageV2 {
             id: wire.id,
             slug: wire.slug,
             title: wire.title,
+            seo_title: wire.seo_title,
+            seo_description: wire.seo_description,
+            noindex: wire.noindex,
             sections: wire.sections,
         })
     }
@@ -258,6 +273,22 @@ impl PageV2 {
 
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    pub fn seo_title(&self) -> Option<&str> {
+        self.seo_title.as_deref()
+    }
+
+    pub fn seo_description(&self) -> Option<&str> {
+        self.seo_description.as_deref()
+    }
+
+    pub fn noindex(&self) -> bool {
+        self.noindex
+    }
+
+    pub fn head_title(&self) -> &str {
+        self.seo_title().unwrap_or(self.title())
     }
 
     pub fn sections(&self) -> &[SectionV2] {
@@ -569,6 +600,9 @@ impl DocumentV2 {
                 id: page_id,
                 slug: String::new(),
                 title: "Home".to_owned(),
+                seo_title: None,
+                seo_description: None,
+                noindex: false,
                 sections,
             }],
             Vec::new(),
