@@ -326,4 +326,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Commit the save-key correction as the fifth PR-023 commit, push the branch, and update PR-023 with a clear `@codex` request and exact-head Sol review. Resolve review threads and require green hosted checks before merge. Keep real Cloudflare validation separate until a roadmap task needs configured credentials or resource IDs.
+Await fresh exact-head Sol and `@codex` reviews plus green hosted checks for PR-023. Resolve all review threads before merge. Keep real Cloudflare validation separate until a roadmap task needs configured credentials or resource IDs.

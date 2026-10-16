@@ -48,6 +48,7 @@ Follow-up exact-head save-key correction
 - Timestamp: 2026-10-16T02:07Z.
 - `cargo xtask check`, `cargo xtask ci`, Node syntax checks, the lifecycle assertions, and `git diff --check` pass on the save-key and changed-payload corrections. The full CI run includes Worker WASM/dashboard builds, local funnel/MCP smoke tests, and the 355-dependency audit.
 - The CI smoke tests used local temporary D1 databases. No remote Cloudflare binding or deployment was used.
+- Sol's exact-head review confirmed the save-key fix and noted that the status file still described the fifth commit as pending. The next-action status is updated to the remaining exact-head reviews and hosted checks.
 
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
