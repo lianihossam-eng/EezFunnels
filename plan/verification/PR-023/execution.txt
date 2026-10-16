@@ -50,5 +50,13 @@ Follow-up exact-head save-key correction
 - The CI smoke tests used local temporary D1 databases. No remote Cloudflare binding or deployment was used.
 - Sol's exact-head review confirmed the save-key fix and noted that the status file still described the fifth commit as pending. The next-action status is updated to the remaining exact-head reviews and hosted checks.
 
+Follow-up review of bounded admission and finite tombstone cleanup
+- Timestamp: 2026-10-16T02:26Z.
+- Two independent adversarial reviews found that expiring a D1 attempt tombstone does not prove a strict cap on unresolved provider-side R2 operations or aggregate orphan bytes. D22, research, status, and ledger now limit the ten-attempt quota claim to simultaneously tracked D1 rows and explicitly defer a temporary-storage safety control to PR-024.
+- The interactive late-write walkthrough now expires stage metadata, retires the actual D1 attempt row, and only then completes the still-unresolved external writer with its original unique key. The reducer denies fabricated late completions without a key recorded during unresolved tombstone retirement; assertions execute the walkthrough's actual step list, check the post-retirement state, and check the subsequent prefix sweep.
+- `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed. Both independent follow-up reviews reported no remaining findings.
+- `cargo xtask ci` passed, including Rust tests, dashboard asset generation, Worker WASM build, local Worker/D1 smokes, and `cargo audit` over 355 dependencies against 1,329 advisories with no vulnerability gate failure.
+- All Cloudflare integration used local Wrangler/D1 only. No remote binding, production account, R2 bucket, Cron schedule, or deployment was exercised; PR-024 still owns those integration and storage-safety gates.
+
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
