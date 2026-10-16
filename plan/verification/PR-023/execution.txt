@@ -1,25 +1,27 @@
 Task-ID: PR-023
-Purpose: compare the local staged-upload wire candidates; both candidates persist the same complete canonical document.
+Purpose: compare the local V2 staged-upload wire candidates; both candidates persist the same complete canonical document, and separately check legacy V1 snapshot compatibility.
 
 Reported Node benchmark
-- Timestamp: 2026-10-16T01:29:35.549Z.
+- Timestamp: 2026-10-16T02:45:29.035Z.
 - Node: v24.19.0; logical CPUs: 5.
-- Load immediately before the run: 0.28, 0.16, 0.11; no competing benchmark process was active.
-- Observed command wall time: 22.459 seconds.
+- Load immediately before the run: 0.03, 0.56, 0.70; no competing benchmark process was active.
 - Commands: `node --check scripts/benchmark-pr023-transport.mjs`; `node scripts/benchmark-pr023-transport.mjs`.
-- The separate CPU-profile diagnostic was not included in reported timings.
+- The V2 workload uses one process with deterministically shuffled, balanced 100-pair samples per fixture. The benchmark measures Node work only, not Worker/D1/R2 latency.
 
 Trial and results
-- 32 fixtures: 4 page counts × 4 document sizes × 2 edit families.
-- Five alternating warm-up pairs and 100 deterministically shuffled measured pairs per fixture; exactly 50 snapshot-first and 50 patch-first pairs each.
+- 32 measured V2 fixtures: 4 page counts × 4 document sizes × 2 edit families.
+- Eight separate one-page legacy compatibility fixtures cover `format_version` 1 and 2 with `schema_version` 1, each at 16,384, 131,072, 524,288, and 1,048,575 bytes. All parse/serialize byte round trips passed; the V2 patch candidate is not run against V1.
+- Five alternating warm-up pairs and 100 deterministically shuffled measured pairs per V2 fixture; exactly 50 snapshot-first and 50 patch-first pairs each.
 - 6,400 measured candidate executions total (3,200 per candidate); zero errors.
 - Every typed patch expanded to byte-identical canonical output and the same SHA-256 as its snapshot counterpart.
 - Nine explicit negative checks rejected: unknown version, duplicate page ID, duplicate block ID, colliding slug, missing navigation target, cyclic page graph, malformed JSON, excessive nesting depth, and incorrect patch base digest.
 - Modeled client round trips per save: 3 for both candidates (mint command, binary stage upload, final save command); provider operations remain model inputs rather than observed traffic.
 - Median fixture upload-byte reduction: 98.38896% for sparse edits and 39.93208% for broad edits that change 60% of text blocks. Each family weights all 16 size/page-count fixtures equally.
-- Combined p95 local transform ratios, typed patch / snapshot: 1.7800 at 16,384 bytes; 1.7936 at 131,072; 1.8506 at 524,288; 1.8622 at 1,048,575.
-- Document and upload boundaries accepted 1,048,575 and 1,048,576 bytes and rejected 1,048,577 bytes.
-- The local typed-patch candidate passes its fixture gates for existing `text` block replacement. It is not a production-equivalent Worker/D1/R2 comparison. D22 therefore selects full-snapshot transfer for initial V2 runtime; no patch payload is accepted. Every saved revision remains a full canonical snapshot. A future patch decision requires runtime-equivalent correctness, latency, memory, and provider-operation evidence.
+- Pooled p95 local transform ratios, typed patch / snapshot: 1.7545 at 16,384 bytes; 1.8407 at 131,072; 1.6091 at 524,288; 1.9287 at 1,048,575.
+- Five of 32 individual V2 fixture p95 ratios exceeded 2x; the maximum was 2.62765x for the 1-page, 524,288-byte sparse fixture. Thus the typed-patch candidate fails the per-fixture latency gate despite passing pooled-by-size p95, correctness, and byte-savings gates.
+- Legacy V1-shaped fixture sizes through 1,048,575 bytes and V2 document/upload boundaries at 1,048,575 and 1,048,576 bytes passed; 1,048,577-byte V2 boundaries and over-cap legacy target were rejected.
+- Legacy shape and JSON round-trip checks are harness-level only; this benchmark does not invoke the Rust V1 decoder.
+- These are local Node fixture results, not a production-equivalent Worker/D1/R2 comparison. D22 selects full-snapshot transfer for initial V2 runtime; no patch payload is accepted. Every saved revision remains a full canonical snapshot. A future patch decision requires runtime-equivalent correctness, per-fixture latency, memory, and provider-operation evidence.
 
 Profiler and measurement limits
 - The separate CPU profile's largest named work was garbage collection and fixture `canonicalize`; `runPatch` was the next application frame. This identifies local JSON traversal/allocation as the measured limiter, not Worker CPU or network transfer.
@@ -65,6 +67,14 @@ Follow-up exact-head sweep fairness correction
 - Timestamp: 2026-10-16T02:41Z.
 - `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed. Full `cargo xtask ci` passed, including Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
 - All Worker/D1 validation used local bindings. No remote Cloudflare account, R2 bucket, Cron schedule, or deployment was exercised. Updated-head Sol/@codex reviews and hosted checks remain required.
+
+Follow-up exact-head benchmark acceptance correction
+- Codex review of exact head `6723bba612d37ff2324e242e8d43a9ecfac051a0` found that the benchmark artifact lacked the roadmap's V1 fixture coverage and that pooled p95 by byte size could hide slower individual fixtures. Sol independently confirmed the V1 coverage gap and recommended stating individual misses beside pooled results.
+- The harness now checks one-page `format_version: 1` and theme-overrides `format_version: 2` / `schema_version: 1` fixture shapes at the four sizes up to 1,048,575 bytes. It reports Node JSON parse/serialize round trips only; no Rust V1 decoder behavior is claimed. V2 paired fixtures remain 1/10/25/50 pages.
+- The local latency gate now compares p95 for every V2 page/size/edit fixture. The 2026-10-16T02:45:29Z run has 8 legacy shape checks and 32 measured V2 fixtures, 6,400 candidate executions, zero errors, matching outputs/digests, and passing byte-savings. Five individual V2 fixtures exceed 2x; the worst is 2.62765x for `1p-524288b-sparse`. Pooled p95-by-size remains under 2x at all four sizes, but the per-fixture gate fails; the local candidate verdict is `complete_snapshot_wire`.
+- The corrected artifact records these two distinct latency summaries and exposes the failed per-fixture gate. D22, research, roadmap, and status now state the V1 fixture scope, the Node-only limitation, and the per-fixture p95 failure. This candidate comparison remains non-production evidence.
+- `node --check scripts/benchmark-pr023-transport.mjs`, the full benchmark run, benchmark-artifact assertions, and the focused lifecycle test passed. Full `cargo xtask ci` passed at 2026-10-16T02:52Z, including Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
+- No remote Cloudflare account, D1 database, R2 bucket, Cron schedule, or deployment was used. Updated-head exact reviews and hosted checks remain required.
 
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
