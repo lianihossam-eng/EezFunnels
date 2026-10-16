@@ -29,7 +29,8 @@ The dashboard, HTTP API, CLI, and MCP endpoint use the same funnel command sessi
 | `PUT /api/funnels/:funnel_id/stages-v2` | Upload staged document bytes with the returned bearer capability |
 | `POST /api/funnels/:funnel_id/revisions-v2` | Validate and save a staged typed revision; requires an `Idempotency-Key` header |
 | `GET /api/v2/stage-capacity` | Read the configured staged-save capacity |
-| `GET /f/:slug` | Render the currently published revision (`funnel.public.read`) |
+| `GET /f/:slug` | Render the published entry page (`funnel.public.read`) |
+| `GET /f/:slug/:page_slug` | Render a published V2 page (`funnel.public.read`) |
 
 JSON mutation requests use JSON bodies. The `PUT` staged upload uses `application/octet-stream` and a short-lived bearer capability. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks; [Deploy](deploy.md) describes the required staged-save capacity settings.
 
@@ -44,7 +45,7 @@ The MCP endpoint exposes the following nine command IDs. Typed editor operations
 | `funnel.editor.preview` | `funnel_id`, `base_revision_id`, `section_ids`, optional `settings` | Local user | Not required |
 | `funnel.editor.read` | `{"funnel_id":"<id>"}` | Local user | Not required |
 | `funnel.list` | `{}` | Local user | Not required |
-| `funnel.public.read` | `{"slug":"<published-slug>"}` | Public | Not required |
+| `funnel.public.read` | `{"slug":"<published-slug>","page_slug":"<page-slug>"}` (`page_slug` optional for the entry page) | Public | Not required |
 | `funnel.publish` | `funnel_id`, `revision_id`, `expected_published_revision_id` | Local user | Required |
 | `funnel.revision.save` | `funnel_id`, `base_revision_id`, `section_ids`, optional `settings` | Local user | Required |
 | `funnel.unpublish` | `funnel_id`, `expected_published_revision_id` | Local user | Required |
