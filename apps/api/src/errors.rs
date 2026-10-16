@@ -58,6 +58,13 @@ impl ApiError {
                 "The requested operation is not supported.",
                 false,
             ),
+            "analytics/report_too_large" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                422,
+                "The analytics report exceeds the synchronous processing limit.",
+                false,
+            ),
             "authorization/token_invalid" | "authorization/token_missing" => (
                 code.to_owned(),
                 ErrorCategory::Authorization,
@@ -209,6 +216,7 @@ mod tests {
             ErrorCategory::Validation,
             405,
         ),
+        ("analytics/report_too_large", ErrorCategory::Validation, 422),
         (
             "authorization/token_invalid",
             ErrorCategory::Authorization,

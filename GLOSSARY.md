@@ -9,6 +9,7 @@
 - Section - typed layout container on a page, such as hero, features, testimonials, cta, or footer.
 - Block - typed content or interaction element inside a section.
 - Form definition - versioned description of fields, purpose, and completion result.
+- Form completion count - successful persisted form submission that has not expired; it is not a conversion rate.
 - Field - named input with a type and validation bounds in a form definition.
 - Asset - immutable media item referenced by an image block. ID: asset_id.
 - Theme - design tokens applied to a funnel.

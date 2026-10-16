@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 
 mod editor;
 use editor::FunnelDetail;
+#[cfg(feature = "browser")]
+use eez_domain::analytics::FormAnalyticsPeriod;
 use eez_domain::{media::MediaAssetDescriptor, FunnelBlueprint};
 use serde::Deserialize;
 use serde_json::Value;
@@ -86,6 +88,8 @@ pub(crate) enum RouteView {
     #[layout(DashboardShell)]
     #[route("/funnels/:id")]
     FunnelDetail { id: String },
+    #[route("/funnels/:id/analytics")]
+    FormAnalytics { id: String },
     #[route("/funnels/:id/leads")]
     LeadInbox { id: String },
     #[route("/funnels/:id/leads/:submission_id")]
@@ -661,6 +665,11 @@ fn Funnels() -> Element {
                                     class: "funnel-leads-link",
                                     "View leads"
                                 }
+                                Link {
+                                    to: RouteView::FormAnalytics { id: item.id.clone() },
+                                    class: "funnel-leads-link",
+                                    "Form analytics"
+                                }
                             }
                             div { class: "funnel-card-meta",
                                 span { class: if item.published_revision_id.is_some() { "status-badge published" } else { "status-badge draft" },
@@ -1119,6 +1128,363 @@ impl LeadDetailState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DashboardAnalyticsPeriod {
+    Seven,
+    #[default]
+    Thirty,
+    Ninety,
+}
+
+impl DashboardAnalyticsPeriod {
+    fn from_value(value: &str) -> Option<Self> {
+        match value {
+            "7" => Some(Self::Seven),
+            "30" => Some(Self::Thirty),
+            "90" => Some(Self::Ninety),
+            _ => None,
+        }
+    }
+
+    const fn days(self) -> u8 {
+        match self {
+            Self::Seven => 7,
+            Self::Thirty => 30,
+            Self::Ninety => 90,
+        }
+    }
+
+    #[cfg(feature = "browser")]
+    const fn domain_period(self) -> FormAnalyticsPeriod {
+        match self {
+            Self::Seven => FormAnalyticsPeriod::SevenDays,
+            Self::Thirty => FormAnalyticsPeriod::ThirtyDays,
+            Self::Ninety => FormAnalyticsPeriod::NinetyDays,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct FormAnalyticsDay {
+    date: String,
+    submissions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct FormAnalyticsLabelCount {
+    page_title: String,
+    form_purpose: String,
+    submissions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct FormAnalyticsReport {
+    period_days: u8,
+    as_of: i64,
+    total_submissions: u64,
+    days: Vec<FormAnalyticsDay>,
+    forms: Vec<FormAnalyticsLabelCount>,
+    other_form_submissions: u64,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Deserialize)]
+struct FormAnalyticsApiError {
+    code: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FormAnalyticsLoadError {
+    TooLarge,
+    #[cfg(feature = "browser")]
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FormAnalyticsState {
+    funnel_id: String,
+    period: DashboardAnalyticsPeriod,
+    report: Option<FormAnalyticsReport>,
+    loading: bool,
+    error: Option<FormAnalyticsLoadError>,
+    latest_request: u64,
+    announcement: String,
+}
+
+impl Default for FormAnalyticsState {
+    fn default() -> Self {
+        Self {
+            funnel_id: String::new(),
+            period: DashboardAnalyticsPeriod::default(),
+            report: None,
+            loading: true,
+            error: None,
+            latest_request: 0,
+            announcement: String::new(),
+        }
+    }
+}
+
+impl FormAnalyticsState {
+    #[cfg(any(feature = "browser", test))]
+    fn begin_route(&mut self, funnel_id: String) -> (u64, DashboardAnalyticsPeriod) {
+        self.funnel_id = funnel_id;
+        self.period = DashboardAnalyticsPeriod::default();
+        self.begin_request()
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn select_period(
+        &mut self,
+        period: DashboardAnalyticsPeriod,
+    ) -> (u64, DashboardAnalyticsPeriod) {
+        self.period = period;
+        self.begin_request()
+    }
+
+    #[cfg(feature = "browser")]
+    fn retry(&mut self) -> (u64, DashboardAnalyticsPeriod) {
+        self.begin_request()
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_request(&mut self) -> (u64, DashboardAnalyticsPeriod) {
+        self.latest_request = self.latest_request.wrapping_add(1);
+        self.report = None;
+        self.loading = true;
+        self.error = None;
+        self.announcement.clear();
+        (self.latest_request, self.period)
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_request(
+        &mut self,
+        request: u64,
+        result: Result<FormAnalyticsReport, FormAnalyticsLoadError>,
+    ) {
+        if request != self.latest_request {
+            return;
+        }
+        self.loading = false;
+        match result {
+            Ok(report) => {
+                self.announcement = format!(
+                    "Loaded {} form completions for the last {} UTC days.",
+                    report.total_submissions,
+                    self.period.days()
+                );
+                self.report = Some(report);
+                self.error = None;
+            }
+            Err(error) => {
+                self.error = Some(error);
+                self.announcement.clear();
+            }
+        }
+    }
+}
+
+#[cfg(any(feature = "browser", test))]
+fn validate_form_analytics_report(
+    report: &FormAnalyticsReport,
+    period: DashboardAnalyticsPeriod,
+) -> bool {
+    let daily_total = report
+        .days
+        .iter()
+        .try_fold(0u64, |total, day| total.checked_add(day.submissions));
+    let form_total = report
+        .forms
+        .iter()
+        .try_fold(0u64, |total, form| total.checked_add(form.submissions));
+    report.period_days == period.days()
+        && report.as_of >= 0
+        && report.days.len() == usize::from(period.days())
+        && report.days.iter().all(|day| is_analytics_date(&day.date))
+        && report
+            .days
+            .windows(2)
+            .all(|pair| pair[0].date < pair[1].date)
+        && report.forms.len() <= 20
+        && report.forms.iter().all(|form| {
+            !form.page_title.is_empty()
+                && !form.form_purpose.is_empty()
+                && form.page_title.chars().count() <= 160
+                && form.form_purpose.chars().count() <= 240
+                && form.submissions > 0
+        })
+        && daily_total == Some(report.total_submissions)
+        && form_total.and_then(|total| total.checked_add(report.other_form_submissions))
+            == Some(report.total_submissions)
+}
+
+#[cfg(any(feature = "browser", test))]
+fn is_analytics_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+}
+
+#[component]
+fn FormAnalytics(id: String) -> Element {
+    #[cfg(feature = "browser")]
+    let mut state = use_signal(FormAnalyticsState::default);
+    #[cfg(not(feature = "browser"))]
+    let state = use_signal(FormAnalyticsState::default);
+
+    #[cfg(feature = "browser")]
+    use_effect(use_reactive!(|(id)| {
+        let funnel_id = id.clone();
+        let (request, period) = state.with_mut(|state| state.begin_route(funnel_id.clone()));
+        spawn(async move { refresh_form_analytics(state, funnel_id, period, request).await });
+    }));
+
+    let view = state();
+    let editor_id = id.clone();
+    let leads_id = id.clone();
+    #[cfg(feature = "browser")]
+    let change_period_id = id.clone();
+    #[cfg(feature = "browser")]
+    let retry_large_id = id.clone();
+    #[cfg(feature = "browser")]
+    let retry_error_id = id.clone();
+    rsx! {
+        section { class: "page-heading lead-page-heading",
+            h1 { "Form completions" }
+            p { class: "page-description", "See successful form submissions still available in this funnel’s retention window." }
+            div { class: "lead-page-actions",
+                Link {
+                    to: RouteView::FunnelDetail { id: editor_id },
+                    class: "lead-navigation-link",
+                    "Back to funnel editor"
+                }
+                Link {
+                    to: RouteView::LeadInbox { id: leads_id },
+                    class: "lead-navigation-link",
+                    "View leads"
+                }
+            }
+        }
+        p { id: "form-analytics-live-status", class: "lead-live-status", role: "status", "aria-live": "polite", "{view.announcement}" }
+        section { class: "analytics-toolbar", "aria-label": "Analytics report controls",
+            label { r#for: "form-analytics-period", "Reporting period" }
+            select {
+                id: "form-analytics-period",
+                value: "{view.period.days()}",
+                onchange: move |event| {
+                    if let Some(period) = DashboardAnalyticsPeriod::from_value(&event.value()) {
+                        #[cfg(feature = "browser")]
+                        {
+                            let (request, selected_period) = state.with_mut(|state| state.select_period(period));
+                            let funnel_id = change_period_id.clone();
+                            spawn(async move {
+                                refresh_form_analytics(state, funnel_id, selected_period, request).await
+                            });
+                        }
+                        #[cfg(not(feature = "browser"))]
+                        let _ = period;
+                    }
+                },
+                option { value: "7", "Last 7 days" }
+                option { value: "30", "Last 30 days" }
+                option { value: "90", "Last 90 days" }
+            }
+        }
+        p { class: "analytics-retention-note",
+            "Counts include successful submissions that have not expired. Earlier activity may no longer be retained; this report does not include page visits or form starts."
+        }
+        p { class: "analytics-retention-note", "Long page and form labels are shortened for display; counts use the full saved labels." }
+        if view.loading {
+            section { class: "empty-state", role: "status", "aria-label": "Form completion report", "aria-busy": "true",
+                "Loading form completion counts…"
+            }
+        } else if view.error == Some(FormAnalyticsLoadError::TooLarge) {
+            section { class: "empty-state lead-load-error", role: "alert", "aria-label": "Form completion report unavailable",
+                h2 { "This report is too large to calculate" }
+                p { "A shorter period may fit the report limit, though it may still be too large. Choose another period above or try again." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let (request, period) = state.with_mut(FormAnalyticsState::retry);
+                            let funnel_id = retry_large_id.clone();
+                            spawn(async move { refresh_form_analytics(state, funnel_id, period, request).await });
+                        }
+                    },
+                    "Try again"
+                }
+            }
+        } else if view.error.is_some() {
+            section { class: "empty-state lead-load-error", role: "alert", "aria-label": "Form completion report error",
+                p { "Form completion counts could not be loaded." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let (request, period) = state.with_mut(FormAnalyticsState::retry);
+                            let funnel_id = retry_error_id.clone();
+                            spawn(async move { refresh_form_analytics(state, funnel_id, period, request).await });
+                        }
+                    },
+                    "Try again"
+                }
+            }
+        } else if let Some(report) = view.report {
+            section { class: "analytics-total", "aria-label": "Form completion summary",
+                p { class: "analytics-total-number", "{report.total_submissions}" }
+                p { class: "analytics-total-label", "Successful submissions in the last {report.period_days} UTC days" }
+                p { class: "analytics-as-of", "Updated " LeadTime { timestamp: report.as_of } }
+            }
+            if report.total_submissions == 0 {
+                p { class: "analytics-zero-state", "No retained submissions in this period." }
+            }
+            div { class: "analytics-tables",
+                div { class: "lead-table-wrap",
+                    table { class: "lead-table analytics-table",
+                        caption { "Daily form completions (UTC)" }
+                        thead { tr { th { scope: "col", "Date" } th { scope: "col", "Submissions" } } }
+                        tbody {
+                            for day in report.days {
+                                tr { key: "{day.date}", td { "{day.date}" } td { "{day.submissions}" } }
+                            }
+                        }
+                    }
+                }
+                div { class: "lead-table-wrap",
+                    table { class: "lead-table analytics-table",
+                        caption { "By page and form purpose" }
+                        thead { tr { th { scope: "col", "Page" } th { scope: "col", "Form purpose" } th { scope: "col", "Submissions" } } }
+                        tbody {
+                            for form in report.forms {
+                                tr { key: "{form.page_title}-{form.form_purpose}",
+                                    td { "{form.page_title}" }
+                                    td { "{form.form_purpose}" }
+                                    td { "{form.submissions}" }
+                                }
+                            }
+                            if report.other_form_submissions > 0 {
+                                tr {
+                                    td { colspan: "2", "Other page and form labels" }
+                                    td { "{report.other_form_submissions}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn LeadInbox(id: String) -> Element {
     #[allow(unused_mut)]
@@ -1139,6 +1505,7 @@ fn LeadInbox(id: String) -> Element {
         .as_ref()
         .map(|name| format!("{name} leads"))
         .unwrap_or_else(|| "Funnel leads".to_owned());
+    let analytics_id = id.clone();
     #[cfg(feature = "browser")]
     let retry_append = !view.leads.is_empty() && view.next_cursor.is_some();
 
@@ -1152,6 +1519,11 @@ fn LeadInbox(id: String) -> Element {
                     to: RouteView::FunnelDetail { id: id.clone() },
                     class: "lead-navigation-link",
                     "Back to funnel editor"
+                }
+                Link {
+                    to: RouteView::FormAnalytics { id: analytics_id },
+                    class: "lead-navigation-link",
+                    "Form analytics"
                 }
             }
         }
@@ -1484,6 +1856,37 @@ async fn refresh_lead_inbox(
     if append && completed && current_request && restore_focus {
         restore_lead_inbox_focus().await;
     }
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_form_analytics(
+    mut state: Signal<FormAnalyticsState>,
+    funnel_id: String,
+    period: DashboardAnalyticsPeriod,
+    request: u64,
+) {
+    let path = format!(
+        "/api/funnels/{funnel_id}/analytics/forms?days={}",
+        period.domain_period().days()
+    );
+    let result = match api_request("GET", &path, None, None).await {
+        Ok(response) if response.status == 200 => {
+            match serde_json::from_str::<FormAnalyticsReport>(&response.body) {
+                Ok(report) if validate_form_analytics_report(&report, period) => Ok(report),
+                _ => Err(FormAnalyticsLoadError::Unavailable),
+            }
+        }
+        Ok(response) if response.status == 422 => {
+            match serde_json::from_str::<FormAnalyticsApiError>(&response.body) {
+                Ok(error) if error.code == "analytics/report_too_large" => {
+                    Err(FormAnalyticsLoadError::TooLarge)
+                }
+                _ => Err(FormAnalyticsLoadError::Unavailable),
+            }
+        }
+        _ => Err(FormAnalyticsLoadError::Unavailable),
+    };
+    state.with_mut(|state| state.finish_request(request, result));
 }
 
 #[cfg(feature = "browser")]
@@ -1844,6 +2247,67 @@ fn CreateFields(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_analytics_report(period: DashboardAnalyticsPeriod) -> FormAnalyticsReport {
+        FormAnalyticsReport {
+            period_days: period.days(),
+            as_of: 1_797_033_600,
+            total_submissions: 0,
+            days: (1..=period.days())
+                .map(|day| FormAnalyticsDay {
+                    date: format!("2026-09-{day:02}"),
+                    submissions: 0,
+                })
+                .collect(),
+            forms: Vec::new(),
+            other_form_submissions: 0,
+        }
+    }
+
+    #[test]
+    fn analytics_report_requires_consistent_bounded_aggregate_data() {
+        let report = empty_analytics_report(DashboardAnalyticsPeriod::Thirty);
+        assert!(validate_form_analytics_report(
+            &report,
+            DashboardAnalyticsPeriod::Thirty
+        ));
+
+        let mut mismatched_period = report.clone();
+        mismatched_period.period_days = 90;
+        assert!(!validate_form_analytics_report(
+            &mismatched_period,
+            DashboardAnalyticsPeriod::Thirty
+        ));
+
+        let mut mismatched_total = report.clone();
+        mismatched_total.days[0].submissions = 1;
+        assert!(!validate_form_analytics_report(
+            &mismatched_total,
+            DashboardAnalyticsPeriod::Thirty
+        ));
+    }
+
+    #[test]
+    fn analytics_period_changes_discard_stale_responses() {
+        let mut state = FormAnalyticsState::default();
+        let (old_request, _) = state.begin_route("funnel-01".to_owned());
+        let (new_request, period) = state.select_period(DashboardAnalyticsPeriod::Seven);
+        assert_eq!(period, DashboardAnalyticsPeriod::Seven);
+
+        state.finish_request(
+            old_request,
+            Ok(empty_analytics_report(DashboardAnalyticsPeriod::Thirty)),
+        );
+        assert!(state.loading);
+        assert!(state.report.is_none());
+
+        state.finish_request(
+            new_request,
+            Ok(empty_analytics_report(DashboardAnalyticsPeriod::Seven)),
+        );
+        assert!(!state.loading);
+        assert_eq!(state.report, Some(empty_analytics_report(period)));
+    }
     use dioxus::core::VirtualDom;
 
     #[test]

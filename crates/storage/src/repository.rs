@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 
+use eez_domain::analytics::FormAnalyticsPeriod;
 use eez_domain::document_v2::{
     FormSubmissionContext, FormSubmissionValue, SubmittedFieldContext, SubmittedFieldKind,
 };
@@ -14,7 +15,155 @@ const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
+const PUBLIC_FORM_ANALYTICS_LABEL_PAGE_SCALARS: usize = 160;
+const PUBLIC_FORM_ANALYTICS_LABEL_PURPOSE_SCALARS: usize = 240;
 pub const PUBLIC_FORM_LEAD_PAGE_SIZE: usize = 50;
+
+const PUBLIC_FORM_COMPLETION_ANALYTICS_SQL: &str = r#"
+WITH RECURSIVE
+configuration AS MATERIALIZED (
+    SELECT CAST(? AS INTEGER) AS period_days, ? AS funnel_id
+),
+clock AS MATERIALIZED (
+    SELECT unixepoch() AS as_of
+),
+bounds AS MATERIALIZED (
+    SELECT
+        clock.as_of AS as_of,
+        (clock.as_of / 86400) * 86400 AS today_start,
+        (clock.as_of / 86400) * 86400 - (configuration.period_days - 1) * 86400 AS start_epoch,
+        configuration.period_days AS period_days,
+        configuration.funnel_id AS funnel_id
+    FROM clock CROSS JOIN configuration
+),
+target AS MATERIALIZED (
+    SELECT EXISTS(
+        SELECT 1 FROM funnels WHERE id = (SELECT funnel_id FROM configuration)
+    ) AS is_present
+),
+candidate_submissions AS MATERIALIZED (
+    SELECT
+        submission_id,
+        funnel_id,
+        revision_id,
+        page_id,
+        form_id,
+        submitted_at,
+        expires_at
+    FROM public_form_submissions
+    WHERE funnel_id = (SELECT funnel_id FROM configuration)
+        AND submitted_at >= (SELECT start_epoch FROM bounds)
+        AND submitted_at <= (SELECT as_of FROM bounds)
+    LIMIT 10001
+),
+candidate_total AS MATERIALIZED (
+    SELECT COUNT(*) AS candidate_count FROM candidate_submissions
+),
+report_status AS MATERIALIZED (
+    SELECT CASE
+        WHEN (SELECT is_present FROM target) = 0 THEN 'missing'
+        WHEN (SELECT candidate_count FROM candidate_total) > 10000 THEN 'too_large'
+        ELSE 'ok'
+    END AS status
+),
+eligible AS MATERIALIZED (
+    SELECT
+        candidate_submissions.funnel_id,
+        candidate_submissions.revision_id,
+        candidate_submissions.page_id,
+        candidate_submissions.form_id,
+        candidate_submissions.submitted_at
+    FROM candidate_submissions
+    CROSS JOIN bounds
+    WHERE candidate_submissions.expires_at > bounds.as_of
+        AND (SELECT status FROM report_status) = 'ok'
+),
+day_offsets(day_offset) AS (
+    SELECT 0
+    UNION ALL
+    SELECT day_offsets.day_offset + 1
+    FROM day_offsets CROSS JOIN bounds
+    WHERE day_offsets.day_offset + 1 < bounds.period_days
+),
+daily_counts AS (
+    SELECT
+        date(bounds.start_epoch + day_offsets.day_offset * 86400, 'unixepoch') AS utc_date,
+        COUNT(eligible.submitted_at) AS submissions
+    FROM bounds
+    CROSS JOIN day_offsets
+    LEFT JOIN eligible
+        ON eligible.submitted_at >= bounds.start_epoch + day_offsets.day_offset * 86400
+        AND eligible.submitted_at < bounds.start_epoch + (day_offsets.day_offset + 1) * 86400
+    GROUP BY day_offsets.day_offset
+),
+labelled_submissions AS (
+    SELECT
+        CAST(COALESCE(NULLIF(json_extract(contexts.context_json, '$.page_title'), ''), 'Unavailable page') AS TEXT) AS page_title,
+        CAST(COALESCE(NULLIF(json_extract(contexts.context_json, '$.form_purpose'), ''), 'Unavailable form purpose') AS TEXT) AS form_purpose
+    FROM eligible
+    LEFT JOIN public_form_contexts AS contexts
+        ON contexts.funnel_id = eligible.funnel_id
+        AND contexts.revision_id = eligible.revision_id
+        AND contexts.page_id = eligible.page_id
+        AND contexts.form_id = eligible.form_id
+),
+form_counts AS (
+    SELECT page_title, form_purpose, COUNT(*) AS submissions
+    FROM labelled_submissions
+    GROUP BY page_title, form_purpose
+),
+ranked_forms AS (
+    SELECT
+        page_title,
+        form_purpose,
+        submissions,
+        ROW_NUMBER() OVER (
+            ORDER BY submissions DESC, page_title COLLATE BINARY, form_purpose COLLATE BINARY
+        ) AS position
+    FROM form_counts
+),
+top_forms AS (
+    SELECT page_title, form_purpose, submissions
+    FROM ranked_forms
+    WHERE position <= 20
+),
+summary AS (
+    SELECT COUNT(*) AS total_submissions FROM eligible
+)
+SELECT
+    'meta' AS kind,
+    report_status.status AS status,
+    CASE WHEN report_status.status = 'ok' THEN bounds.as_of ELSE NULL END AS as_of,
+    NULL AS utc_date,
+    NULL AS page_title,
+    NULL AS form_purpose,
+    CASE WHEN report_status.status = 'ok' THEN summary.total_submissions ELSE NULL END AS submissions
+FROM report_status CROSS JOIN bounds CROSS JOIN summary
+UNION ALL
+SELECT 'day', NULL, NULL, daily_counts.utc_date, NULL, NULL, daily_counts.submissions
+FROM daily_counts CROSS JOIN report_status
+WHERE report_status.status = 'ok'
+UNION ALL
+SELECT
+    'form', NULL, NULL, NULL,
+    CASE WHEN length(top_forms.page_title) > 160
+        THEN substr(top_forms.page_title, 1, 159) || '…'
+        ELSE top_forms.page_title
+    END,
+    CASE WHEN length(top_forms.form_purpose) > 240
+        THEN substr(top_forms.form_purpose, 1, 239) || '…'
+        ELSE top_forms.form_purpose
+    END,
+    top_forms.submissions
+FROM top_forms CROSS JOIN report_status
+WHERE report_status.status = 'ok'
+UNION ALL
+SELECT
+    'other', NULL, NULL, NULL, NULL, NULL,
+    summary.total_submissions - COALESCE((SELECT SUM(submissions) FROM top_forms), 0)
+FROM summary CROSS JOIN report_status
+WHERE report_status.status = 'ok'
+"#;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
 
@@ -40,6 +189,8 @@ pub enum RepositoryError {
     StageControlUnavailable,
     StageStorageUnavailable,
     CorruptPublicFormLead,
+    PublicFormAnalyticsTooLarge,
+    CorruptPublicFormAnalytics,
 }
 
 impl Display for RepositoryError {
@@ -73,6 +224,8 @@ impl Display for RepositoryError {
                 formatter.write_str("external/unavailable")
             }
             Self::CorruptPublicFormLead => formatter.write_str("internal/unexpected"),
+            Self::PublicFormAnalyticsTooLarge => formatter.write_str("analytics/report_too_large"),
+            Self::CorruptPublicFormAnalytics => formatter.write_str("internal/unexpected"),
         }
     }
 }
@@ -97,6 +250,8 @@ impl RepositoryError {
             Self::StageDigestMismatch => "validation/invalid_json",
             Self::StageControlUnavailable | Self::StageStorageUnavailable => "external/unavailable",
             Self::CorruptPublicFormLead => "internal/unexpected",
+            Self::PublicFormAnalyticsTooLarge => "analytics/report_too_large",
+            Self::CorruptPublicFormAnalytics => "internal/unexpected",
         }
     }
 }
@@ -261,6 +416,29 @@ pub struct PublicFormLeadSummary {
 pub struct PublicFormLeadPage {
     pub leads: Vec<PublicFormLeadSummary>,
     pub next_cursor: Option<PublicFormLeadCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormCompletionDay {
+    pub date: String,
+    pub submissions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormCompletionLabelCount {
+    pub page_title: String,
+    pub form_purpose: String,
+    pub submissions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormCompletionAnalytics {
+    pub period_days: u8,
+    pub as_of: i64,
+    pub total_submissions: u64,
+    pub days: Vec<PublicFormCompletionDay>,
+    pub forms: Vec<PublicFormCompletionLabelCount>,
+    pub other_form_submissions: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -506,6 +684,17 @@ struct PublicFormLeadDetailRow {
     marketing_opt_in_copy_version: Option<String>,
     marketing_opt_in_copy: Option<String>,
     marketing_opt_in_recorded_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PublicFormAnalyticsSqlRow {
+    kind: String,
+    status: Option<String>,
+    as_of: Option<i64>,
+    utc_date: Option<String>,
+    page_title: Option<String>,
+    form_purpose: Option<String>,
+    submissions: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1666,6 +1855,134 @@ impl<'a> Repository<'a> {
         }))
     }
 
+    pub async fn form_completion_analytics(
+        &self,
+        funnel_id: &str,
+        period: FormAnalyticsPeriod,
+    ) -> RepositoryResult<PublicFormCompletionAnalytics> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        let period_days = period.days().to_string();
+        let period_days = D1Type::Text(&period_days);
+        let funnel_id = D1Type::Text(funnel_id);
+        let rows = self
+            .database
+            .prepare(PUBLIC_FORM_COMPLETION_ANALYTICS_SQL)
+            .bind_refs([&period_days, &funnel_id])?
+            .all()
+            .await?
+            .results::<PublicFormAnalyticsSqlRow>()?;
+
+        let mut status = None;
+        let mut as_of = None;
+        let mut total_submissions = None;
+        let mut days = Vec::with_capacity(usize::from(period.days()));
+        let mut forms = Vec::new();
+        let mut other_form_submissions = None;
+
+        for row in rows {
+            match row.kind.as_str() {
+                "meta" => {
+                    if status.is_some() {
+                        return Err(RepositoryError::CorruptPublicFormAnalytics);
+                    }
+                    status = row.status;
+                    as_of = row.as_of;
+                    total_submissions = row
+                        .submissions
+                        .map(nonnegative_analytics_count)
+                        .transpose()?;
+                }
+                "day" => {
+                    let date = row
+                        .utc_date
+                        .filter(|date| is_analytics_date(date))
+                        .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+                    let submissions = row
+                        .submissions
+                        .map(nonnegative_analytics_count)
+                        .transpose()?
+                        .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+                    days.push(PublicFormCompletionDay { date, submissions });
+                }
+                "form" => {
+                    if forms.len() >= 20 {
+                        return Err(RepositoryError::CorruptPublicFormAnalytics);
+                    }
+                    let page_title = row
+                        .page_title
+                        .filter(|label| {
+                            !label.is_empty()
+                                && label.chars().count() <= PUBLIC_FORM_ANALYTICS_LABEL_PAGE_SCALARS
+                        })
+                        .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+                    let form_purpose = row
+                        .form_purpose
+                        .filter(|label| {
+                            !label.is_empty()
+                                && label.chars().count()
+                                    <= PUBLIC_FORM_ANALYTICS_LABEL_PURPOSE_SCALARS
+                        })
+                        .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+                    let submissions = row
+                        .submissions
+                        .map(nonnegative_analytics_count)
+                        .transpose()?
+                        .filter(|count| *count > 0)
+                        .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+                    forms.push(PublicFormCompletionLabelCount {
+                        page_title,
+                        form_purpose,
+                        submissions,
+                    });
+                }
+                "other" => {
+                    if other_form_submissions.is_some() {
+                        return Err(RepositoryError::CorruptPublicFormAnalytics);
+                    }
+                    other_form_submissions = row
+                        .submissions
+                        .map(nonnegative_analytics_count)
+                        .transpose()?;
+                }
+                _ => return Err(RepositoryError::CorruptPublicFormAnalytics),
+            }
+        }
+
+        match status.as_deref() {
+            Some("missing") => return Err(RepositoryError::FunnelNotFound),
+            Some("too_large") => return Err(RepositoryError::PublicFormAnalyticsTooLarge),
+            Some("ok") => {}
+            _ => return Err(RepositoryError::CorruptPublicFormAnalytics),
+        }
+
+        let as_of = as_of
+            .filter(|timestamp| *timestamp >= 0)
+            .ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+        let total_submissions =
+            total_submissions.ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+        let other_form_submissions =
+            other_form_submissions.ok_or(RepositoryError::CorruptPublicFormAnalytics)?;
+
+        if days.len() != usize::from(period.days())
+            || days.windows(2).any(|pair| pair[0].date >= pair[1].date)
+            || checked_analytics_sum(days.iter().map(|day| day.submissions))? != total_submissions
+            || checked_analytics_sum(forms.iter().map(|form| form.submissions))?
+                .checked_add(other_form_submissions)
+                != Some(total_submissions)
+        {
+            return Err(RepositoryError::CorruptPublicFormAnalytics);
+        }
+
+        Ok(PublicFormCompletionAnalytics {
+            period_days: period.days(),
+            as_of,
+            total_submissions,
+            days,
+            forms,
+            other_form_submissions,
+        })
+    }
+
     pub async fn cleanup_expired_public_form_submissions(&self) -> RepositoryResult<()> {
         for _ in 0..PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES {
             let batch_size = D1Type::Integer(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE);
@@ -1865,6 +2182,27 @@ fn validate_payload_size(value: &str) -> RepositoryResult<()> {
     } else {
         Ok(())
     }
+}
+
+fn nonnegative_analytics_count(value: i64) -> RepositoryResult<u64> {
+    u64::try_from(value).map_err(|_| RepositoryError::CorruptPublicFormAnalytics)
+}
+
+fn checked_analytics_sum(mut values: impl Iterator<Item = u64>) -> RepositoryResult<u64> {
+    values.try_fold(0u64, |sum, value| {
+        sum.checked_add(value)
+            .ok_or(RepositoryError::CorruptPublicFormAnalytics)
+    })
+}
+
+fn is_analytics_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
 }
 
 #[cfg(test)]

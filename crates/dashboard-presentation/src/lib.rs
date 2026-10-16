@@ -163,6 +163,18 @@ mod tests {
     }
 
     #[test]
+    fn form_analytics_route_renders_without_server_side_report_data() {
+        let page = render_document("/funnels/demo-1/analytics").expect("analytics route");
+
+        assert!(page.contains("Form completions"));
+        assert!(page.contains("Reporting period"));
+        assert!(page.contains("Loading form completion counts"));
+        assert!(!page.contains("submission_id"));
+        assert!(!page.contains("field_values_json"));
+        assert!(!page.contains("request_consent_copy"));
+    }
+
+    #[test]
     fn lead_routes_reject_noncanonical_submission_ids_and_extra_segments() {
         for path in [
             "/funnels/demo-1/leads/not-a-uuid",
@@ -171,6 +183,9 @@ mod tests {
             "/funnels/demo-1/leads/",
             "/funnels/has.dot/leads",
             "/funnels/demo-1/leads?cursor=abc",
+            "/funnels/demo-1/analytics/extra",
+            "/funnels/demo-1/analytics/",
+            "/funnels/demo-1/analytics?days=30",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");
         }

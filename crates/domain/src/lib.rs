@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+pub mod analytics;
 pub mod document_v2;
 pub mod media;
 

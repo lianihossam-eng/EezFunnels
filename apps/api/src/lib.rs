@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use eez_commands::{command_ids, command_registry, Session};
+use eez_domain::analytics::FormAnalyticsPeriod;
 use eez_domain::document_v2::{
     validate_form_submission, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
@@ -132,6 +133,10 @@ pub async fn fetch(
         owner_leads_response(&env, request, route, correlation_id.clone()).await
     } else if is_owner_lead_api_path(&request_path) {
         funnel_route_not_found_response(&correlation_id)
+    } else if let Some(route) = owner_form_analytics_route_from_path(&request_path) {
+        owner_form_analytics_response(&env, request, route, correlation_id.clone()).await
+    } else if is_owner_form_analytics_api_path(&request_path) {
+        funnel_route_not_found_response(&correlation_id)
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/document") {
         funnel_document_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/convert-v2/preview") {
@@ -210,8 +215,8 @@ pub async fn fetch(
         router.call(request).await?
     };
 
-    if is_owner_lead_api_path(&request_path) {
-        apply_owner_lead_cache_policy(&mut response);
+    if is_owner_lead_api_path(&request_path) || is_owner_form_analytics_api_path(&request_path) {
+        apply_owner_read_cache_policy(&mut response);
     }
 
     log_request(
@@ -585,6 +590,11 @@ enum OwnerLeadRoute<'a> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OwnerFormAnalyticsRoute<'a> {
+    funnel_id: &'a str,
+}
+
 fn public_route_from_path(path: &str) -> Option<PublicFunnelRoute<'_>> {
     let mut segments = path.split('/');
     if !segments.next()?.is_empty() || segments.next()? != "f" {
@@ -648,6 +658,19 @@ fn owner_lead_route_from_path(path: &str) -> Option<OwnerLeadRoute<'_>> {
     }
 }
 
+fn owner_form_analytics_route_from_path(path: &str) -> Option<OwnerFormAnalyticsRoute<'_>> {
+    let mut segments = path.strip_prefix("/api/funnels/")?.split('/');
+    let funnel_id = segments.next()?;
+    if !valid_funnel_route_id(funnel_id)
+        || segments.next()? != "analytics"
+        || segments.next()? != "forms"
+        || segments.next().is_some()
+    {
+        return None;
+    }
+    Some(OwnerFormAnalyticsRoute { funnel_id })
+}
+
 fn is_owner_lead_api_path(path: &str) -> bool {
     let Some(segments) = path.strip_prefix("/api/funnels/") else {
         return false;
@@ -655,12 +678,28 @@ fn is_owner_lead_api_path(path: &str) -> bool {
     segments.split('/').nth(1) == Some("leads")
 }
 
-fn apply_owner_lead_cache_policy(response: &mut Response<axum::body::Body>) {
+fn is_owner_form_analytics_api_path(path: &str) -> bool {
+    let Some(segments) = path.strip_prefix("/api/funnels/") else {
+        return false;
+    };
+    segments.split('/').nth(1) == Some("analytics")
+}
+
+fn apply_owner_read_cache_policy(response: &mut Response<axum::body::Body>) {
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
     );
     response.headers_mut().remove(axum::http::header::ETAG);
+}
+
+fn parse_owner_form_analytics_period(query: Option<&str>) -> Result<FormAnalyticsPeriod, ()> {
+    match query {
+        Some("days=7") => Ok(FormAnalyticsPeriod::SevenDays),
+        Some("days=30") => Ok(FormAnalyticsPeriod::ThirtyDays),
+        Some("days=90") => Ok(FormAnalyticsPeriod::NinetyDays),
+        _ => Err(()),
+    }
 }
 
 fn parse_owner_lead_query(query: Option<&str>) -> Result<Option<PublicFormLeadCursor>, ()> {
@@ -1101,6 +1140,56 @@ async fn owner_leads_response(
             }
         }
     }
+}
+
+async fn owner_form_analytics_response(
+    env: &Env,
+    request: HttpRequest,
+    route: OwnerFormAnalyticsRoute<'_>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let period = match parse_owner_form_analytics_period(request.uri().query()) {
+        Ok(period) => period,
+        Err(()) => {
+            return editor_payload_error_response(&correlation_id, "validation/invalid_query")
+        }
+    };
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return analytics_storage_error_response(&correlation_id),
+    };
+    match bindings
+        .repository()
+        .form_completion_analytics(route.funnel_id, period)
+        .await
+    {
+        Ok(report) => match serde_json::to_value(report) {
+            Ok(report) => json_success_response(report, StatusCode::OK, &correlation_id, None),
+            Err(_) => analytics_storage_error_response(&correlation_id),
+        },
+        Err(eez_storage::repository::RepositoryError::PublicFormAnalyticsTooLarge) => {
+            analytics_report_too_large_response(&correlation_id)
+        }
+        Err(error) => {
+            let api_error = ApiError::from_code(error.code());
+            log_api_error(&api_error, &correlation_id, api_error.code());
+            error_response(&api_error, correlation_id)
+        }
+    }
+}
+
+fn analytics_storage_error_response(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("external/unavailable");
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
+}
+
+fn analytics_report_too_large_response(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("analytics/report_too_large");
+    error_response(&error, correlation_id.to_owned())
 }
 
 fn lead_repository_error_response(
@@ -3027,17 +3116,18 @@ pub async fn scheduled(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_owner_lead_cache_policy, correlation_id, decode_owner_lead_cursor,
+        apply_owner_read_cache_policy, correlation_id, decode_owner_lead_cursor,
         editor_command_parameters, encode_owner_lead_cursor, funnel_subroute,
-        is_owner_lead_api_path, media_archive_route, media_filename_header, media_list_query,
-        media_owner_content_route, normalize_correlation_id, owner_lead_route_from_path,
-        parse_owner_lead_query, parse_public_form_body, public_form_submission_key,
-        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
-        public_media_route, public_route_from_path, publication_command_parameters,
-        request_if_none_match, stage_upload_token, v1_conversion_command_parameters,
-        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
-        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
-        EditorCommandParametersError, OwnerLeadRoute,
+        is_owner_form_analytics_api_path, is_owner_lead_api_path, media_archive_route,
+        media_filename_header, media_list_query, media_owner_content_route,
+        normalize_correlation_id, owner_form_analytics_route_from_path, owner_lead_route_from_path,
+        parse_owner_form_analytics_period, parse_owner_lead_query, parse_public_form_body,
+        public_form_submission_key, public_form_submission_route_from_path,
+        public_form_success_location, public_html_etag, public_media_route, public_route_from_path,
+        publication_command_parameters, request_if_none_match, stage_upload_token,
+        v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
+        v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
+        valid_public_slug, EditorCommandParametersError, OwnerFormAnalyticsRoute, OwnerLeadRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
@@ -3088,12 +3178,64 @@ mod tests {
                 axum::http::header::ETAG,
                 HeaderValue::from_static("\"stale\""),
             );
-            apply_owner_lead_cache_policy(&mut response);
+            apply_owner_read_cache_policy(&mut response);
             assert_eq!(
                 response.headers()[axum::http::header::CACHE_CONTROL],
                 "no-store"
             );
             assert!(!response.headers().contains_key(axum::http::header::ETAG));
+        }
+    }
+
+    #[test]
+    fn owner_form_analytics_routes_and_periods_are_exact() {
+        assert_eq!(
+            owner_form_analytics_route_from_path("/api/funnels/funnel-01/analytics/forms"),
+            Some(OwnerFormAnalyticsRoute {
+                funnel_id: "funnel-01"
+            })
+        );
+        for path in [
+            "/api/funnels/funnel-01/analytics",
+            "/api/funnels/funnel-01/analytics/forms/extra",
+            "/api/funnels/funnel-01/analytics/forms/",
+            "/api/funnels/has.dot/analytics/forms",
+            "/api/funnels//analytics/forms",
+        ] {
+            assert_eq!(owner_form_analytics_route_from_path(path), None, "{path}");
+            assert!(is_owner_form_analytics_api_path(path), "{path}");
+        }
+        assert!(!is_owner_form_analytics_api_path(
+            "/api/funnels/funnel-01/analyticsx/forms"
+        ));
+        assert!(!is_owner_form_analytics_api_path("/api/funnels"));
+
+        assert_eq!(
+            parse_owner_form_analytics_period(Some("days=7")),
+            Ok(eez_domain::analytics::FormAnalyticsPeriod::SevenDays)
+        );
+        assert_eq!(
+            parse_owner_form_analytics_period(Some("days=30")),
+            Ok(eez_domain::analytics::FormAnalyticsPeriod::ThirtyDays)
+        );
+        assert_eq!(
+            parse_owner_form_analytics_period(Some("days=90")),
+            Ok(eez_domain::analytics::FormAnalyticsPeriod::NinetyDays)
+        );
+        for query in [
+            None,
+            Some(""),
+            Some("days=8"),
+            Some("days=07"),
+            Some("days=%37"),
+            Some("days=7&days=30"),
+            Some("days=7&unused=1"),
+            Some("period=7"),
+        ] {
+            assert!(
+                parse_owner_form_analytics_period(query).is_err(),
+                "{query:?}"
+            );
         }
     }
 

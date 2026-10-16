@@ -97,6 +97,23 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"Content-Type": "application/json", "Idempotency-Key": key},
         )
 
+    def execute_d1(command, json_output=False, timeout=30):
+        arguments = [
+            str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+            "--persist-to", str(persist),
+        ]
+        if json_output:
+            arguments.append("--json")
+        arguments.extend(["--command", command])
+        return subprocess.run(
+            arguments,
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        ).stdout
+
     def mint_stage(funnel_id, revision_id, data, key):
         status, content, _ = post_json(
             f"/api/funnels/{funnel_id}/stages-v2",
@@ -583,6 +600,78 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert detail["marketing_consent"]["recorded_at"] > 0, detail
         assert "revision_id" not in detail and "submission_key" not in detail, detail
 
+        for period in (7, 30, 90):
+            analytics_status, analytics_body, analytics_headers = request(
+                "GET",
+                f"/api/funnels/{funnel_id}/analytics/forms?days={period}",
+                headers={"If-None-Match": '"stale"'},
+            )
+            assert analytics_status == 200, (analytics_status, analytics_body)
+            assert_no_store(analytics_status, analytics_headers)
+            analytics = json.loads(analytics_body)
+            assert set(analytics) == {
+                "period_days", "as_of", "total_submissions", "days", "forms",
+                "other_form_submissions", "correlation_id",
+            }, analytics
+            assert re.fullmatch(r"[0-9a-f-]{36}", analytics["correlation_id"]), analytics
+            assert analytics["period_days"] == period, analytics
+            assert analytics["total_submissions"] == 105, analytics
+            assert len(analytics["days"]) == period, analytics
+            assert analytics["days"][-1]["date"] == time.strftime(
+                "%Y-%m-%d", time.gmtime(analytics["as_of"])
+            ), analytics
+            assert all(set(day) == {"date", "submissions"} for day in analytics["days"]), analytics
+            assert sum(day["submissions"] for day in analytics["days"]) == 105, analytics
+            assert len(analytics["forms"]) == 1, analytics
+            assert set(analytics["forms"][0]) == {"page_title", "form_purpose", "submissions"}, analytics
+            assert analytics["forms"][0]["submissions"] == 105, analytics
+            assert sum(form["submissions"] for form in analytics["forms"]) + analytics[
+                "other_form_submissions"
+            ] == 105, analytics
+            for forbidden in [
+                "submission_id", "revision_id", "submission_key", "field_values_json",
+                "request_consent", "marketing_consent", "ada@example.test", "Ada Lovelace",
+            ]:
+                assert forbidden not in analytics_body.decode(), (forbidden, analytics_body)
+
+        for invalid_query in [
+            "",
+            "days=07",
+            "days=7&days=30",
+            "days=7&unused=1",
+            "days=%37",
+            "days=8",
+        ]:
+            invalid_status, _, invalid_headers = request(
+                "GET", f"/api/funnels/{funnel_id}/analytics/forms?{invalid_query}"
+            )
+            assert invalid_status == 400, (invalid_query, invalid_status)
+            assert_no_store(invalid_status, invalid_headers)
+
+        invalid_path_status, _, invalid_path_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/analytics/forms/extra?days=7"
+        )
+        assert invalid_path_status == 404, invalid_path_status
+        assert_no_store(invalid_path_status, invalid_path_headers)
+        missing_funnel_status, _, missing_funnel_headers = request(
+            "GET", "/api/funnels/missing-funnel/analytics/forms?days=7"
+        )
+        assert missing_funnel_status == 404, missing_funnel_status
+        assert_no_store(missing_funnel_status, missing_funnel_headers)
+        denied_host_status, _, denied_host_headers = request(
+            "GET",
+            f"/api/funnels/{funnel_id}/analytics/forms?days=7",
+            headers={"Host": "blocked.invalid"},
+        )
+        assert denied_host_status == 403, denied_host_status
+        assert_no_store(denied_host_status, denied_host_headers)
+        analytics_method_status, _, analytics_method_headers = request(
+            "POST", f"/api/funnels/{funnel_id}/analytics/forms?days=7"
+        )
+        assert analytics_method_status == 405, analytics_method_status
+        assert analytics_method_headers.get("allow") == "GET", analytics_method_headers
+        assert_no_store(analytics_method_status, analytics_method_headers)
+
         if os.environ.get("PR040_BROWSER") == "1":
             subprocess.run(
                 [
@@ -602,6 +691,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                     str(root / "scripts/test-pr040-lead-inbox-browser.mjs"),
                     f"http://localhost:{port}/funnels/{funnel_id}/leads",
                     detail_id,
+                ],
+                cwd=root,
+                check=True,
+                timeout=120,
+            )
+
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pr041-form-analytics-browser.mjs"),
+                    f"http://localhost:{port}/funnels/{funnel_id}/analytics",
                 ],
                 cwd=root,
                 check=True,
@@ -688,6 +788,80 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         next_page = json.loads(next_page_body)
         assert expired_id not in {lead["submission_id"] for lead in next_page["leads"]}, next_page
 
+        recent_id, older_id, oldest_id = [lead["submission_id"] for lead in leads_two[2:5]]
+        execute_d1(
+            f"UPDATE public_form_submissions SET submitted_at = unixepoch() - 86400, expires_at = unixepoch() + 86400 WHERE submission_id = '{recent_id}'; "
+            f"UPDATE public_form_submissions SET submitted_at = unixepoch() - 8 * 86400, expires_at = unixepoch() + 86400 WHERE submission_id = '{older_id}'; "
+            f"UPDATE public_form_submissions SET submitted_at = unixepoch() - 31 * 86400, expires_at = unixepoch() + 86400 WHERE submission_id = '{oldest_id}'"
+        )
+        for period, expected_total in ((7, 102), (30, 103), (90, 104)):
+            range_status, range_body, range_headers = request(
+                "GET", f"/api/funnels/{funnel_id}/analytics/forms?days={period}"
+            )
+            assert range_status == 200, (range_status, range_body)
+            assert_no_store(range_status, range_headers)
+            range_report = json.loads(range_body)
+            assert range_report["total_submissions"] == expected_total, range_report
+            assert len(range_report["days"]) == period, range_report
+            assert sum(day["submissions"] for day in range_report["days"]) == expected_total, range_report
+
+        repository_source = (root / "crates/storage/src/repository.rs").read_text(encoding="utf-8")
+        analytics_sql = re.search(
+            r'const PUBLIC_FORM_COMPLETION_ANALYTICS_SQL: &str = r#"(.*?)"#;',
+            repository_source,
+            re.DOTALL,
+        ).group(1)
+        plan_bindings = iter(["90", f"'{funnel_id}'"])
+        query_plan = execute_d1(
+            "EXPLAIN QUERY PLAN " + re.sub(r"\?", lambda _match: next(plan_bindings), analytics_sql),
+            json_output=True,
+        )
+        assert "public_form_submissions_rate_idx" in query_plan, query_plan
+
+        exact_limit_seed = f"""
+            WITH RECURSIVE sequence(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < 9895
+            )
+            INSERT INTO public_form_submissions (
+                submission_id, funnel_id, revision_id, page_id, form_id, submission_key,
+                field_values_json, request_consent_acknowledged,
+                request_consent_copy_version, request_consent_copy,
+                request_consent_recorded_at, marketing_opt_in,
+                marketing_opt_in_copy_version, marketing_opt_in_copy,
+                marketing_opt_in_recorded_at, submitted_at, expires_at
+            )
+            SELECT
+                printf('00000000-0000-4000-8000-%012x', sequence.n + 30000), source.funnel_id,
+                source.revision_id, source.page_id, source.form_id,
+                printf('00000000-0000-4000-8000-%012x', sequence.n + 40000),
+                source.field_values_json, source.request_consent_acknowledged,
+                source.request_consent_copy_version, source.request_consent_copy,
+                source.request_consent_recorded_at, source.marketing_opt_in,
+                source.marketing_opt_in_copy_version, source.marketing_opt_in_copy,
+                source.marketing_opt_in_recorded_at, unixepoch() - 20, unixepoch() - 10
+            FROM sequence CROSS JOIN (
+                SELECT * FROM public_form_submissions WHERE submission_id = '{seed_id}'
+            ) AS source
+        """
+        execute_d1(exact_limit_seed, timeout=60)
+        exact_limit_status, exact_limit_body, exact_limit_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/analytics/forms?days=90"
+        )
+        assert exact_limit_status == 200, (exact_limit_status, exact_limit_body)
+        assert_no_store(exact_limit_status, exact_limit_headers)
+        assert json.loads(exact_limit_body)["total_submissions"] == 104, exact_limit_body
+
+        execute_d1(
+            f"INSERT INTO public_form_submissions SELECT '00000000-0000-4000-8000-000000030000', funnel_id, revision_id, page_id, form_id, '00000000-0000-4000-8000-000000040000', field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, unixepoch() - 20, unixepoch() - 10 FROM public_form_submissions WHERE submission_id = '{seed_id}'"
+        )
+        over_limit_status, over_limit_body, over_limit_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/analytics/forms?days=90"
+        )
+        assert over_limit_status == 422, (over_limit_status, over_limit_body)
+        assert json.loads(over_limit_body)["code"] == "analytics/report_too_large", over_limit_body
+        assert "total_submissions" not in over_limit_body.decode(), over_limit_body
+        assert_no_store(over_limit_status, over_limit_headers)
+
         subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
@@ -723,7 +897,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
 
         log.close()
         assert "ada@example.test" not in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8")
-        print("PR-033/039 local Worker/D1 public form, lead inbox, consent, paging, expiry, and privacy flow passed")
+        print("PR-033/039/041 local Worker/D1 form, lead, analytics bounds, retention, and privacy flow passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

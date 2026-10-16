@@ -4,7 +4,7 @@ The typed dashboard editor can add a form to a page section, configure its purpo
 
 Published V2 documents render these definitions as native HTML forms and accept submissions on the same Worker. The renderer uses native input types and associated labels so browser validation and keyboard interaction work without client-side JavaScript. The dashboard currently configures inline confirmation text; creating multiple pages and selecting a success page remain part of the page-routing work.
 
-The owner API and dashboard provide a read-only lead inbox. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence. The lead API has no application login or per-user authorization, so keep it behind the external Cloudflare Access or equivalent perimeter described in [Security](security.md).
+The owner API and dashboard provide a read-only lead inbox and form-completion report. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence. These owner routes have no application login or per-user authorization, so keep them behind the external Cloudflare Access or equivalent perimeter described in [Security](security.md).
 
 ## Submission behavior
 
@@ -35,6 +35,22 @@ The list returns at most 50 newest unexpired leads, ordered by submission time a
 
 These are owner routes without application authentication. Keep `/api/funnels/:funnel_id/leads*` behind Cloudflare Access or another external perimeter; `ALLOWED_HOSTS` only checks the request host. The API does not add user accounts, roles, dashboard state, exports, or write operations. Protect dashboard and editor routes as described in [Security](security.md).
 
-The dashboard exposes a per-funnel, read-only **Leads** inbox from the funnel list and typed editor. It shows recent submissions, historical field labels and values, and the stored consent evidence. The inbox does not add notes, statuses, assignments, exports, or automation. Deleting a funnel also deletes its saved submissions and consent evidence; the confirmation names this data loss.
+## Form-completion analytics
+
+The owner report is read-only and accepts only these bounded UTC calendar windows:
+
+```text
+GET /api/funnels/:funnel_id/analytics/forms?days=7
+GET /api/funnels/:funnel_id/analytics/forms?days=30
+GET /api/funnels/:funnel_id/analytics/forms?days=90
+```
+
+Each report counts successful submissions that have not expired at one server-side snapshot time. It returns zero-filled daily counts, the total, up to 20 page/form-purpose label pairs, and a combined count for the remaining labels. Labels come from the published context saved with submissions; long labels are shortened for display. The result contains no answers, consent evidence, visitor values, submission IDs, or revision IDs. Every outcome uses `Cache-Control: no-store` and omits ETags.
+
+The report measures stored submissions only. It has no page-visit or form-start denominator, so its counts are not conversion rates. Expired submissions are excluded and retention can make earlier dates incomplete. If a report exceeds the synchronous processing limit, the API returns an unavailable-report error instead of partial counts; a shorter period may fit, but is not guaranteed to.
+
+These analytics routes are owner routes without application authentication. Keep `/api/funnels/:funnel_id/analytics*` behind Cloudflare Access or another external perimeter; `ALLOWED_HOSTS` only checks the request host. Aggregate counts still belong to the protected owner surface.
+
+The dashboard exposes a per-funnel, read-only **Leads** inbox and **Form completions** report from the funnel list and lead inbox. The inbox shows recent submissions, historical field labels and values, and the stored consent evidence. The report shows retained submission totals and UTC day buckets. Neither surface adds notes, statuses, assignments, exports, or automation. Deleting a funnel also deletes its saved submissions and consent evidence; the confirmation names this data loss.
 
 Run `bash scripts/smoke-pr033-public-forms.sh` to exercise the published-page form flow against local Worker and D1 bindings.

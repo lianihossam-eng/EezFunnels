@@ -41,6 +41,7 @@ fn is_dashboard_path(path: &str) -> bool {
             let segments = path.split('/').collect::<Vec<_>>();
             match segments.as_slice() {
                 [funnel_id] => is_valid_funnel_id(funnel_id),
+                [funnel_id, "analytics"] => is_valid_funnel_id(funnel_id),
                 [funnel_id, "leads"] => is_valid_funnel_id(funnel_id),
                 [funnel_id, "leads", submission_id] => {
                     is_valid_funnel_id(funnel_id) && is_valid_submission_id(submission_id)

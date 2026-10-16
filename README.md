@@ -13,10 +13,11 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
+- Review retained form submissions in the per-funnel lead inbox and view completion counts by UTC day and page/form labels.
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The v0.1.0 GitHub Release predates the typed editor and media library. The application still has no built-in user login or multi-user roles, funnel JSON import/export, custom CSS, user-defined theme presets, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+The v0.1.0 GitHub Release predates the typed editor and media library. The application still has no built-in user login or multi-user roles, funnel JSON import/export, custom CSS, user-defined theme presets, conversion-rate or source-attribution analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
 
 ## Scope
 
@@ -63,6 +64,7 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/funnels` | List funnels or create a version 1 funnel |
 | `/api/funnels/v2` | Create a typed version 2 funnel |
 | `/api/funnels/:id` | Read or delete a funnel |
+| `/api/funnels/:id/analytics/forms` | Read bounded, count-only form completion metrics |
 | `/api/funnels/:id/document` and `/revisions-v2` | Read a typed revision and its revision history |
 | `/api/funnels/:id/edit-v2` and `/preview-v2` | Apply typed edits and preview a document |
 | `/api/funnels/:id/convert-v2/preview` and `/convert-v2` | Preview and save a version 1 conversion |
