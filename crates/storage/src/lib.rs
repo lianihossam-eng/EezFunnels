@@ -10,6 +10,8 @@ use worker::{Env, Error, Result};
 pub mod repository;
 pub mod stage;
 
+pub const MAX_PUBLIC_FORM_SUBMISSION_BYTES: usize = 512 * 1024;
+
 pub struct PublicationRegressionObservations {
     pub cross_funnel_published_revision_insert_accepted: bool,
     pub null_published_revision_insert_accepted: bool,

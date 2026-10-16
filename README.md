@@ -11,6 +11,7 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Edit typed pages, sections, supported content blocks, actions, and theme settings in the dashboard; preview at mobile, tablet, and desktop widths.
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
+- Render and capture submissions from published V2 form definitions. See [Public forms](docs/forms.md) for current limits and data handling.
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
@@ -70,6 +71,7 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/funnels/:id/publish` and `/unpublish` | Change the published revision pointer |
 | `/api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `/f/:slug` | Render a published funnel |
+| `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a validated same-origin public form submission |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |
 

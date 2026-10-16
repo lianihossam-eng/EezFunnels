@@ -17,7 +17,7 @@ fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
     let document = document();
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v4");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v5");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -118,7 +118,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v4", "renderer-v4-next");
+        .replace("renderer-v5", "renderer-v5-next");
     assert!(matches!(
         render_published(
             2,
@@ -188,6 +188,59 @@ fn v2_image_and_form_content_are_not_saved_or_rendered_before_their_gates() {
         render_owner_preview(&form_document, form_document.entry_page_id()),
         Err(V2RenderError::FormsNotEnabled)
     ));
+}
+
+#[test]
+fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
+    use eez_render::document_v2::render_published_route;
+
+    let mut form_value: serde_json::Value = serde_json::from_str(
+        std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
+    )
+    .expect("document JSON");
+    form_value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"form-block", "kind":"form", "form_id":"form-one"}
+    ]);
+    form_value["forms"] = serde_json::json!([{
+        "id":"form-one",
+        "fields":[
+            {"id":"field-email", "name":"email", "label":"Email & <work>", "help":"We'll only use this for the request.", "kind":"email", "required":true},
+            {"id":"field-topic", "name":"topic", "label":"Topic", "kind":"select", "required":false, "options":["Demo & pricing"]}
+        ],
+        "purpose":"Request <information>",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to <be contacted>."},
+        "marketing_opt_in":{"copy_version":"marketing-v2", "copy":"Send me news & offers."},
+        "result":{"kind":"inline", "message":"Thanks & goodbye."}
+    }]);
+    let form_json = serde_json::to_vec(&form_value).expect("document serialization");
+    let form_document = DocumentV2::decode(&form_json, "funnel-01").expect("form node schema");
+    let prepared = prepare_revision(&form_document, "revision-form").expect("form revision");
+
+    let html = render_published_route(
+        2,
+        "funnel-01",
+        "revision-form",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+        "lead-funnel",
+        None,
+    )
+    .expect("published form page renders");
+
+    assert!(html.contains("method=\"post\" enctype=\"application/x-www-form-urlencoded\""));
+    assert!(html.contains("/api/public/funnels/lead-funnel/pages/page-home/forms/form-one/submissions?key=EEZ_FORM_SUBMISSION_KEY"));
+    assert!(html.contains("type=\"email\""));
+    assert!(html.contains("id=\"form-form-one-field-field-email\" name=\"email\""));
+    assert!(html.contains("aria-describedby=\"form-form-one-field-field-email-help\""));
+    assert!(html.contains("name=\"_request_consent\" value=\"on\" required>"));
+    assert!(html.contains("name=\"_marketing_opt_in\" value=\"on\">"));
+    assert!(html.contains("required"));
+    assert!(html.contains("Email &amp; &lt;work&gt;"));
+    assert!(html.contains("I agree to &lt;be contacted&gt;."));
+    assert!(html.contains("Send me news &amp; offers."));
+    assert!(html.contains("id=\"form-success-form-one\" role=\"status\""));
+    assert!(html.contains("Thanks &amp; goodbye."));
+    assert!(!html.contains("<work>"));
 }
 
 #[test]

@@ -1,10 +1,14 @@
 use std::fmt::{Display, Formatter};
 
-use eez_domain::document_v2::{ActionV2, BlockV2, DocumentV2, PageId, SectionKind};
+use eez_domain::document_v2::{
+    ActionV2, BlockV2, DocumentV2, FormField, FormResult, FormV2, PageId, SectionKind,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v4";
+pub const RENDERER_VERSION_V2: &str = "renderer-v5";
+const LEGACY_RENDERER_VERSION_V2: &str = "renderer-v4";
+pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
 pub const THEME_PROFILE_VERSION_V2: &str = "theme-profile-v1";
@@ -193,9 +197,6 @@ fn render_published_route_with_slug(
     if document.has_images() {
         return Err(V2RenderError::ImagesNotEnabled);
     }
-    if document.has_forms() {
-        return Err(V2RenderError::FormsNotEnabled);
-    }
     let page = match page_slug {
         Some(slug) => document
             .pages()
@@ -257,8 +258,10 @@ fn validate_manifest(
     {
         return Err(V2RenderError::IdentityMismatch);
     }
-    if manifest.renderer_version != RENDERER_VERSION_V2
-        || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
+    if !matches!(
+        manifest.renderer_version.as_str(),
+        RENDERER_VERSION_V2 | LEGACY_RENDERER_VERSION_V2
+    ) || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
         || manifest.canonicalizer_profile != CANONICALIZER_PROFILE_V2
         || manifest.theme_profile_version != THEME_PROFILE_VERSION_V2
     {
@@ -297,16 +300,13 @@ fn render_page(
     if document.has_images() {
         return Err(V2RenderError::ImagesNotEnabled);
     }
-    if document.has_forms() {
-        return Err(V2RenderError::FormsNotEnabled);
-    }
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
     let profile = document.resolved_theme_profile();
     let mut html = String::with_capacity(document.canonical_bytes().len() * 2);
     html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>");
     html.push_str(&crate::escape_html_text(page.title()));
     html.push_str("</title><style>");
-    html.push_str("html{color-scheme:light}body{margin:0}#funnel{box-sizing:border-box;min-height:100vh;background:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}#funnel *{box-sizing:inherit}.v2-main{max-width:var(--content-width);margin:0 auto}.v2-section{margin:0 auto;padding:var(--spacing-section) 1.5rem}.v2-section--hero{text-align:center}.v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card)}.v2-section--footer{border-top:1px solid var(--color-border);color:var(--color-muted)}.v2-section h1,.v2-section h2,.v2-section p{margin-top:0}.v2-list{padding-inline-start:1.5rem}.v2-button{display:inline-block;padding:.75rem 1.25rem;background:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}.v2-text{white-space:pre-wrap;overflow-wrap:anywhere}");
+    html.push_str("html{color-scheme:light}body{margin:0}#funnel{box-sizing:border-box;min-height:100vh;background:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}#funnel *{box-sizing:inherit}.v2-main{max-width:var(--content-width);margin:0 auto}.v2-section{margin:0 auto;padding:var(--spacing-section) 1.5rem}.v2-section--hero{text-align:center}.v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card)}.v2-section--footer{border-top:1px solid var(--color-border);color:var(--color-muted)}.v2-section h1,.v2-section h2,.v2-section p{margin-top:0}.v2-list{padding-inline-start:1.5rem}.v2-button{display:inline-block;padding:.75rem 1.25rem;background:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}.v2-text{white-space:pre-wrap;overflow-wrap:anywhere}.v2-form{display:grid;gap:1.25rem;max-width:40rem;margin:0 auto}.v2-form fieldset{min-width:0;margin:0;padding:0;border:0}.v2-form legend{margin-bottom:1rem;font-size:1.25rem;font-weight:700}.v2-form-field{display:grid;gap:.35rem;margin-block:1rem;text-align:left}.v2-form-field label,.v2-form-consent label{font-weight:600}.v2-form input:not([type=checkbox]),.v2-form select{width:100%;min-height:2.75rem;padding:.6rem .75rem;border:1px solid var(--color-border);border-radius:var(--radius-button);background:var(--color-background);color:var(--color-text);font:inherit}.v2-form input[type=checkbox]{width:1.25rem;height:1.25rem;min-width:1.25rem;min-height:1.25rem;margin:.15rem 0;accent-color:var(--color-primary)}.v2-form :focus-visible,.v2-form-result:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-help{margin:0;color:var(--color-muted);font-size:.95rem;overflow-wrap:anywhere}.v2-form-consent{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:.75rem;margin-block:.75rem;text-align:left}.v2-section .v2-form-result{display:none;max-width:40rem;margin:1.25rem auto 0;padding:1rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface);overflow-wrap:anywhere}.v2-form-result:target{display:block}");
     html.push_str("#funnel{--color-background:");
     html.push_str(&profile.desktop["color-background"]);
     html.push_str(";--color-border:");
@@ -411,13 +411,231 @@ fn render_page(
                     }
                 },
                 BlockV2::Image { .. } => return Err(V2RenderError::ImagesNotEnabled),
-                BlockV2::Form { .. } => return Err(V2RenderError::FormsNotEnabled),
+                BlockV2::Form { form_id, .. } => match link_mode {
+                    LinkMode::Published {
+                        funnel_slug: Some(funnel_slug),
+                    } => {
+                        let form = document
+                            .form(form_id)
+                            .ok_or(V2RenderError::IdentityMismatch)?;
+                        push_form(&mut html, form, page.id(), funnel_slug);
+                    }
+                    LinkMode::Inert | LinkMode::Published { funnel_slug: None } => {
+                        return Err(V2RenderError::FormsNotEnabled)
+                    }
+                },
             }
         }
         html.push_str("</section>");
     }
     html.push_str("</main></body></html>");
     Ok(html)
+}
+
+fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: &str) {
+    let form_id = form.id().as_str();
+    let form_dom_id = format!("form-{form_id}");
+    let action = format!(
+        "/api/public/funnels/{}/pages/{}/forms/{}/submissions?key={PUBLIC_FORM_SUBMISSION_KEY_MARKER}",
+        funnel_slug,
+        page_id.as_str(),
+        form_id,
+    );
+
+    html.push_str("<form class=\"v2-form\" method=\"post\" enctype=\"application/x-www-form-urlencoded\" accept-charset=\"UTF-8\" action=\"");
+    html.push_str(&crate::escape_html_attribute(&action));
+    html.push_str("\"><fieldset><legend>");
+    html.push_str(&crate::escape_html_text(form.purpose()));
+    html.push_str("</legend>");
+    for field in form.fields() {
+        push_form_field(html, field, &form_dom_id);
+    }
+    html.push_str("</fieldset>");
+
+    let request_id = format!("{form_dom_id}-request-consent");
+    html.push_str("<div class=\"v2-form-consent\"><input type=\"checkbox\" id=\"");
+    html.push_str(&crate::escape_html_attribute(&request_id));
+    html.push_str("\" name=\"_request_consent\" value=\"on\" required><label for=\"");
+    html.push_str(&crate::escape_html_attribute(&request_id));
+    html.push_str("\">");
+    html.push_str(&crate::escape_html_text(form.request_consent().copy()));
+    html.push_str("</label></div>");
+
+    if let Some(consent) = form.marketing_opt_in() {
+        let marketing_id = format!("{form_dom_id}-marketing-opt-in");
+        html.push_str("<div class=\"v2-form-consent\"><input type=\"checkbox\" id=\"");
+        html.push_str(&crate::escape_html_attribute(&marketing_id));
+        html.push_str("\" name=\"_marketing_opt_in\" value=\"on\"><label for=\"");
+        html.push_str(&crate::escape_html_attribute(&marketing_id));
+        html.push_str("\">");
+        html.push_str(&crate::escape_html_text(consent.copy()));
+        html.push_str("</label></div>");
+    }
+
+    html.push_str("<button class=\"v2-button\" type=\"submit\">Send</button></form>");
+    if let FormResult::Inline { message } = form.result() {
+        html.push_str("<p class=\"v2-form-result\" id=\"form-success-");
+        html.push_str(&crate::escape_html_attribute(form_id));
+        html.push_str("\" role=\"status\" aria-live=\"polite\" tabindex=\"-1\">");
+        html.push_str(&crate::escape_html_text(message));
+        html.push_str("</p>");
+    }
+}
+
+fn push_form_field(html: &mut String, field: &FormField, form_dom_id: &str) {
+    let (id, name, label, help, required) = match field {
+        FormField::Text {
+            id,
+            name,
+            label,
+            help,
+            required,
+            ..
+        }
+        | FormField::Email {
+            id,
+            name,
+            label,
+            help,
+            required,
+            ..
+        }
+        | FormField::Phone {
+            id,
+            name,
+            label,
+            help,
+            required,
+            ..
+        }
+        | FormField::Checkbox {
+            id,
+            name,
+            label,
+            help,
+            required,
+        }
+        | FormField::Select {
+            id,
+            name,
+            label,
+            help,
+            required,
+            ..
+        } => (id, name, label, help.as_deref(), *required),
+    };
+    let input_id = format!("{form_dom_id}-field-{}", id.as_str());
+    let help_id = format!("{input_id}-help");
+    html.push_str("<div class=\"v2-form-field\">");
+
+    match field {
+        FormField::Checkbox { .. } => {
+            html.push_str("<div class=\"v2-form-consent\"><input type=\"checkbox\" id=\"");
+            html.push_str(&crate::escape_html_attribute(&input_id));
+            html.push_str("\" name=\"");
+            html.push_str(&crate::escape_html_attribute(name));
+            html.push_str("\" value=\"on\"");
+            push_form_required(html, required);
+            push_form_description(html, help, &help_id);
+            html.push_str("><label for=\"");
+            html.push_str(&crate::escape_html_attribute(&input_id));
+            html.push_str("\">");
+            html.push_str(&crate::escape_html_text(label));
+            html.push_str("</label></div>");
+        }
+        FormField::Select { options, .. } => {
+            push_form_label(html, label, &input_id);
+            html.push_str("<select id=\"");
+            html.push_str(&crate::escape_html_attribute(&input_id));
+            html.push_str("\" name=\"");
+            html.push_str(&crate::escape_html_attribute(name));
+            html.push('\"');
+            push_form_required(html, required);
+            push_form_description(html, help, &help_id);
+            html.push_str("><option value=\"\">Choose an option</option>");
+            for option in options {
+                html.push_str("<option value=\"");
+                html.push_str(&crate::escape_html_attribute(option));
+                html.push_str("\">");
+                html.push_str(&crate::escape_html_text(option));
+                html.push_str("</option>");
+            }
+            html.push_str("</select>");
+        }
+        FormField::Text { validation, .. }
+        | FormField::Email { validation, .. }
+        | FormField::Phone { validation, .. } => {
+            let input_type = match field {
+                FormField::Text { .. } => "text",
+                FormField::Email { .. } => "email",
+                FormField::Phone { .. } => "tel",
+                FormField::Checkbox { .. } | FormField::Select { .. } => return,
+            };
+            push_form_label(html, label, &input_id);
+            html.push_str("<input type=\"");
+            html.push_str(input_type);
+            html.push_str("\" id=\"");
+            html.push_str(&crate::escape_html_attribute(&input_id));
+            html.push_str("\" name=\"");
+            html.push_str(&crate::escape_html_attribute(name));
+            html.push_str("\" maxlength=\"");
+            let maximum = validation
+                .as_ref()
+                .and_then(|range| range.max_length)
+                .unwrap_or(match field {
+                    FormField::Text { .. } => 8192,
+                    FormField::Email { .. } => 320,
+                    FormField::Phone { .. } => 64,
+                    FormField::Checkbox { .. } | FormField::Select { .. } => 0,
+                });
+            html.push_str(&maximum.to_string());
+            html.push('"');
+            if let Some(minimum) = validation.as_ref().and_then(|range| range.min_length) {
+                html.push_str(" minlength=\"");
+                html.push_str(&minimum.to_string());
+                html.push('"');
+            }
+            if matches!(field, FormField::Email { .. }) {
+                html.push_str(" autocomplete=\"email\"");
+            } else if matches!(field, FormField::Phone { .. }) {
+                html.push_str(" autocomplete=\"tel\"");
+            }
+            push_form_required(html, required);
+            push_form_description(html, help, &help_id);
+            html.push('>');
+        }
+    }
+
+    if let Some(help) = help {
+        html.push_str("<p class=\"v2-form-help\" id=\"");
+        html.push_str(&crate::escape_html_attribute(&help_id));
+        html.push_str("\">");
+        html.push_str(&crate::escape_html_text(help));
+        html.push_str("</p>");
+    }
+    html.push_str("</div>");
+}
+
+fn push_form_label(html: &mut String, label: &str, input_id: &str) {
+    html.push_str("<label for=\"");
+    html.push_str(&crate::escape_html_attribute(input_id));
+    html.push_str("\">");
+    html.push_str(&crate::escape_html_text(label));
+    html.push_str("</label>");
+}
+
+fn push_form_required(html: &mut String, required: bool) {
+    if required {
+        html.push_str(" required");
+    }
+}
+
+fn push_form_description(html: &mut String, help: Option<&str>, help_id: &str) {
+    if help.is_some() {
+        html.push_str(" aria-describedby=\"");
+        html.push_str(&crate::escape_html_attribute(help_id));
+        html.push('"');
+    }
 }
 
 fn push_profile_variables(html: &mut String, values: &std::collections::BTreeMap<String, String>) {

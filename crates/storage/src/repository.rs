@@ -8,6 +8,8 @@ const SUPPORTED_SCHEMA_VERSION: i32 = 2;
 const MAX_FUNNEL_BYTES: usize = 1_048_576;
 const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
+const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
+const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
 
@@ -210,6 +212,39 @@ pub struct NewTheme {
     pub name: String,
     pub tokens_json: String,
     pub is_default: bool,
+}
+
+pub struct NewPublicFormSubmission<'a> {
+    pub submission_id: &'a str,
+    pub funnel_id: &'a str,
+    pub funnel_slug: &'a str,
+    pub revision_id: &'a str,
+    pub page_id: &'a str,
+    pub form_id: &'a str,
+    pub submission_key: &'a str,
+    pub field_values_json: &'a str,
+    pub request_consent_copy_version: &'a str,
+    pub request_consent_copy: &'a str,
+    pub marketing_opt_in: bool,
+    pub marketing_opt_in_copy_version: Option<&'a str>,
+    pub marketing_opt_in_copy: Option<&'a str>,
+    pub retention_seconds: i32,
+    pub limit_per_minute: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublicFormSubmissionResult {
+    Stored,
+    Duplicate,
+    RateLimited,
+    NotCurrent,
+}
+
+#[derive(Deserialize)]
+struct PublicFormSubmissionState {
+    is_current: i64,
+    is_duplicate: i64,
+    is_rate_limited: i64,
 }
 
 pub enum MutationResult {
@@ -1059,6 +1094,159 @@ impl<'a> Repository<'a> {
             || funnel.published_revision_id.as_deref() == published_revision_id
         {
             return Err(RepositoryError::StalePublishedRevision);
+        }
+        Ok(())
+    }
+
+    pub async fn store_public_form_submission(
+        &self,
+        input: NewPublicFormSubmission<'_>,
+    ) -> RepositoryResult<PublicFormSubmissionResult> {
+        for (value, field) in [
+            (input.submission_id, "submission_id"),
+            (input.funnel_id, "funnel_id"),
+            (input.funnel_slug, "funnel_slug"),
+            (input.revision_id, "revision_id"),
+            (input.page_id, "page_id"),
+            (input.form_id, "form_id"),
+            (input.submission_key, "submission_key"),
+            (
+                input.request_consent_copy_version,
+                "request_consent_copy_version",
+            ),
+            (input.request_consent_copy, "request_consent_copy"),
+        ] {
+            validate_required_field(value, field)?;
+        }
+        validate_idempotency_key(input.submission_id)?;
+        validate_idempotency_key(input.submission_key)?;
+        if input.field_values_json.len() > crate::MAX_PUBLIC_FORM_SUBMISSION_BYTES {
+            return Err(RepositoryError::PayloadTooLarge);
+        }
+        let field_values: serde_json::Value = serde_json::from_str(input.field_values_json)
+            .map_err(|_| RepositoryError::InvalidJson)?;
+        if !field_values.is_object() {
+            return Err(RepositoryError::InvalidJson);
+        }
+        if input.request_consent_copy_version.len() > 64
+            || input.request_consent_copy.len() > 1024
+            || !(86_400..=315_360_000).contains(&input.retention_seconds)
+            || !(1..=100).contains(&input.limit_per_minute)
+        {
+            return Err(RepositoryError::InvalidField("public_form_submission"));
+        }
+        if input.marketing_opt_in_copy_version.is_some() != input.marketing_opt_in_copy.is_some()
+            || (input.marketing_opt_in && input.marketing_opt_in_copy_version.is_none())
+            || input
+                .marketing_opt_in_copy_version
+                .is_some_and(|value| value.is_empty() || value.len() > 64)
+            || input
+                .marketing_opt_in_copy
+                .is_some_and(|value| value.is_empty() || value.len() > 1024)
+        {
+            return Err(RepositoryError::InvalidField("marketing_opt_in"));
+        }
+
+        let submission_id = D1Type::Text(input.submission_id);
+        let funnel_id = D1Type::Text(input.funnel_id);
+        let funnel_slug = D1Type::Text(input.funnel_slug);
+        let revision_id = D1Type::Text(input.revision_id);
+        let page_id = D1Type::Text(input.page_id);
+        let form_id = D1Type::Text(input.form_id);
+        let submission_key = D1Type::Text(input.submission_key);
+        let field_values_json = D1Type::Text(input.field_values_json);
+        let request_consent_copy_version = D1Type::Text(input.request_consent_copy_version);
+        let request_consent_copy = D1Type::Text(input.request_consent_copy);
+        let marketing_opt_in = D1Type::Boolean(input.marketing_opt_in);
+        let marketing_opt_in_copy_version = input
+            .marketing_opt_in_copy_version
+            .map(D1Type::Text)
+            .unwrap_or(D1Type::Null);
+        let marketing_opt_in_copy = input
+            .marketing_opt_in_copy
+            .map(D1Type::Text)
+            .unwrap_or(D1Type::Null);
+        let retention_seconds = D1Type::Integer(input.retention_seconds);
+        let limit_per_minute = D1Type::Integer(input.limit_per_minute);
+
+        let inserted = self
+            .database
+            .prepare(
+                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_key, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
+            )
+            .bind_refs([
+                &submission_id,
+                &revision_id,
+                &page_id,
+                &form_id,
+                &submission_key,
+                &field_values_json,
+                &request_consent_copy_version,
+                &request_consent_copy,
+                &marketing_opt_in,
+                &marketing_opt_in_copy_version,
+                &marketing_opt_in_copy,
+                &marketing_opt_in_copy_version,
+                &retention_seconds,
+                &funnel_id,
+                &funnel_slug,
+                &revision_id,
+                &limit_per_minute,
+            ])?
+            .first::<String>(Some("submission_id"))
+            .await?;
+        if inserted.is_some() {
+            return Ok(PublicFormSubmissionResult::Stored);
+        }
+
+        let state = self
+            .database
+            .prepare(
+                "SELECT EXISTS(SELECT 1 FROM funnels WHERE id = ? AND slug = ? AND published_revision_id = ?) AS is_current, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS is_duplicate, (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = ? AND submitted_at >= unixepoch() - 60) >= ? AS is_rate_limited",
+            )
+            .bind_refs([
+                &funnel_id,
+                &funnel_slug,
+                &revision_id,
+                &funnel_id,
+                &form_id,
+                &submission_key,
+                &funnel_id,
+                &limit_per_minute,
+            ])?
+            .first::<PublicFormSubmissionState>(None)
+            .await?
+            .ok_or(RepositoryError::InvalidField("public_form_submission"))?;
+
+        if state.is_current != 1 {
+            return Ok(PublicFormSubmissionResult::NotCurrent);
+        }
+        if state.is_duplicate == 1 {
+            return Ok(PublicFormSubmissionResult::Duplicate);
+        }
+        if state.is_rate_limited == 1 {
+            return Ok(PublicFormSubmissionResult::RateLimited);
+        }
+        Err(RepositoryError::InvalidField("public_form_submission"))
+    }
+
+    pub async fn cleanup_expired_public_form_submissions(&self) -> RepositoryResult<()> {
+        for _ in 0..PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES {
+            let batch_size = D1Type::Integer(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE);
+            let deleted = self
+                .database
+                .prepare(
+                    "DELETE FROM public_form_submissions WHERE submission_id IN (SELECT submission_id FROM public_form_submissions WHERE expires_at <= unixepoch() ORDER BY expires_at LIMIT ?)",
+                )
+                .bind_refs([&batch_size])?
+                .run()
+                .await?
+                .meta()?
+                .and_then(|meta| meta.changes)
+                .unwrap_or(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE as usize);
+            if deleted < PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE as usize {
+                break;
+            }
         }
         Ok(())
     }
