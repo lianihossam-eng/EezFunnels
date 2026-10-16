@@ -1527,3 +1527,91 @@ h1 {
   object-fit: contain;
   background: var(--surface, #fff);
 }
+
+.theme-customization {
+  display: grid;
+  gap: 14px;
+}
+
+.theme-token-group {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border, #d7dde6);
+  border-radius: 11px;
+  background: var(--surface, #fff);
+}
+
+.theme-token-group > legend {
+  padding: 0 6px;
+  color: var(--text, #182230);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.theme-color-grid,
+.theme-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 12px;
+}
+
+.theme-color-control,
+.theme-style-control {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-muted, #536176);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.theme-color-input-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.theme-color-input-row input[type="color"] {
+  width: 52px;
+  height: 40px;
+  padding: 3px;
+  border: 1px solid var(--border, #cbd2dc);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+}
+
+.theme-color-input-row input[type="color"]:disabled {
+  cursor: not-allowed;
+}
+
+.theme-style-control select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border, #cbd2dc);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface, #fff);
+  color: var(--text, #182230);
+  font: inherit;
+}
+
+.theme-contrast-status {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #14532d;
+  font-size: 0.82rem;
+}
+
+.theme-contrast-warning {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #7f1d1d;
+}

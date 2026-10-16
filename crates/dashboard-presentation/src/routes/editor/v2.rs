@@ -8,6 +8,11 @@ use eez_domain::document_v2::{
     ValidationRange,
 };
 #[cfg(any(feature = "browser", test))]
+use eez_domain::document_v2::{
+    ButtonShape, ContentWidth, CornerScale, FontFamily, Shadow, SpacingScale, ThemeColors,
+    ThemeOverrides, TypeScale,
+};
+#[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -2369,6 +2374,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 }
                             }
                         }
+                        V2ThemeCustomization { state, document: document.clone(), locked }
                         if let Some(section) = selected_section {
                             fieldset { class: "editor-setting-group",
                                 legend { "{section_kind_label(section.section_type())}" }
@@ -2972,6 +2978,539 @@ fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: bool) -> Ele
     }
 }
 
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThemeColorField {
+    Background,
+    Border,
+    Muted,
+    OnPrimary,
+    Primary,
+    Surface,
+    Text,
+}
+
+#[cfg(any(feature = "browser", test))]
+impl ThemeColorField {
+    const ALL: [Self; 7] = [
+        Self::Background,
+        Self::Surface,
+        Self::Text,
+        Self::Muted,
+        Self::Primary,
+        Self::OnPrimary,
+        Self::Border,
+    ];
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Border => "border",
+            Self::Muted => "muted",
+            Self::OnPrimary => "on-primary",
+            Self::Primary => "primary",
+            Self::Surface => "surface",
+            Self::Text => "text",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Background => "Page background",
+            Self::Border => "Borders",
+            Self::Muted => "Secondary text",
+            Self::OnPrimary => "Text on buttons",
+            Self::Primary => "Buttons and accents",
+            Self::Surface => "Cards and form surfaces",
+            Self::Text => "Main text",
+        }
+    }
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::Background => "color-background",
+            Self::Border => "color-border",
+            Self::Muted => "color-muted",
+            Self::OnPrimary => "color-on-primary",
+            Self::Primary => "color-primary",
+            Self::Surface => "color-surface",
+            Self::Text => "color-text",
+        }
+    }
+
+    fn override_value(self, colors: Option<&ThemeColors>) -> Option<&str> {
+        let colors = colors?;
+        match self {
+            Self::Background => colors.color_background.as_deref(),
+            Self::Border => colors.color_border.as_deref(),
+            Self::Muted => colors.color_muted.as_deref(),
+            Self::OnPrimary => colors.color_on_primary.as_deref(),
+            Self::Primary => colors.color_primary.as_deref(),
+            Self::Surface => colors.color_surface.as_deref(),
+            Self::Text => colors.color_text.as_deref(),
+        }
+    }
+
+    fn set_override(self, colors: &mut ThemeColors, value: Option<String>) {
+        match self {
+            Self::Background => colors.color_background = value,
+            Self::Border => colors.color_border = value,
+            Self::Muted => colors.color_muted = value,
+            Self::OnPrimary => colors.color_on_primary = value,
+            Self::Primary => colors.color_primary = value,
+            Self::Surface => colors.color_surface = value,
+            Self::Text => colors.color_text = value,
+        }
+    }
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThemeStyleField {
+    TypeScale,
+    FontFamily,
+    SpacingScale,
+    CornerScale,
+    ContentWidth,
+    ButtonShape,
+    Shadow,
+}
+
+#[cfg(any(feature = "browser", test))]
+impl ThemeStyleField {
+    const ALL: [Self; 7] = [
+        Self::TypeScale,
+        Self::FontFamily,
+        Self::SpacingScale,
+        Self::ContentWidth,
+        Self::CornerScale,
+        Self::ButtonShape,
+        Self::Shadow,
+    ];
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::TypeScale => "type-scale",
+            Self::FontFamily => "font-family",
+            Self::SpacingScale => "spacing-scale",
+            Self::CornerScale => "corner-scale",
+            Self::ContentWidth => "content-width",
+            Self::ButtonShape => "button-shape",
+            Self::Shadow => "shadow",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::TypeScale => "Text size",
+            Self::FontFamily => "Font family",
+            Self::SpacingScale => "Section spacing",
+            Self::CornerScale => "Card corners",
+            Self::ContentWidth => "Content width",
+            Self::ButtonShape => "Button shape",
+            Self::Shadow => "Card shadow",
+        }
+    }
+
+    fn choices(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::TypeScale => &[
+                ("compact", "Compact"),
+                ("default", "Default"),
+                ("large", "Large"),
+                ("display", "Display"),
+            ],
+            Self::FontFamily => &[
+                ("system_ui", "System UI"),
+                ("arial", "Arial"),
+                ("georgia", "Georgia"),
+                ("verdana", "Verdana"),
+                ("trebuchet_ms", "Trebuchet MS"),
+            ],
+            Self::SpacingScale => &[
+                ("compact", "Compact"),
+                ("default", "Default"),
+                ("relaxed", "Relaxed"),
+                ("airy", "Airy"),
+                ("spacious", "Spacious"),
+            ],
+            Self::CornerScale => &[
+                ("square", "Square"),
+                ("soft", "Soft"),
+                ("rounded", "Rounded"),
+                ("large", "Large"),
+                ("extra_large", "Extra large"),
+            ],
+            Self::ContentWidth => &[
+                ("narrow", "Narrow"),
+                ("default", "Default"),
+                ("wide", "Wide"),
+            ],
+            Self::ButtonShape => &[
+                ("square", "Square"),
+                ("rounded", "Rounded"),
+                ("soft", "Soft"),
+                ("pill", "Pill"),
+            ],
+            Self::Shadow => &[("none", "None"), ("subtle", "Subtle"), ("raised", "Raised")],
+        }
+    }
+
+    fn override_id(self, overrides: &ThemeOverrides) -> Option<&'static str> {
+        match self {
+            Self::TypeScale => overrides.type_scale.map(|value| match value {
+                TypeScale::Compact => "compact",
+                TypeScale::Default => "default",
+                TypeScale::Large => "large",
+                TypeScale::Display => "display",
+            }),
+            Self::FontFamily => overrides.font_family.map(|value| match value {
+                FontFamily::SystemUi => "system_ui",
+                FontFamily::Arial => "arial",
+                FontFamily::Georgia => "georgia",
+                FontFamily::Verdana => "verdana",
+                FontFamily::TrebuchetMs => "trebuchet_ms",
+            }),
+            Self::SpacingScale => overrides.spacing_scale.map(|value| match value {
+                SpacingScale::Compact => "compact",
+                SpacingScale::Default => "default",
+                SpacingScale::Relaxed => "relaxed",
+                SpacingScale::Airy => "airy",
+                SpacingScale::Spacious => "spacious",
+            }),
+            Self::CornerScale => overrides.corner_scale.map(|value| match value {
+                CornerScale::Square => "square",
+                CornerScale::Soft => "soft",
+                CornerScale::Rounded => "rounded",
+                CornerScale::Large => "large",
+                CornerScale::ExtraLarge => "extra_large",
+            }),
+            Self::ContentWidth => overrides.content_width.map(|value| match value {
+                ContentWidth::Narrow => "narrow",
+                ContentWidth::Default => "default",
+                ContentWidth::Wide => "wide",
+            }),
+            Self::ButtonShape => overrides.button_shape.map(|value| match value {
+                ButtonShape::Square => "square",
+                ButtonShape::Rounded => "rounded",
+                ButtonShape::Soft => "soft",
+                ButtonShape::Pill => "pill",
+            }),
+            Self::Shadow => overrides.shadow.map(|value| match value {
+                Shadow::None => "none",
+                Shadow::Subtle => "subtle",
+                Shadow::Raised => "raised",
+            }),
+        }
+    }
+
+    fn set_override(self, overrides: &mut ThemeOverrides, choice: &str) -> bool {
+        match self {
+            Self::TypeScale => {
+                overrides.type_scale = match choice {
+                    "preset" => None,
+                    "compact" => Some(TypeScale::Compact),
+                    "default" => Some(TypeScale::Default),
+                    "large" => Some(TypeScale::Large),
+                    "display" => Some(TypeScale::Display),
+                    _ => return false,
+                }
+            }
+            Self::FontFamily => {
+                overrides.font_family = match choice {
+                    "preset" => None,
+                    "system_ui" => Some(FontFamily::SystemUi),
+                    "arial" => Some(FontFamily::Arial),
+                    "georgia" => Some(FontFamily::Georgia),
+                    "verdana" => Some(FontFamily::Verdana),
+                    "trebuchet_ms" => Some(FontFamily::TrebuchetMs),
+                    _ => return false,
+                }
+            }
+            Self::SpacingScale => {
+                overrides.spacing_scale = match choice {
+                    "preset" => None,
+                    "compact" => Some(SpacingScale::Compact),
+                    "default" => Some(SpacingScale::Default),
+                    "relaxed" => Some(SpacingScale::Relaxed),
+                    "airy" => Some(SpacingScale::Airy),
+                    "spacious" => Some(SpacingScale::Spacious),
+                    _ => return false,
+                }
+            }
+            Self::CornerScale => {
+                overrides.corner_scale = match choice {
+                    "preset" => None,
+                    "square" => Some(CornerScale::Square),
+                    "soft" => Some(CornerScale::Soft),
+                    "rounded" => Some(CornerScale::Rounded),
+                    "large" => Some(CornerScale::Large),
+                    "extra_large" => Some(CornerScale::ExtraLarge),
+                    _ => return false,
+                }
+            }
+            Self::ContentWidth => {
+                overrides.content_width = match choice {
+                    "preset" => None,
+                    "narrow" => Some(ContentWidth::Narrow),
+                    "default" => Some(ContentWidth::Default),
+                    "wide" => Some(ContentWidth::Wide),
+                    _ => return false,
+                }
+            }
+            Self::ButtonShape => {
+                overrides.button_shape = match choice {
+                    "preset" => None,
+                    "square" => Some(ButtonShape::Square),
+                    "rounded" => Some(ButtonShape::Rounded),
+                    "soft" => Some(ButtonShape::Soft),
+                    "pill" => Some(ButtonShape::Pill),
+                    _ => return false,
+                }
+            }
+            Self::Shadow => {
+                overrides.shadow = match choice {
+                    "preset" => None,
+                    "none" => Some(Shadow::None),
+                    "subtle" => Some(Shadow::Subtle),
+                    "raised" => Some(Shadow::Raised),
+                    _ => return false,
+                }
+            }
+        }
+        true
+    }
+}
+
+#[cfg(feature = "browser")]
+fn set_theme_color(state: Signal<V2EditorState>, field: ThemeColorField, value: Option<String>) {
+    let Some(mut overrides) = state.with(|state| {
+        state
+            .document
+            .as_ref()
+            .map(|document| document.theme().overrides().clone())
+    }) else {
+        return;
+    };
+    let mut colors = overrides.colors.take().unwrap_or_default();
+    field.set_override(&mut colors, value);
+    let has_colors = colors.color_background.is_some()
+        || colors.color_border.is_some()
+        || colors.color_muted.is_some()
+        || colors.color_on_primary.is_some()
+        || colors.color_primary.is_some()
+        || colors.color_surface.is_some()
+        || colors.color_text.is_some();
+    overrides.colors = if has_colors { Some(colors) } else { None };
+    dispatch_v2_edit(
+        state,
+        Edit::SetThemeOverrides {
+            overrides: Box::new(overrides),
+        },
+    );
+}
+
+#[cfg(feature = "browser")]
+fn set_theme_style(state: Signal<V2EditorState>, field: ThemeStyleField, choice: &str) {
+    let Some(mut overrides) = state.with(|state| {
+        state
+            .document
+            .as_ref()
+            .map(|document| document.theme().overrides().clone())
+    }) else {
+        return;
+    };
+    if field.set_override(&mut overrides, choice) {
+        dispatch_v2_edit(
+            state,
+            Edit::SetThemeOverrides {
+                overrides: Box::new(overrides),
+            },
+        );
+    }
+}
+
+#[cfg(any(feature = "browser", test))]
+fn theme_contrast_warnings(tokens: &BTreeMap<String, String>) -> Vec<String> {
+    let pairs = [
+        (
+            "color-text",
+            "color-background",
+            "Main text on page background",
+        ),
+        ("color-text", "color-surface", "Main text on cards"),
+        (
+            "color-muted",
+            "color-background",
+            "Secondary text on page background",
+        ),
+        ("color-muted", "color-surface", "Secondary text on cards"),
+        ("color-on-primary", "color-primary", "Button text"),
+    ];
+    pairs
+        .into_iter()
+        .filter_map(|(foreground, background, label)| {
+            let foreground = tokens.get(foreground)?;
+            let background = tokens.get(background)?;
+            let ratio = contrast_ratio(foreground, background)?;
+            (ratio < 4.5).then(|| format!("{label} ({ratio:.2}:1)"))
+        })
+        .collect()
+}
+
+#[cfg(any(feature = "browser", test))]
+fn contrast_ratio(first: &str, second: &str) -> Option<f64> {
+    fn luminance(value: &str) -> Option<f64> {
+        let bytes = value.as_bytes();
+        if bytes.len() != 7 || bytes[0] != b'#' {
+            return None;
+        }
+        let mut channels = [0.0; 3];
+        for (index, channel) in channels.iter_mut().enumerate() {
+            let start = index * 2 + 1;
+            let value = u8::from_str_radix(std::str::from_utf8(&bytes[start..start + 2]).ok()?, 16)
+                .ok()? as f64
+                / 255.0;
+            *channel = if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            };
+        }
+        Some(0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2])
+    }
+
+    let first = luminance(first)?;
+    let second = luminance(second)?;
+    let (lighter, darker) = if first >= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    Some((lighter + 0.05) / (darker + 0.05))
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2ThemeCustomization(
+    state: Signal<V2EditorState>,
+    document: DocumentV2,
+    locked: bool,
+) -> Element {
+    let overrides = document.theme().overrides().clone();
+    let profile = document.resolved_theme_profile();
+    let warnings = theme_contrast_warnings(&profile.desktop);
+    let contrast_message = if warnings.is_empty() {
+        "Current text and button colors meet the 4.5:1 contrast target.".to_owned()
+    } else {
+        format!(
+            "Low contrast: {}. Adjust these colors to improve readability.",
+            warnings.join(", ")
+        )
+    };
+    let contrast_class = if warnings.is_empty() {
+        "theme-contrast-status"
+    } else {
+        "theme-contrast-status theme-contrast-warning"
+    };
+    rsx! {
+        fieldset { class: "editor-setting-group theme-customization",
+            legend { "Customize theme" }
+            p { class: "editor-keyboard-help", "These settings update the live preview. Save revision when the design is ready." }
+            fieldset { class: "theme-token-group",
+                legend { "Colors" }
+                p { class: "editor-keyboard-help", "Choose colors for each part of the page. Reset any value to use the selected preset." }
+                div { class: "theme-color-grid",
+                    for field in ThemeColorField::ALL {
+                        {
+                            let value = profile.desktop.get(field.token()).cloned().unwrap_or_else(|| "#ffffff".to_owned());
+                            let has_override = field.override_value(overrides.colors.as_ref()).is_some();
+                            rsx! {
+                                V2ThemeColorControl { state, field, value, has_override, locked }
+                            }
+                        }
+                    }
+                }
+                p {
+                    class: "{contrast_class}",
+                    role: "status",
+                    "aria-live": "polite",
+                    "{contrast_message}"
+                }
+            }
+            fieldset { class: "theme-token-group",
+                legend { "Type and layout" }
+                div { class: "theme-style-grid",
+                    for field in ThemeStyleField::ALL {
+                        V2ThemeStyleControl { state, field, overrides: overrides.clone(), locked }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2ThemeColorControl(
+    state: Signal<V2EditorState>,
+    field: ThemeColorField,
+    value: String,
+    has_override: bool,
+    locked: bool,
+) -> Element {
+    let input_id = format!("v2-theme-color-{}", field.id());
+    rsx! {
+        div { class: "theme-color-control",
+            label { r#for: "{input_id}", "{field.label()}" }
+            div { class: "theme-color-input-row",
+                input {
+                    id: "{input_id}",
+                    r#type: "color",
+                    value: "{value}",
+                    disabled: locked,
+                    onchange: move |event| set_theme_color(state, field, Some(event.value())),
+                }
+                button {
+                    class: "text-button",
+                    r#type: "button",
+                    disabled: locked || !has_override,
+                    "aria-label": "Use preset {field.label().to_lowercase()}",
+                    onclick: move |_| set_theme_color(state, field, None),
+                    "Use preset"
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2ThemeStyleControl(
+    state: Signal<V2EditorState>,
+    field: ThemeStyleField,
+    overrides: ThemeOverrides,
+    locked: bool,
+) -> Element {
+    let input_id = format!("v2-theme-{}", field.id());
+    let value = field.override_id(&overrides).unwrap_or("preset");
+    rsx! {
+        label { class: "theme-style-control", r#for: "{input_id}",
+            span { "{field.label()}" }
+            select {
+                id: "{input_id}",
+                value: "{value}",
+                disabled: locked,
+                onchange: move |event| set_theme_style(state, field, &event.value()),
+                option { value: "preset", "Preset default" }
+                for (choice, label) in field.choices() {
+                    option { value: "{choice}", "{label}" }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(feature = "browser")]
 #[component]
 fn V2ImageBlockPicker(
@@ -3488,6 +4027,35 @@ mod tests {
     fn document() -> DocumentV2 {
         DocumentV2::starter("funnel-a", BlueprintId::LeadGen, ThemePreset::Minimal)
             .expect("valid V2 starter")
+    }
+
+    #[test]
+    fn built_in_v2_theme_text_and_button_pairs_meet_wcag_aa_contrast() {
+        for preset in ThemePreset::all() {
+            let document = DocumentV2::starter("funnel-theme", BlueprintId::LeadGen, *preset)
+                .expect("valid V2 starter");
+            let profile = document.resolved_theme_profile();
+            let warnings = theme_contrast_warnings(&profile.desktop);
+            assert!(warnings.is_empty(), "{}: {warnings:?}", preset.id());
+        }
+    }
+
+    #[test]
+    fn custom_theme_contrast_report_names_low_contrast_pairs_and_ratios() {
+        let tokens = BTreeMap::from([
+            ("color-background".to_owned(), "#ffffff".to_owned()),
+            ("color-surface".to_owned(), "#ffffff".to_owned()),
+            ("color-text".to_owned(), "#777777".to_owned()),
+            ("color-muted".to_owned(), "#888888".to_owned()),
+            ("color-primary".to_owned(), "#ffff00".to_owned()),
+            ("color-on-primary".to_owned(), "#ffffff".to_owned()),
+        ]);
+        let warnings = theme_contrast_warnings(&tokens);
+        assert_eq!(warnings.len(), 5);
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.starts_with("Button text (")));
+        assert!(warnings.iter().all(|warning| warning.contains(":1)")));
     }
 
     #[test]

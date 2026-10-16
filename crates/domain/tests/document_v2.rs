@@ -1,6 +1,7 @@
 use eez_domain::document_v2::{
-    validate_form_submission, ActionV2, BlockV2, BlueprintId, DocumentV2, Edit, FormId,
-    FormSubmissionValue, IdKind, IdSource,
+    validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
+    FontFamily, FormId, FormSubmissionValue, IdKind, IdSource, ThemeColors, ThemeOverrides,
+    TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -40,6 +41,68 @@ fn document_with_lead_form() -> DocumentV2 {
     }]);
     let encoded = serde_json::to_vec(&value).expect("form document serialization");
     DocumentV2::decode(&encoded, "funnel-01").expect("valid lead form document")
+}
+
+#[test]
+fn theme_override_edit_updates_resolved_tokens_and_rejects_invalid_colors() {
+    let document = DocumentV2::starter("funnel-theme", BlueprintId::LeadGen, ThemePreset::Minimal)
+        .expect("starter document");
+    let mut ids = TestIds(0);
+    let overrides = ThemeOverrides {
+        colors: Some(ThemeColors {
+            color_primary: Some("#c026d3".to_owned()),
+            color_on_primary: Some("#ffffff".to_owned()),
+            ..ThemeColors::default()
+        }),
+        type_scale: Some(TypeScale::Large),
+        font_family: Some(FontFamily::Georgia),
+        content_width: Some(ContentWidth::Wide),
+        ..ThemeOverrides::default()
+    };
+    let edited = document
+        .apply(
+            Edit::SetThemeOverrides {
+                overrides: Box::new(overrides.clone()),
+            },
+            &mut ids,
+        )
+        .expect("valid theme overrides");
+    let profile = edited.document.resolved_theme_profile();
+    assert_eq!(profile.desktop["color-primary"], "#c026d3");
+    assert_eq!(profile.desktop["color-on-primary"], "#ffffff");
+    assert_eq!(profile.desktop["font-scale"], "1.125");
+    assert_eq!(profile.desktop["font-family"], "Georgia, serif");
+    assert_eq!(profile.desktop["content-width"], "80rem");
+
+    let reset = document
+        .apply(
+            Edit::SetThemeOverrides {
+                overrides: Box::new(ThemeOverrides::default()),
+            },
+            &mut ids,
+        )
+        .expect("preset defaults can be restored");
+    assert_eq!(
+        reset.document.resolved_theme_profile().desktop["color-primary"],
+        "#334155"
+    );
+
+    let invalid = ThemeOverrides {
+        colors: Some(ThemeColors {
+            color_primary: Some("red".to_owned()),
+            ..ThemeColors::default()
+        }),
+        ..ThemeOverrides::default()
+    };
+    let error = document
+        .apply(
+            Edit::SetThemeOverrides {
+                overrides: Box::new(invalid),
+            },
+            &mut ids,
+        )
+        .expect_err("invalid color must not enter the canonical document");
+    assert_eq!(error.code(), "validation/theme_color_invalid");
 }
 
 #[test]

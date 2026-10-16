@@ -112,6 +112,20 @@ async function apiCreate(baseURL, name) {
   return JSON.parse(body);
 }
 
+async function apiCreateV2(baseURL, name) {
+  const response = await fetch(`${baseURL}/api/funnels/v2`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `pr036-create-${crypto.randomUUID()}`,
+    },
+    body: JSON.stringify({ name, blueprint: "lead_gen" }),
+  });
+  const body = await response.text();
+  assert.equal(response.status, 201, body);
+  return JSON.parse(body);
+}
+
 async function apiEditorState(baseURL, funnelId) {
   const response = await fetch(`${baseURL}/api/funnels/${funnelId}`);
   const body = await response.text();
@@ -354,6 +368,70 @@ try {
       saveRequests.push(url);
     }
   });
+
+  const themeFunnel = await apiCreateV2(origin, "PR-036 theme controls");
+  const themeFunnelId = themeFunnel.funnel.id;
+  await page.goto(`${origin}/funnels/${themeFunnelId}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-036 theme controls" }).waitFor();
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.addScriptTag({ content: require("axe-core").source });
+  const v2Axe = await page.evaluate(async () => {
+    const result = await window.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] },
+    });
+    return result.violations.map(({ id, impact, help, nodes }) => ({ id, impact, help, nodes: nodes.length }));
+  });
+  assert.deepEqual(v2Axe, [], `V2 theme editor axe findings: ${JSON.stringify(v2Axe)}`);
+
+  const themeEdit = () => page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(`/api/funnels/${themeFunnelId}/edit-v2`),
+    { timeout: 10000 },
+  );
+  const waitForThemePreview = (previous) => page.waitForFunction(
+    (oldSrcdoc) => document.querySelector("iframe")?.getAttribute("srcdoc") !== oldSrcdoc,
+    previous,
+  );
+  const textScale = page.getByLabel("Text size");
+  const themeFrameDocument = page.frameLocator("iframe");
+  const originalTextSize = await themeFrameDocument.locator("#funnel").evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).fontSize),
+  );
+  let previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  let edit = themeEdit();
+  await textScale.selectOption("large");
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  const largerTextSize = await themeFrameDocument.locator("#funnel").evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).fontSize),
+  );
+  assert(largerTextSize > originalTextSize, `${largerTextSize} should exceed ${originalTextSize}`);
+
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await textScale.selectOption("preset");
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+
+  const accentColor = page.locator("#v2-theme-color-primary");
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await accentColor.evaluate((element) => {
+    element.value = "#ffff00";
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  const contrastStatus = page.getByRole("status").filter({ hasText: "Button text" });
+  await contrastStatus.waitFor();
+  assert.match(await contrastStatus.innerText(), /Button text \(1\.[0-9]{2}:1\)/);
+
+  previousPreview = await page.locator("iframe").getAttribute("srcdoc");
+  edit = themeEdit();
+  await page.getByRole("button", { name: "Use preset buttons and accents" }).click();
+  assert.equal((await edit).status(), 200);
+  await waitForThemePreview(previousPreview);
+  console.log(`V2 theme controls: editable tokens, preset reset, axe=${JSON.stringify(v2Axe)}`);
+
   await page.goto(`${origin}/funnels`, { waitUntil: "networkidle" });
   const primaryLink = page.getByRole("link", { name: "PR-010 browser editor" });
   try {
