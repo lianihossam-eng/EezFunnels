@@ -10,13 +10,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 axum.workspace = true
+eez-domain = { path = "../../crates/domain" }
 eez-commands = { path = "../../crates/commands" }
 eez-dashboard-presentation = { path = "../../crates/dashboard-presentation", default-features = false, features = ["ssr"] }
+eez-render = { path = "../../crates/render" }
 eez-storage = { path = "../../crates/storage" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tower-service.workspace = true
+url.workspace = true
 uuid.workspace = true
 worker.workspace = true
 

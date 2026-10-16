@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -303,11 +304,78 @@ pub struct FormV2 {
     pub(crate) result: FormResult,
 }
 
+impl FormV2 {
+    pub fn id(&self) -> &FormId {
+        &self.id
+    }
+
+    pub fn fields(&self) -> &[FormField] {
+        &self.fields
+    }
+
+    pub fn purpose(&self) -> &str {
+        &self.purpose
+    }
+
+    pub fn request_consent(&self) -> &ConsentCopy {
+        &self.request_consent
+    }
+
+    pub fn marketing_opt_in(&self) -> Option<&ConsentCopy> {
+        self.marketing_opt_in.as_ref()
+    }
+
+    pub fn result(&self) -> &FormResult {
+        &self.result
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ConsentCopy {
+pub struct ConsentCopy {
     pub(crate) copy_version: StableDocumentId,
     pub(crate) copy: String,
+}
+
+impl ConsentCopy {
+    pub fn copy_version(&self) -> &StableDocumentId {
+        &self.copy_version
+    }
+
+    pub fn copy(&self) -> &str {
+        &self.copy
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum FormSubmissionValue {
+    Text(String),
+    Checkbox(bool),
+    Select(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedFormSubmission {
+    pub(crate) values: BTreeMap<String, FormSubmissionValue>,
+    pub(crate) marketing_opt_in: bool,
+}
+
+impl ValidatedFormSubmission {
+    pub fn values(&self) -> &BTreeMap<String, FormSubmissionValue> {
+        &self.values
+    }
+
+    pub fn marketing_opt_in(&self) -> bool {
+        self.marketing_opt_in
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormSubmissionError {
+    RequestConsentRequired,
+    MarketingConsentUnavailable,
+    InvalidFieldValues,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

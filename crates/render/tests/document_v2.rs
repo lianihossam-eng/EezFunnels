@@ -21,7 +21,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v5_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -30,7 +30,7 @@ fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v4");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v5");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -159,7 +159,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v4", "renderer-v4-next");
+        .replace("renderer-v5", "renderer-v5-next");
     assert!(matches!(
         render_published(
             2,
@@ -249,6 +249,75 @@ fn v2_image_and_form_content_are_not_saved_or_rendered_before_their_gates() {
 }
 
 #[test]
+fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
+    use eez_render::document_v2::render_published_route;
+
+    let mut form_value: serde_json::Value = serde_json::from_str(
+        std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
+    )
+    .expect("document JSON");
+    form_value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"form-block", "kind":"form", "form_id":"form-one"}
+    ]);
+    form_value["forms"] = serde_json::json!([{
+        "id":"form-one",
+        "fields":[
+            {"id":"field-email", "name":"email", "label":"Email & <work>", "help":"We'll only use this for the request.", "kind":"email", "required":true},
+            {"id":"field-topic", "name":"topic", "label":"Topic", "kind":"select", "required":false, "options":["Demo & pricing"]}
+        ],
+        "purpose":"Request <information>",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to <be contacted>."},
+        "marketing_opt_in":{"copy_version":"marketing-v2", "copy":"Send me news & offers."},
+        "result":{"kind":"inline", "message":"Thanks & goodbye."}
+    }]);
+    let form_json = serde_json::to_vec(&form_value).expect("document serialization");
+    let form_document = DocumentV2::decode(&form_json, "funnel-01").expect("form node schema");
+    let prepared = prepare_revision(&form_document, "revision-form").expect("form revision");
+    let renderer_v4_manifest =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v4");
+
+    assert_eq!(
+        render_published_route(
+            2,
+            "funnel-01",
+            "revision-form",
+            &prepared.data_json,
+            &renderer_v4_manifest,
+            "lead-funnel",
+            None,
+        )
+        .expect_err("renderer-v4 did not support forms"),
+        V2RenderError::FormsNotEnabled
+    );
+
+    let html = render_published_route(
+        2,
+        "funnel-01",
+        "revision-form",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+        "lead-funnel",
+        None,
+    )
+    .expect("published form page renders");
+
+    assert!(html.contains("method=\"post\" enctype=\"application/x-www-form-urlencoded\""));
+    assert!(html.contains("/api/public/funnels/lead-funnel/pages/page-home/forms/form-one/submissions?key=EEZ_FORM_SUBMISSION_KEY"));
+    assert!(html.contains("type=\"email\""));
+    assert!(html.contains("id=\"form-form-one-field-field-email\" name=\"email\""));
+    assert!(html.contains("aria-describedby=\"form-form-one-field-field-email-help\""));
+    assert!(html.contains("name=\"_request_consent\" value=\"on\" required>"));
+    assert!(html.contains("name=\"_marketing_opt_in\" value=\"on\">"));
+    assert!(html.contains("required"));
+    assert!(html.contains("Email &amp; &lt;work&gt;"));
+    assert!(html.contains("I agree to &lt;be contacted&gt;."));
+    assert!(html.contains("Send me news &amp; offers."));
+    assert!(html.contains("id=\"form-success-form-one\" role=\"status\""));
+    assert!(html.contains("Thanks &amp; goodbye."));
+    assert!(!html.contains("<work>"));
+}
+
+#[test]
 fn v2_public_pages_render_and_internal_edges_use_canonical_routes() {
     use eez_render::document_v2::render_published_route;
 
@@ -280,6 +349,8 @@ fn v2_public_pages_render_and_internal_edges_use_canonical_routes() {
     let data_json = serde_json::to_vec(&value).expect("document serialization");
     let multipage = DocumentV2::decode(&data_json, "funnel-01").expect("valid page graph");
     let prepared = prepare_revision(&multipage, "revision-multipage").expect("manifest");
+    let renderer_v4_manifest =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v4");
     let legacy_manifest =
         manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v3");
 
@@ -294,6 +365,20 @@ fn v2_public_pages_render_and_internal_edges_use_canonical_routes() {
     )
     .expect("entry page renders");
     assert!(entry.contains("<a class=\"v2-button\" href=\"/f/quick-offer/next\">Next</a>"));
+
+    let renderer_v4_entry = render_published_route(
+        2,
+        "funnel-01",
+        "revision-multipage",
+        &prepared.data_json,
+        &renderer_v4_manifest,
+        "quick-offer",
+        None,
+    )
+    .expect("stored V4 multipage revision keeps its routes");
+    assert!(
+        renderer_v4_entry.contains("<a class=\"v2-button\" href=\"/f/quick-offer/next\">Next</a>")
+    );
 
     let legacy_entry = render_published_route(
         2,

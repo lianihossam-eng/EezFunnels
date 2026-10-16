@@ -8,6 +8,8 @@ Before making the Worker reachable from the public Internet, use Cloudflare Acce
 
 Published entry pages use `GET /f/:slug`; additional V2 pages use `GET /f/:slug/:page_slug`. Add an Access bypass/public policy for those published-page paths only if those funnels should be public. If the bypass is omitted, visitors will also need to authenticate before seeing a published funnel.
 
+Published forms post to `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions`. If a funnel is public, allow this specific route to receive same-origin POST requests as well as allowing its published-page paths. Do not make the dashboard or `/api/funnels/*` public to enable form submissions. Form values and consent evidence are stored in D1 for 90 days by default; see [Public forms](forms.md) for retention and rate-limit settings. There is no application route for reading leads.
+
 Access is an edge policy, not application login or multi-user authorization. The native `eez` CLI currently has no support for Access cookies or arbitrary Access headers; funnel commands through an Access-protected API will not work with the current CLI. An MCP client must be able to send any required Access credentials as well as the Eez Bearer token. The Worker does not provide a second authentication mode for these tools.
 
 ## MCP token
