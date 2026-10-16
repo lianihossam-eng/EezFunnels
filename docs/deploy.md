@@ -61,7 +61,7 @@ Confirm the health route and dashboard after deployment:
 curl --fail --show-error https://eezfunnel.<account-subdomain>.workers.dev/health
 ```
 
-A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor provides publish and unpublish controls for saved revisions; the public page is available at `/f/<slug>`. Review the configured V2 staging capacity before enabling V2 creation.
+A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor provides publish and unpublish controls for saved revisions; the entry page is available at `/f/<slug>`, and additional published V2 pages use `/f/<slug>/<page_slug>`. Review the configured V2 staging capacity before enabling V2 creation.
 
 ## Optional MCP secret
 
