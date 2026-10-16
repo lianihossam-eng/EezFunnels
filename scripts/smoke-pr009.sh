@@ -620,7 +620,7 @@ invalid_publish_route_fresh_status="$(request POST "/api/funnels/invalid!/publis
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-publish-invalid-route-fresh' --data "$publish_payload")"
 assert_error_response "$state_dir/invalid-publish-route-fresh.json" "$invalid_publish_route_fresh_status" 404 not_found/funnel
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
-  --command "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES ('pr014-unsupported-public-revision', '$funnel_id', 2, '{}', '{}');" \
+  --command "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES ('pr014-unsupported-public-revision', '$funnel_id', 3, '{}', '{}');" \
   > "$state_dir/insert-unsupported-public-revision.json"
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
   --command "UPDATE funnels SET published_revision_id = 'pr014-unsupported-public-revision' WHERE id = '$funnel_id';" \

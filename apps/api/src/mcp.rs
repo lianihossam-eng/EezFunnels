@@ -2,7 +2,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::header::{ACCEPT, ALLOW, AUTHORIZATION, CONTENT_TYPE, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::Response;
-use eez_commands::{command_ids, command_registry, CommandActor, IdempotencyPolicy};
+use eez_commands::{command_ids, command_registry, CommandActor, IdempotencyPolicy, McpExposure};
 use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use worker::{Env, HttpRequest};
@@ -520,6 +520,14 @@ async fn execute_registered_command(
     idempotency_key: Option<&str>,
     correlation_id: &str,
 ) -> Value {
+    if !mcp_command_is_executable(command_id) {
+        return tool_error(
+            "validation/operation_not_supported",
+            "validation",
+            "The requested operation is not supported.",
+            correlation_id,
+        );
+    }
     let parameters = match command_parameters_bytes(parameters) {
         Ok(parameters) => parameters,
         Err(()) => {
@@ -546,6 +554,13 @@ async fn execute_registered_command(
         Ok(result) => tool_success(result),
         Err(error) => command_error_tool_result(&error, correlation_id),
     }
+}
+
+fn mcp_command_is_executable(command_id: &str) -> bool {
+    command_registry()
+        .iter()
+        .find(|command| command.id() == command_id)
+        .is_some_and(|command| command.mcp_exposure() == McpExposure::Executable)
 }
 
 fn command_parameters_bytes(parameters: &Value) -> Result<Vec<u8>, ()> {
@@ -588,6 +603,7 @@ fn command_error_tool_result(error: &ApiError, correlation_id: &str) -> Value {
 fn list_commands_result() -> Value {
     let commands = command_registry()
         .iter()
+        .filter(|command| command.mcp_exposure() == McpExposure::Executable)
         .map(|command| {
             let actor = match command.actor() {
                 CommandActor::LocalUser => "local_user",

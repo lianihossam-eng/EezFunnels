@@ -199,13 +199,29 @@ fn tool_inventory_is_fixed_and_command_discovery_matches_registry() {
         .get("commands")
         .and_then(Value::as_array)
         .expect("command list array");
-    assert_eq!(commands.len(), 9);
-    assert_eq!(listed.len(), commands.len());
+    assert_eq!(commands.len(), 18);
+    assert_eq!(listed.len(), 9);
     let ids = listed
         .iter()
         .filter_map(|command| command.get("id").and_then(Value::as_str))
         .collect::<Vec<_>>();
     assert!(ids.contains(&"funnel.public.read"));
+    for hidden in [
+        "funnel.create.v2",
+        "funnel.document.edit.v2",
+        "funnel.document.conversion.preview.v2",
+        "funnel.document.conversion.commit.v2",
+        "funnel.document.read.v2",
+        "funnel.document.preview.v2",
+        "funnel.document.stage.v2",
+        "funnel.revision.save.v2",
+        "funnel.revision.history.read.v2",
+    ] {
+        assert!(!ids.contains(&hidden));
+        assert!(!super::mcp_command_is_executable(hidden));
+    }
+    assert!(super::mcp_command_is_executable("funnel.create"));
+    assert!(!super::mcp_command_is_executable("funnel.missing"));
 }
 
 #[test]

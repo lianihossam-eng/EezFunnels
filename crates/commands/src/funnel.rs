@@ -3,16 +3,20 @@ use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
+    document_v2::{BlueprintId, DocumentV2, Edit, IdKind, IdSource},
     DomainError, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section,
     ThemePreset,
 };
 use eez_render::{
-    content_config_hash, FeatureItem, FooterLink, RenderError, Renderer, SectionContent,
-    Testimonial, ThemeTokens, RENDERER_VERSION,
+    content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
+    SectionContent, Testimonial, ThemeTokens, RENDERER_VERSION,
 };
 use eez_storage::repository::{
-    FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation, Repository,
-    RepositoryError,
+    EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation,
+    Repository, RepositoryError, RevisionRecord,
+};
+use eez_storage::stage::{
+    DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,9 +24,23 @@ use serde_json::Value;
 #[path = "funnel/editor_settings.rs"]
 pub(super) mod inspector;
 
+#[cfg(test)]
+#[path = "funnel/v2_save_tests.rs"]
+mod v2_save_tests;
+
+#[cfg(test)]
+#[path = "funnel/v2_edit_tests.rs"]
+mod v2_edit_tests;
+
+#[cfg(test)]
+#[path = "funnel/v1_conversion_tests.rs"]
+mod v1_conversion_tests;
+
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
 const MAX_EDITOR_COMMAND_BYTES: usize = 17 * 1_024;
+const MAX_V2_PREVIEW_ENVELOPE_BYTES: usize =
+    eez_domain::document_v2::MAX_RAW_DOCUMENT_BYTES * 6 + 4 * 1_024;
 const EMPTY_ASSETS_HASH: &str =
     "assets-sha256-v1:8b3972abe1696375524a8237889ff77fa13664876dd51ede33db93795b8d5cca";
 
@@ -115,6 +133,372 @@ impl FunnelCreateCommand {
             summary,
         })
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunnelCreateCommandV2 {
+    name: String,
+    blueprint: FunnelBlueprint,
+}
+
+impl FunnelCreateCommandV2 {
+    pub const ID: &'static str = command_ids::FUNNEL_CREATE_V2;
+
+    pub fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if object.get("name").is_none() || object.get("blueprint").is_none() {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let mut command: Self = serde_json::from_str(parameters)?;
+        command.name = validate_name(&command.name)?.to_owned();
+        Ok(command)
+    }
+
+    pub fn prepare(
+        &self,
+        funnel_id: impl Into<String>,
+        revision_id: impl Into<String>,
+    ) -> Result<PreparedFunnelV2, FunnelCommandError> {
+        let funnel_id = funnel_id.into();
+        let revision_id = revision_id.into();
+        validate_route_id(&funnel_id)?;
+        validate_route_id(&revision_id)?;
+        let domain_funnel = Funnel::new(
+            FunnelId::new(funnel_id.clone())?,
+            &self.name,
+            slug_from_name_and_id(&self.name, &funnel_id),
+        )?;
+        let document = DocumentV2::starter(
+            &funnel_id,
+            blueprint_id(self.blueprint),
+            ThemePreset::Minimal,
+        )
+        .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let prepared = render_v2::prepare_revision(&document, &revision_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let revision = NewRevision {
+            id: revision_id.clone(),
+            funnel_id: funnel_id.clone(),
+            schema_version: 2,
+            data_json: prepared.data_json,
+            render_manifest_json: prepared.render_manifest_json,
+        };
+        Ok(PreparedFunnelV2 {
+            funnel: NewFunnel {
+                id: domain_funnel.id().as_str().to_owned(),
+                name: domain_funnel.name().to_owned(),
+                slug: domain_funnel.slug().to_owned(),
+            },
+            revision,
+        })
+    }
+}
+
+pub struct PreparedFunnelV2 {
+    funnel: NewFunnel,
+    revision: NewRevision,
+}
+
+impl PreparedFunnelV2 {
+    pub fn funnel(&self) -> &NewFunnel {
+        &self.funnel
+    }
+
+    pub fn revision(&self) -> &NewRevision {
+        &self.revision
+    }
+}
+
+fn blueprint_id(blueprint: FunnelBlueprint) -> BlueprintId {
+    match blueprint {
+        FunnelBlueprint::Tripwire => BlueprintId::Tripwire,
+        FunnelBlueprint::Vsl => BlueprintId::Vsl,
+        FunnelBlueprint::Webinar => BlueprintId::Webinar,
+        FunnelBlueprint::Launch => BlueprintId::Launch,
+        FunnelBlueprint::LeadGen => BlueprintId::LeadGen,
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct V1ConversionNote {
+    code: &'static str,
+    path: String,
+    message: &'static str,
+}
+
+#[derive(Debug)]
+struct ConvertedV1Document {
+    document: DocumentV2,
+    warnings: Vec<V1ConversionNote>,
+}
+
+fn convert_v1_to_v2(
+    source: &ValidatedSnapshot,
+    funnel_id: &str,
+) -> Result<ConvertedV1Document, Vec<V1ConversionNote>> {
+    use eez_domain::document_v2::SectionId as SectionIdV2;
+
+    let mut blockers = Vec::new();
+    if eez_domain::document_v2::V2FunnelId::parse(funnel_id.to_owned()).is_err() {
+        blockers.push(V1ConversionNote {
+            code: "conversion/unsupported_funnel_id",
+            path: "funnel_id".to_owned(),
+            message: "This funnel ID is not valid in the typed document format.",
+        });
+    }
+
+    for (index, section) in source.revision.sections().iter().enumerate() {
+        let section_path = format!("sections[{index}]");
+        if SectionIdV2::parse(section.id().as_str().to_owned()).is_err() {
+            blockers.push(V1ConversionNote {
+                code: "conversion/unsupported_section_id",
+                path: format!("{section_path}.id"),
+                message: "This section ID cannot be represented by the typed document format.",
+            });
+        }
+        let content_path = format!("contents.{}", section.id().as_str());
+        let Some(content) = source.contents.get(section.id().as_str()) else {
+            blockers.push(V1ConversionNote {
+                code: "conversion/section_content_missing",
+                path: content_path,
+                message: "The source section has no content to convert.",
+            });
+            continue;
+        };
+        match content {
+            SectionContent::Hero { cta_url, image, .. } => {
+                if !is_https_conversion_url(cta_url) {
+                    blockers.push(V1ConversionNote {
+                        code: "conversion/relative_link_unsupported",
+                        path: format!("{content_path}.cta_url"),
+                        message: "Typed buttons support external HTTPS URLs or page links; this legacy destination cannot be preserved.",
+                    });
+                }
+                if image.is_some() {
+                    blockers.push(V1ConversionNote {
+                        code: "conversion/image_requires_asset",
+                        path: format!("{content_path}.image"),
+                        message: "This URL-backed image needs an immutable media asset before it can be converted.",
+                    });
+                }
+            }
+            SectionContent::Features { items } if items.is_empty() => {
+                blockers.push(V1ConversionNote {
+                    code: "conversion/empty_section_unsupported",
+                    path: format!("{content_path}.items"),
+                    message: "The typed document requires at least one item in this section.",
+                });
+            }
+            SectionContent::Testimonials { items } if items.is_empty() => {
+                blockers.push(V1ConversionNote {
+                    code: "conversion/empty_section_unsupported",
+                    path: format!("{content_path}.items"),
+                    message: "The typed document requires at least one item in this section.",
+                });
+            }
+            SectionContent::Cta { cta_url, .. } => {
+                if !is_https_conversion_url(cta_url) {
+                    blockers.push(V1ConversionNote {
+                        code: "conversion/relative_link_unsupported",
+                        path: format!("{content_path}.cta_url"),
+                        message: "Typed buttons support external HTTPS URLs or page links; this legacy destination cannot be preserved.",
+                    });
+                }
+            }
+            SectionContent::Footer { links, .. } => {
+                for (link_index, link) in links.iter().enumerate() {
+                    if !is_https_conversion_url(&link.url) {
+                        blockers.push(V1ConversionNote {
+                            code: "conversion/relative_link_unsupported",
+                            path: format!("{content_path}.links[{link_index}].url"),
+                            message: "Typed buttons support external HTTPS URLs or page links; this legacy destination cannot be preserved.",
+                        });
+                    }
+                }
+                if links.len() >= 50 {
+                    blockers.push(V1ConversionNote {
+                        code: "conversion/section_block_limit",
+                        path: format!("{content_path}.links"),
+                        message: "The links and copyright exceed the typed section block limit.",
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if !blockers.is_empty() {
+        return Err(blockers);
+    }
+
+    let mut document_json = serde_json::from_slice::<Value>(
+        DocumentV2::starter(
+            funnel_id,
+            blueprint_id(source.snapshot.blueprint),
+            source.snapshot.theme_id,
+        )
+        .map_err(|_| {
+            vec![V1ConversionNote {
+                code: "conversion/typed_document_invalid",
+                path: "document".to_owned(),
+                message: "The typed document could not be initialized from this funnel.",
+            }]
+        })?
+        .canonical_bytes(),
+    )
+    .map_err(|_| {
+        vec![V1ConversionNote {
+            code: "conversion/typed_document_invalid",
+            path: "document".to_owned(),
+            message: "The typed document could not be initialized from this funnel.",
+        }]
+    })?;
+
+    if let Some(primary_color) = &source.snapshot.theme_overrides.primary_color {
+        document_json["theme"]["overrides"]["colors"]["color-primary"] =
+            serde_json::json!(primary_color);
+    }
+    if source.snapshot.theme_overrides.square_buttons {
+        document_json["theme"]["overrides"]["button_shape"] = serde_json::json!("square");
+    }
+
+    let mut warnings = Vec::new();
+    let mut converted_sections = Vec::with_capacity(source.revision.sections().len());
+    for (section_index, section) in source.revision.sections().iter().enumerate() {
+        let content = source.contents.get(section.id().as_str()).ok_or_else(|| {
+            vec![V1ConversionNote {
+                code: "conversion/section_content_missing",
+                path: format!("contents.{}", section.id().as_str()),
+                message: "The source section has no content to convert.",
+            }]
+        })?;
+        let section_id = section.id().as_str();
+        let section_type = section.section_type().as_str();
+        let mut block_serial = 0usize;
+        let mut block_id = || {
+            block_serial += 1;
+            format!("block-convert-{}-{block_serial}", section_index + 1)
+        };
+        let mut blocks = Vec::new();
+        match content {
+            SectionContent::Hero {
+                title,
+                subtitle,
+                cta_label,
+                cta_url,
+                image: None,
+            } => {
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "heading", "level": 1, "text": title,
+                }));
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "text", "text": subtitle,
+                }));
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "button", "label": cta_label,
+                    "action": {"kind": "external_https", "url": cta_url},
+                }));
+            }
+            SectionContent::Features { items } => {
+                warnings.push(V1ConversionNote {
+                    code: "conversion/feature_structure_flattened",
+                    path: format!("contents.{section_id}.items"),
+                    message: "Feature titles and descriptions become entries in one typed list.",
+                });
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "list",
+                    "items": items.iter().map(|item| format!("{}: {}", item.title, item.description)).collect::<Vec<_>>(),
+                }));
+            }
+            SectionContent::Testimonials { items } => {
+                warnings.push(V1ConversionNote {
+                    code: "conversion/testimonial_structure_flattened",
+                    path: format!("contents.{section_id}.items"),
+                    message: "Quote, author, and attribution text is kept together in plain text blocks.",
+                });
+                for item in items {
+                    let mut text = format!("{}\n\n— {}", item.quote, item.author);
+                    if let Some(attribution) = &item.attribution {
+                        text.push('\n');
+                        text.push_str(attribution);
+                    }
+                    blocks.push(serde_json::json!({
+                        "id": block_id(), "kind": "text", "text": text,
+                    }));
+                }
+            }
+            SectionContent::Cta {
+                title,
+                body,
+                cta_label,
+                cta_url,
+            } => {
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "heading", "level": 2, "text": title,
+                }));
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "text", "text": body,
+                }));
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "button", "label": cta_label,
+                    "action": {"kind": "external_https", "url": cta_url},
+                }));
+            }
+            SectionContent::Footer { links, copyright } => {
+                warnings.push(V1ConversionNote {
+                    code: "conversion/footer_structure_flattened",
+                    path: format!("contents.{section_id}.links"),
+                    message:
+                        "Footer links become separate typed buttons rather than a navigation list.",
+                });
+                for link in links {
+                    blocks.push(serde_json::json!({
+                        "id": block_id(), "kind": "button", "label": link.label,
+                        "action": {"kind": "external_https", "url": link.url},
+                    }));
+                }
+                blocks.push(serde_json::json!({
+                    "id": block_id(), "kind": "text", "text": copyright,
+                }));
+            }
+            SectionContent::Hero { image: Some(_), .. } => unreachable!(
+                "URL-backed hero images are reported as deterministic conversion blockers"
+            ),
+        }
+        converted_sections.push(serde_json::json!({
+            "id": section_id,
+            "type": section_type,
+            "blocks": blocks,
+        }));
+    }
+    document_json["pages"][0]["sections"] = serde_json::Value::Array(converted_sections);
+    let raw = serde_json::to_vec(&document_json).map_err(|_| {
+        vec![V1ConversionNote {
+            code: "conversion/typed_document_invalid",
+            path: "document".to_owned(),
+            message: "Converted content could not be encoded as a typed document.",
+        }]
+    })?;
+    let document = DocumentV2::decode(&raw, funnel_id).map_err(|error| {
+        vec![V1ConversionNote {
+            code: error.code(),
+            path: error.path().unwrap_or("document").to_owned(),
+            message: "The converted content does not satisfy typed document validation.",
+        }]
+    })?;
+    Ok(ConvertedV1Document { document, warnings })
+}
+
+fn is_https_conversion_url(value: &str) -> bool {
+    let Some((scheme, authority)) = value.split_once("://") else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("https")
+        && !authority.is_empty()
+        && !authority.starts_with(['/', '?', '#'])
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -266,6 +650,271 @@ impl FunnelEditorReadCommand {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct FunnelDocumentReadV2Command {
+    funnel_id: String,
+    #[serde(default)]
+    revision_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelDocumentConversionV2Command {
+    funnel_id: String,
+    base_revision_id: String,
+}
+
+impl FunnelDocumentConversionV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if object.get("funnel_id").is_none() || object.get("base_revision_id").is_none() {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        Ok(command)
+    }
+}
+
+impl FunnelDocumentReadV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        if value
+            .as_object()
+            .is_none_or(|object| object.get("funnel_id").is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        if let Some(revision_id) = &command.revision_id {
+            validate_route_id(revision_id)?;
+        }
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelRevisionHistoryReadV2Command {
+    funnel_id: String,
+}
+
+impl FunnelRevisionHistoryReadV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let value: Value = serde_json::from_str(parameters)?;
+        if value
+            .as_object()
+            .is_none_or(|object| object.get("funnel_id").is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelDocumentPreviewV2Command {
+    funnel_id: String,
+    base_revision_id: String,
+    page_id: String,
+    document_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelDocumentEditV2Command {
+    funnel_id: String,
+    base_revision_id: String,
+    page_id: String,
+    document_json: String,
+    operation_id: String,
+    edit: Edit,
+}
+
+struct DeterministicEditIds {
+    operation_id: String,
+    next: u32,
+}
+
+impl IdSource for DeterministicEditIds {
+    fn next_id(&mut self, _kind: IdKind) -> Result<String, eez_domain::document_v2::DocumentError> {
+        self.next = self.next.wrapping_add(1);
+        Ok(format!("{}-{}", self.operation_id, self.next))
+    }
+}
+
+impl FunnelDocumentEditV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        if parameters.len() > MAX_V2_PREVIEW_ENVELOPE_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if [
+            "funnel_id",
+            "base_revision_id",
+            "page_id",
+            "document_json",
+            "operation_id",
+            "edit",
+        ]
+        .iter()
+        .any(|field| object.get(*field).is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        validate_route_id(&command.page_id)?;
+        if command.document_json.len() > eez_domain::document_v2::MAX_RAW_DOCUMENT_BYTES
+            || command.operation_id.len() != 32
+            || !command
+                .operation_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+impl FunnelDocumentPreviewV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        if parameters.len() > MAX_V2_PREVIEW_ENVELOPE_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if ["funnel_id", "base_revision_id", "page_id", "document_json"]
+            .iter()
+            .any(|field| object.get(*field).is_none())
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        validate_route_id(&command.page_id)?;
+        if command.document_json.len() > eez_domain::document_v2::MAX_RAW_DOCUMENT_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelDocumentStageV2Command {
+    funnel_id: String,
+    base_revision_id: String,
+    expected_length: u32,
+    expected_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FunnelDocumentSaveV2Command {
+    funnel_id: String,
+    base_revision_id: String,
+    stage_id: String,
+    expected_length: u32,
+    expected_sha256: String,
+    document_version: u32,
+    schema_version: u32,
+    manifest_version: u32,
+}
+
+impl FunnelDocumentSaveV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        if parameters.len() > MAX_EDITOR_COMMAND_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if [
+            "funnel_id",
+            "base_revision_id",
+            "stage_id",
+            "expected_length",
+            "expected_sha256",
+            "document_version",
+            "schema_version",
+            "manifest_version",
+        ]
+        .iter()
+        .any(|field| !object.contains_key(*field))
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        if !is_lower_hex_sha256(&command.stage_id)
+            || !is_lower_hex_sha256(&command.expected_sha256)
+            || command.expected_length == 0
+            || usize::try_from(command.expected_length)
+                .map_or(true, |length| length > V2_DOCUMENT_STAGE_MAX_BYTES)
+            || command.document_version != 2
+            || command.schema_version != 2
+            || command.manifest_version != 2
+        {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+impl FunnelDocumentStageV2Command {
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        if parameters.len() > MAX_EDITOR_COMMAND_BYTES {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        let value: Value = serde_json::from_str(parameters)?;
+        let object = value
+            .as_object()
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        if [
+            "funnel_id",
+            "base_revision_id",
+            "expected_length",
+            "expected_sha256",
+        ]
+        .iter()
+        .any(|field| !object.contains_key(*field))
+        {
+            return Err(FunnelCommandError::MissingField);
+        }
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        validate_route_id(&command.base_revision_id)?;
+        if command.expected_length == 0
+            || usize::try_from(command.expected_length)
+                .map_or(true, |length| length > V2_DOCUMENT_STAGE_MAX_BYTES)
+            || !is_lower_hex_sha256(&command.expected_sha256)
+        {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct FunnelEditorOrderCommand {
     funnel_id: String,
     base_revision_id: String,
@@ -345,11 +994,25 @@ struct FunnelDeleteResult<'a> {
 
 pub struct Session<'repo, 'database> {
     repository: &'repo Repository<'database>,
+    document_stages: Option<&'repo DocumentStageRepository<'database>>,
 }
 
 impl<'repo, 'database> Session<'repo, 'database> {
     pub fn new(repository: &'repo Repository<'database>) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            document_stages: None,
+        }
+    }
+
+    pub fn with_document_stages(
+        repository: &'repo Repository<'database>,
+        document_stages: &'repo DocumentStageRepository<'database>,
+    ) -> Self {
+        Self {
+            repository,
+            document_stages: Some(document_stages),
+        }
     }
 
     pub async fn execute(
@@ -382,6 +1045,43 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 .await
             }
             CommandHandler::EditorRead => self.execute_editor_read(parameters).await,
+            CommandHandler::DocumentReadV2 => self.execute_document_read_v2(parameters).await,
+            CommandHandler::DocumentEditV2 => self.execute_document_edit_v2(parameters).await,
+            CommandHandler::DocumentConversionPreviewV2 => {
+                self.execute_document_conversion_preview_v2(parameters)
+                    .await
+            }
+            CommandHandler::DocumentConversionCommitV2 => {
+                self.execute_document_conversion_commit_v2(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::MissingIdempotencyKey)?,
+                )
+                .await
+            }
+            CommandHandler::DocumentPreviewV2 => self.execute_document_preview_v2(parameters).await,
+            CommandHandler::DocumentStageV2 => {
+                self.execute_document_stage_v2(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::MissingIdempotencyKey)?,
+                )
+                .await
+            }
+            CommandHandler::RevisionSaveV2 => {
+                self.execute_document_save_v2(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::MissingIdempotencyKey)?,
+                )
+                .await
+            }
+            CommandHandler::RevisionHistoryReadV2 => {
+                self.execute_revision_history_read_v2(parameters).await
+            }
             CommandHandler::EditorPreview => self.execute_editor_preview(parameters).await,
             CommandHandler::RevisionSave => {
                 self.execute_editor_save(
@@ -394,6 +1094,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
             }
             CommandHandler::Create => {
                 self.execute_create(
+                    parameters,
+                    command
+                        .idempotency_key
+                        .ok_or(FunnelCommandError::Internal)?,
+                )
+                .await
+            }
+            CommandHandler::CreateV2 => {
+                self.execute_create_v2(
                     parameters,
                     command
                         .idempotency_key
@@ -469,7 +1178,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.revision_id)
             .await?
             .ok_or(FunnelCommandError::RevisionNotFound)?;
-        decode_snapshot(&record, &command.funnel_id)?;
+        render_published_revision(&record, &command.funnel_id)?;
         let result_json = serde_json::to_string(&serde_json::json!({
             "command_id": FunnelPublishCommand::ID,
             "funnel_id": command.funnel_id,
@@ -561,9 +1270,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_published_revision_by_slug(&command.slug)
             .await?
             .ok_or(FunnelCommandError::SlugNotFound)?;
-        let validated = decode_snapshot(&record, &record.funnel_id)?;
-        let html =
-            Renderer::new().render(&validated.revision, &validated.theme, &validated.contents)?;
+        let html = render_published_revision(&record, &record.funnel_id)?;
         Ok(serde_json::json!({
             "command_id": FunnelPublicReadCommand::ID,
             "revision_id": record.id,
@@ -578,6 +1285,33 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_editor_revision(&command.funnel_id)
             .await?
             .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if record.revision.schema_version == 2 {
+            let document = render_v2::validate_revision_v2(
+                record.revision.schema_version,
+                &record.funnel_id,
+                &record.revision.id,
+                &record.revision.data_json,
+                &record.revision.render_manifest_json,
+            )
+            .map_err(|_| FunnelCommandError::Internal)?;
+            return Ok(serde_json::json!({
+                "command_id": FunnelEditorReadCommand::ID,
+                "schema_version": 2,
+                "funnel": {
+                    "id": record.funnel_id,
+                    "name": record.name,
+                    "slug": record.slug,
+                    "updated_at": record.updated_at,
+                },
+                "base_revision_id": record.head_revision_id,
+                "published_revision_id": record.published_revision_id,
+                "entry_page_id": document.entry_page_id().as_str(),
+                "pages": v2_page_projection(&document),
+            }));
+        }
+        if record.revision.schema_version != 1 {
+            return Err(FunnelCommandError::Internal);
+        }
         let validated = decode_snapshot(&record.revision, &record.funnel_id)?;
         let preview_html = Renderer::new().render_preview(
             &validated.revision,
@@ -613,6 +1347,437 @@ impl<'repo, 'database> Session<'repo, 'database> {
         }))
     }
 
+    async fn execute_document_conversion_preview_v2(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FunnelDocumentConversionV2Command::from_json(parameters)?;
+        let current = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if current.head_revision_id != command.base_revision_id {
+            return Err(FunnelCommandError::StaleEditorRevision);
+        }
+        if current.revision.schema_version != 1 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        let validated = decode_snapshot(&current.revision, &command.funnel_id)?;
+        let conversion = match convert_v1_to_v2(&validated, &command.funnel_id) {
+            Ok(conversion) => conversion,
+            Err(blockers) => {
+                return Ok(serde_json::json!({
+                    "command_id": command_ids::FUNNEL_DOCUMENT_CONVERSION_PREVIEW_V2,
+                    "funnel_id": command.funnel_id,
+                    "base_revision_id": current.head_revision_id,
+                    "conversion_available": false,
+                    "blockers": blockers,
+                    "warnings": [],
+                    "preview_html": null,
+                }));
+            }
+        };
+        let preview_html = render_v2::render_owner_preview(
+            &conversion.document,
+            conversion.document.entry_page_id(),
+        )
+        .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        Ok(serde_json::json!({
+            "command_id": command_ids::FUNNEL_DOCUMENT_CONVERSION_PREVIEW_V2,
+            "funnel_id": command.funnel_id,
+            "base_revision_id": current.head_revision_id,
+            "conversion_available": true,
+            "blockers": [],
+            "warnings": conversion.warnings,
+            "preview_html": preview_html,
+        }))
+    }
+
+    async fn execute_document_conversion_commit_v2(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelDocumentConversionV2Command::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(
+                        idempotency_key,
+                        command_ids::FUNNEL_DOCUMENT_CONVERSION_COMMIT_V2,
+                        None,
+                    )
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                command_ids::FUNNEL_DOCUMENT_CONVERSION_COMMIT_V2,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let current = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if current.head_revision_id != command.base_revision_id {
+            return Err(FunnelCommandError::StaleEditorRevision);
+        }
+        if current.revision.schema_version != 1 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        let validated = decode_snapshot(&current.revision, &command.funnel_id)?;
+        let conversion = convert_v1_to_v2(&validated, &command.funnel_id)
+            .map_err(|_| FunnelCommandError::V2ConversionBlocked)?;
+        let revision_id = uuid::Uuid::new_v4().to_string();
+        let prepared = render_v2::prepare_revision(&conversion.document, &revision_id)
+            .map_err(|_| FunnelCommandError::V2ConversionBlocked)?;
+        let revision = NewRevision {
+            id: revision_id.clone(),
+            funnel_id: command.funnel_id.clone(),
+            schema_version: 2,
+            data_json: prepared.data_json,
+            render_manifest_json: prepared.render_manifest_json,
+        };
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": command_ids::FUNNEL_DOCUMENT_CONVERSION_COMMIT_V2,
+            "funnel_id": command.funnel_id,
+            "base_revision_id": command.base_revision_id,
+            "revision_id": revision_id,
+            "schema_version": 2,
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = self
+            .repository
+            .save_editor_revision(&EditorSaveMutation {
+                command_id: command_ids::FUNNEL_DOCUMENT_CONVERSION_COMMIT_V2,
+                funnel_id: &command.funnel_id,
+                expected_revision_id: &command.base_revision_id,
+                revision: &revision,
+                idempotency_key,
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+            })
+            .await?;
+        mutation_result_to_value(result)
+    }
+
+    async fn execute_document_read_v2(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FunnelDocumentReadV2Command::from_json(parameters)?;
+        let current = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let revision = match command.revision_id.as_deref() {
+            Some(revision_id) => self
+                .repository
+                .get_owned_revision(&command.funnel_id, revision_id)
+                .await?
+                .ok_or(FunnelCommandError::FunnelNotFound)?,
+            None => current.revision.clone(),
+        };
+        if revision.schema_version != 2 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        let document = render_v2::validate_revision_v2(
+            revision.schema_version,
+            &command.funnel_id,
+            &revision.id,
+            &revision.data_json,
+            &revision.render_manifest_json,
+        )
+        .map_err(|_| FunnelCommandError::Internal)?;
+        Ok(serde_json::json!({
+            "command_id": command_ids::FUNNEL_DOCUMENT_READ_V2,
+            "schema_version": 2,
+            "funnel": {
+                "id": current.funnel_id,
+                "name": current.name,
+                "slug": current.slug,
+                "updated_at": current.updated_at,
+            },
+            "base_revision_id": current.head_revision_id,
+            "document_revision_id": revision.id,
+            "published_revision_id": current.published_revision_id,
+            "document_json": revision.data_json,
+            "pages": v2_page_projection(&document),
+        }))
+    }
+
+    async fn execute_revision_history_read_v2(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FunnelRevisionHistoryReadV2Command::from_json(parameters)?;
+        let funnel = self
+            .repository
+            .get_funnel(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let revisions = self
+            .repository
+            .list_revision_summaries(&command.funnel_id)
+            .await?
+            .into_iter()
+            .map(|revision| {
+                serde_json::json!({
+                    "revision_id": revision.id,
+                    "schema_version": revision.schema_version,
+                    "created_at": revision.created_at,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "command_id": command_ids::FUNNEL_REVISION_HISTORY_READ_V2,
+            "funnel_id": funnel.id,
+            "revisions": revisions,
+        }))
+    }
+
+    async fn execute_document_edit_v2(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FunnelDocumentEditV2Command::from_json(parameters)?;
+        let record = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if record.revision.schema_version != 2 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        if record.head_revision_id != command.base_revision_id {
+            return Err(FunnelCommandError::StaleEditorRevision);
+        }
+        render_v2::validate_revision_v2(
+            record.revision.schema_version,
+            &record.funnel_id,
+            &record.revision.id,
+            &record.revision.data_json,
+            &record.revision.render_manifest_json,
+        )
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let document = DocumentV2::decode(command.document_json.as_bytes(), &command.funnel_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let page_id = eez_domain::document_v2::PageId::parse(command.page_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let mut ids = DeterministicEditIds {
+            operation_id: command.operation_id,
+            next: 0,
+        };
+        let outcome = document
+            .apply(command.edit, &mut ids)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let preview_html = render_v2::render_owner_preview(&outcome.document, &page_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let document_json = std::str::from_utf8(outcome.document.canonical_bytes())
+            .map_err(|_| FunnelCommandError::Internal)?;
+        Ok(serde_json::json!({
+            "command_id": command_ids::FUNNEL_DOCUMENT_EDIT_V2,
+            "funnel_id": command.funnel_id,
+            "base_revision_id": command.base_revision_id,
+            "page_id": page_id.as_str(),
+            "document_json": document_json,
+            "focus": outcome.focus,
+            "preview_html": preview_html,
+        }))
+    }
+
+    async fn execute_document_preview_v2(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FunnelDocumentPreviewV2Command::from_json(parameters)?;
+        let record = self
+            .repository
+            .get_editor_revision(&command.funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if record.revision.schema_version != 2 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        render_v2::validate_revision_v2(
+            record.revision.schema_version,
+            &record.funnel_id,
+            &record.revision.id,
+            &record.revision.data_json,
+            &record.revision.render_manifest_json,
+        )
+        .map_err(|_| FunnelCommandError::Internal)?;
+        if record.head_revision_id != command.base_revision_id {
+            return Err(FunnelCommandError::StaleEditorRevision);
+        }
+        let document = DocumentV2::decode(command.document_json.as_bytes(), &command.funnel_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let page_id = eez_domain::document_v2::PageId::parse(command.page_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let preview_html = render_v2::render_owner_preview(&document, &page_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        Ok(serde_json::json!({
+            "command_id": command_ids::FUNNEL_DOCUMENT_PREVIEW_V2,
+            "funnel_id": command.funnel_id,
+            "base_revision_id": command.base_revision_id,
+            "page_id": page_id.as_str(),
+            "preview_html": preview_html,
+        }))
+    }
+
+    async fn execute_document_stage_v2(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelDocumentStageV2Command::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(
+                        idempotency_key,
+                        command_ids::FUNNEL_DOCUMENT_STAGE_V2,
+                        None,
+                    )
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        let Some(document_stages) = self.document_stages else {
+            return Err(FunnelCommandError::Internal);
+        };
+        let result = document_stages
+            .mint(&StageMintMutation {
+                funnel_id: &command.funnel_id,
+                base_revision_id: &command.base_revision_id,
+                expected_length: usize::try_from(command.expected_length)
+                    .map_err(|_| FunnelCommandError::InvalidParameters)?,
+                expected_sha256: &command.expected_sha256,
+                command_id: command_ids::FUNNEL_DOCUMENT_STAGE_V2,
+                idempotency_key,
+                payload_json: &canonical_parameters,
+            })
+            .await?;
+        match result {
+            MutationResult::Stored(result_json) => {
+                serde_json::from_str(&result_json).map_err(|_| FunnelCommandError::Internal)
+            }
+            MutationResult::PayloadMismatch => Err(FunnelCommandError::IdempotencyPayloadMismatch),
+        }
+    }
+
+    async fn execute_document_save_v2(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelDocumentSaveV2Command::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(
+                        idempotency_key,
+                        command_ids::FUNNEL_REVISION_SAVE_V2,
+                        None,
+                    )
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                command_ids::FUNNEL_REVISION_SAVE_V2,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let Some(document_stages) = self.document_stages else {
+            return Err(FunnelCommandError::Internal);
+        };
+        let document_bytes = document_stages
+            .read_for_finalize(
+                &command.funnel_id,
+                &command.base_revision_id,
+                &command.stage_id,
+                usize::try_from(command.expected_length)
+                    .map_err(|_| FunnelCommandError::InvalidParameters)?,
+                &command.expected_sha256,
+            )
+            .await?;
+        let document = DocumentV2::decode(&document_bytes, &command.funnel_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let revision_id = uuid::Uuid::new_v4().to_string();
+        let prepared = render_v2::prepare_revision(&document, &revision_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let revision = NewRevision {
+            id: revision_id.clone(),
+            funnel_id: command.funnel_id.clone(),
+            schema_version: 2,
+            data_json: prepared.data_json,
+            render_manifest_json: prepared.render_manifest_json,
+        };
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": command_ids::FUNNEL_REVISION_SAVE_V2,
+            "funnel_id": command.funnel_id,
+            "base_revision_id": command.base_revision_id,
+            "revision_id": revision_id,
+            "schema_version": 2,
+            "document_sha256": prepared.manifest.document_sha256(),
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = document_stages
+            .save_staged_revision(&StageFinalizeMutation {
+                funnel_id: &command.funnel_id,
+                base_revision_id: &command.base_revision_id,
+                stage_id: &command.stage_id,
+                expected_length: usize::try_from(command.expected_length)
+                    .map_err(|_| FunnelCommandError::InvalidParameters)?,
+                expected_sha256: &command.expected_sha256,
+                command_id: command_ids::FUNNEL_REVISION_SAVE_V2,
+                idempotency_key,
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+                revision: &revision,
+            })
+            .await?;
+        mutation_result_to_value(result)
+    }
+
     async fn execute_editor_preview(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
         let command = FunnelEditorOrderCommand::from_json(parameters)?;
         let record = self
@@ -620,6 +1785,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.base_revision_id)
             .await?
             .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if record.schema_version == 2 {
+            return Err(FunnelCommandError::V2TypedCommandRequired);
+        }
         let validated = decode_snapshot(&record, &command.funnel_id)?;
         let ordered = reorder_snapshot(&validated, &command.section_ids)?;
         let edited = apply_command_settings(&ordered, command.settings.as_ref())?;
@@ -683,6 +1851,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.base_revision_id)
             .await?
             .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if record.schema_version == 2 {
+            return Err(FunnelCommandError::V2TypedCommandRequired);
+        }
         let validated = decode_snapshot(&record, &command.funnel_id)?;
         let ordered = reorder_snapshot(&validated, &command.section_ids)?;
         let mut ordered = apply_command_settings(&ordered, command.settings.as_ref())?;
@@ -742,14 +1913,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
         .map_err(|_| FunnelCommandError::Internal)?;
         let result = self
             .repository
-            .save_editor_revision(
-                &command.funnel_id,
-                &command.base_revision_id,
-                &new_revision,
+            .save_editor_revision(&EditorSaveMutation {
+                command_id: command_ids::FUNNEL_REVISION_SAVE,
+                funnel_id: &command.funnel_id,
+                expected_revision_id: &command.base_revision_id,
+                revision: &new_revision,
                 idempotency_key,
-                &canonical_parameters,
-                &result_json,
-            )
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+            })
             .await?;
         mutation_result_to_value(result)
     }
@@ -808,6 +1980,70 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 &prepared.funnel,
                 &prepared.revision,
                 FunnelCreateCommand::ID,
+                idempotency_key,
+                &canonical_parameters,
+                &result_json,
+            )
+            .await?;
+        mutation_result_to_value(result)
+    }
+
+    async fn execute_create_v2(
+        &self,
+        parameters: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = match FunnelCreateCommandV2::from_json(parameters) {
+            Ok(command) => command,
+            Err(error) => {
+                if self
+                    .repository
+                    .classify_active_receipt(idempotency_key, FunnelCreateCommandV2::ID, None)
+                    .await?
+                    .is_some()
+                {
+                    return Err(FunnelCommandError::IdempotencyPayloadMismatch);
+                }
+                return Err(error);
+            }
+        };
+        let canonical_parameters =
+            serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                FunnelCreateCommandV2::ID,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        let prepared = command.prepare(
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        )?;
+        let result_json = serde_json::to_string(&serde_json::json!({
+            "command_id": FunnelCreateCommandV2::ID,
+            "funnel": {
+                "id": prepared.funnel.id,
+                "name": prepared.funnel.name,
+                "slug": prepared.funnel.slug,
+                "published_revision_id": null,
+            },
+            "initial_revision": {
+                "id": prepared.revision.id,
+                "schema_version": 2,
+            },
+        }))
+        .map_err(|_| FunnelCommandError::Internal)?;
+        let result = self
+            .repository
+            .create_funnel_with_revision(
+                &prepared.funnel,
+                &prepared.revision,
+                FunnelCreateCommandV2::ID,
                 idempotency_key,
                 &canonical_parameters,
                 &result_json,
@@ -1172,6 +2408,52 @@ pub(super) fn decode_snapshot(
     })
 }
 
+pub(crate) fn v2_page_projection(document: &DocumentV2) -> Vec<Value> {
+    document
+        .pages()
+        .iter()
+        .map(|page| {
+            serde_json::json!({
+                "id": page.id().as_str(),
+                "slug": page.slug(),
+                "title": page.title(),
+                "section_count": page.sections().len(),
+                "block_count": page.sections().iter().map(|section| section.blocks().len()).sum::<usize>(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn render_published_revision(
+    record: &RevisionRecord,
+    expected_funnel_id: &str,
+) -> Result<String, FunnelCommandError> {
+    match record.schema_version {
+        1 => {
+            let validated = decode_snapshot(record, expected_funnel_id)?;
+            Renderer::new()
+                .render(&validated.revision, &validated.theme, &validated.contents)
+                .map_err(|_| FunnelCommandError::Internal)
+        }
+        2 => render_v2::render_published(
+            record.schema_version,
+            expected_funnel_id,
+            &record.id,
+            &record.data_json,
+            &record.render_manifest_json,
+        )
+        .map_err(|error| match error {
+            render_v2::V2RenderError::ImagesNotEnabled
+            | render_v2::V2RenderError::FormsNotEnabled
+            | render_v2::V2RenderError::MultiPagePublicRouteUnavailable => {
+                FunnelCommandError::V2PublicationBlocked
+            }
+            _ => FunnelCommandError::Internal,
+        }),
+        _ => Err(FunnelCommandError::Internal),
+    }
+}
+
 pub(super) fn reorder_snapshot(
     source: &ValidatedSnapshot,
     section_ids: &[String],
@@ -1235,6 +2517,9 @@ pub enum FunnelCommandError {
     IdempotencyPayloadMismatch,
     DuplicateSectionOrder,
     StaleEditorRevision,
+    V2ConversionBlocked,
+    V2PublicationBlocked,
+    V2TypedCommandRequired,
     StalePublishedRevision,
     EditorRevisionLimitReached,
     FunnelNotFound,
@@ -1256,29 +2541,16 @@ impl FunnelCommandError {
             Self::IdempotencyPayloadMismatch => "conflict/idempotency_payload_mismatch",
             Self::DuplicateSectionOrder => "validation/order_duplicate",
             Self::StaleEditorRevision => "conflict/edit_stale_revision",
+            Self::V2ConversionBlocked => "conflict/v2_conversion_blocked",
+            Self::V2PublicationBlocked => "conflict/v2_publication_blocked",
+            Self::V2TypedCommandRequired => "conflict/v2_typed_command_required",
             Self::StalePublishedRevision => "conflict/publish_stale_revision",
             Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
             Self::FunnelNotFound => "not_found/funnel",
             Self::RevisionNotFound => "not_found/revision",
             Self::SlugNotFound => "not_found/slug",
-            Self::Storage(RepositoryError::FunnelLimitReached) => "conflict/funnel_limit_reached",
-            Self::Storage(RepositoryError::StaleEditorRevision) => "conflict/edit_stale_revision",
-            Self::Storage(RepositoryError::StalePublishedRevision) => {
-                "conflict/publish_stale_revision"
-            }
-            Self::Storage(RepositoryError::EditorRevisionLimitReached) => {
-                "conflict/revision_limit_reached"
-            }
             Self::UnknownCommand => "validation/operation_not_supported",
-            Self::Storage(RepositoryError::FunnelNotFound) => "not_found/funnel",
-            Self::Storage(RepositoryError::RevisionNotFound) => "not_found/revision",
-            Self::Storage(RepositoryError::InvalidJson | RepositoryError::InvalidField(_)) => {
-                "validation/invalid_json"
-            }
-            Self::Storage(RepositoryError::UnsupportedSchemaVersion(_)) => {
-                "validation/schema_version_unsupported"
-            }
-            Self::Storage(_) => "external/unavailable",
+            Self::Storage(error) => error.code(),
             Self::Internal => "internal/unexpected",
         }
     }
@@ -1353,6 +2625,13 @@ fn validate_route_id(id: &str) -> Result<(), FunnelCommandError> {
         return Err(FunnelCommandError::InvalidParameters);
     }
     Ok(())
+}
+
+fn is_lower_hex_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_public_slug(slug: &str) -> bool {
