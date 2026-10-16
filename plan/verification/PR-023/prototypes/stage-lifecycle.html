@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Temporary save stage prototype</title>
+    <style>
+      :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; color: #17202d; background: #f3f5f8; }
+      * { box-sizing: border-box; }
+      body { max-width: 1080px; margin: 0 auto; padding: 32px 20px 56px; line-height: 1.5; }
+      h1, h2, h3 { line-height: 1.2; }
+      h1 { margin: 0 0 8px; font-size: clamp(1.8rem, 4vw, 2.5rem); }
+      h2 { margin: 0 0 14px; font-size: 1.25rem; }
+      h3 { margin: 0 0 8px; font-size: 1rem; }
+      p { max-width: 78ch; }
+      .lead { color: #435067; font-size: 1.08rem; }
+      .notice { border-left: 4px solid #d58a29; background: #fff8e9; padding: 12px 16px; border-radius: 4px; }
+      section { margin-top: 24px; padding: 20px; background: #fff; border: 1px solid #dce2eb; border-radius: 10px; box-shadow: 0 2px 8px rgb(23 32 45 / 4%); }
+      .state-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; }
+      .state-card { min-width: 0; border: 1px solid #e4e8ef; border-radius: 8px; padding: 12px; background: #fbfcfe; }
+      .state-card dt { color: #59677d; font-size: .82rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+      .state-card dd { margin: 4px 0 0; overflow-wrap: anywhere; font-weight: 600; }
+      .actions, .tabs, .steps { display: flex; flex-wrap: wrap; gap: 8px; }
+      button { border: 1px solid #68758a; border-radius: 6px; padding: 9px 12px; color: #17202d; background: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+      button:hover { background: #edf2f8; }
+      button:focus-visible { outline: 3px solid #175cd3; outline-offset: 2px; }
+      button.primary { color: #fff; border-color: #174ea6; background: #174ea6; }
+      button.primary:hover { background: #103b80; }
+      button[aria-selected="true"] { color: #fff; border-color: #174ea6; background: #174ea6; }
+      button:disabled { color: #677386; border-color: #cdd4de; background: #f4f6f8; cursor: default; }
+      .scenario-description { color: #435067; }
+      .steps { margin-top: 14px; }
+      .steps button { text-align: left; }
+      .steps button[data-done="true"]::before { content: "Done · "; }
+      .event-list { margin: 0; padding-left: 22px; }
+      .event-list li + li { margin-top: 5px; }
+      .live { min-height: 1.6em; color: #174ea6; font-weight: 700; }
+      .small { color: #59677d; font-size: .92rem; }
+      @media (max-width: 560px) { body { padding: 22px 14px 40px; } section { padding: 16px; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Temporary save stage</h1>
+      <p class="lead">Can an upload be retried or cleaned up without saving the wrong funnel revision?</p>
+      <p>This clickable model follows a temporary upload from owner mint through upload, validation, and immutable save. It focuses on lost responses, stale editor heads, and cleanup racing with a save.</p>
+      <p class="notice"><strong>Prototype only:</strong> the IDs, file keys, clock, and revision names below are made up. This page runs in memory; it does not call EezFunnels, D1, R2, or Cloudflare.</p>
+    </header>
+
+    <section aria-labelledby="state-title">
+      <h2 id="state-title">Current funnel state</h2>
+      <div id="state" class="state-grid"></div>
+      <p id="live-message" class="live" role="status" aria-live="polite"></p>
+      <h3>Recent events</h3>
+      <ol id="events" class="event-list"></ol>
+    </section>
+
+    <section aria-labelledby="free-play-title">
+      <h2 id="free-play-title">Try an action</h2>
+      <div class="actions">
+        <button type="button" data-action="MINT">Mint stage</button>
+        <button type="button" data-action="REPLAY_MINT">Retry mint with same key</button>
+        <button type="button" data-action="BEGIN_UPLOAD">Begin upload</button>
+        <button type="button" data-action="FINISH_UPLOAD">Finish current upload</button>
+        <button type="button" data-action="RETRY_SAME_UPLOAD">Retry identical bytes</button>
+        <button type="button" data-action="UPLOAD_DIFFERENT">Try different bytes</button>
+        <button type="button" data-action="SAVE">Save revision</button>
+        <button type="button" data-action="SAVE_LOST">Save, then lose response</button>
+        <button type="button" data-action="SAVE_CHANGED">Reuse save key with changed data</button>
+        <button type="button" data-action="CHANGE_HEAD">Simulate another editor save</button>
+        <button type="button" data-action="ADVANCE_5">Advance 5 minutes</button>
+        <button type="button" data-action="ADVANCE_16">Advance 16 minutes</button>
+        <button type="button" data-action="CLEANUP">Run cleanup</button>
+        <button type="button" data-action="REPLAY_SAVE">Retry save with same key</button>
+        <button type="button" class="primary" data-action="RESET">Reset model</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">Guided walkthroughs</h2>
+      <div id="scenario-tabs" class="tabs" role="tablist" aria-label="Save stage scenarios"></div>
+      <div id="scenario-panel" role="tabpanel" tabindex="0"></div>
+    </section>
+
+    <script>
+      const scenarios = [
+        {
+          id: "lost-response",
+          title: "Lost save response",
+          description: "A save commits, its response is lost, and cleanup removes the temporary stage before the owner retries.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Commit the save and lose its response", action: { type: "SAVE_LOST" } },
+            { label: "Clean up the consumed stage", action: { type: "CLEANUP" } },
+            { label: "Retry the same save key", action: { type: "REPLAY_SAVE" } },
+          ],
+        },
+        {
+          id: "upload-retry",
+          title: "Upload retry",
+          description: "The same upload can be acknowledged again after success; a different byte sequence is rejected by the stage digest.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Retry identical bytes", action: { type: "RETRY_SAME_UPLOAD" } },
+            { label: "Try different bytes", action: { type: "UPLOAD_DIFFERENT" } },
+          ],
+        },
+        {
+          id: "interrupted-upload",
+          title: "Interrupted upload",
+          description: "The client disconnects while a registered R2 write may still be running. Cleanup retires the attempt after its deadline and grace; any late completion remains orphaned and cannot be saved.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Disconnect the upload client", action: { type: "INTERRUPT_UPLOAD" } },
+            { label: "Advance past its deadline and grace period", action: { type: "ADVANCE_5" } },
+            { label: "Retire the upload attempt", action: { type: "CLEANUP" } },
+            { label: "Observe a late R2 completion", action: { type: "FINISH_UPLOAD" } },
+            { label: "Remove the unreferenced object", action: { type: "CLEANUP" } },
+          ],
+        },
+        {
+          id: "mint-expired-replay",
+          title: "Mint receipt after expiry",
+          description: "An exact mint replay returns the original result during the receipt window, while current stage checks still reject an expired capability.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Advance beyond stage expiry", action: { type: "ADVANCE_16" } },
+            { label: "Expire and clean the stage", action: { type: "CLEANUP" } },
+            { label: "Replay the same mint key", action: { type: "REPLAY_MINT" } },
+            { label: "Try to upload with the terminal stage", action: { type: "BEGIN_UPLOAD" } },
+          ],
+        },
+        {
+          id: "mint-consumed-replay",
+          title: "Mint receipt after save",
+          description: "Consuming a stage does not change its stored mint result; the save receipt remains the authoritative replay for the committed revision.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Save the immutable revision", action: { type: "SAVE" } },
+            { label: "Replay the same mint key", action: { type: "REPLAY_MINT" } },
+            { label: "Replay the save receipt", action: { type: "REPLAY_SAVE" } },
+          ],
+        },
+        {
+          id: "stale-head",
+          title: "Stale editor head",
+          description: "Another save advances the editor head after upload. The stale stage cannot create a revision or claim a success receipt.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Advance the editor head elsewhere", action: { type: "CHANGE_HEAD" } },
+            { label: "Attempt the stale save", action: { type: "SAVE" } },
+          ],
+        },
+        {
+          id: "cleanup-wins",
+          title: "Cleanup wins",
+          description: "The temporary stage expires and cleanup wins its D1 state change before the finalizer commits.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Advance beyond stage expiry", action: { type: "ADVANCE_16" } },
+            { label: "Expire and clean up the stage", action: { type: "CLEANUP" } },
+            { label: "Attempt to save the expired stage", action: { type: "SAVE" } },
+          ],
+        },
+        {
+          id: "late-upload",
+          title: "Late upload",
+          description: "Cleanup retires an overdue upload attempt. A late R2 write can only become an unreferenced orphan; it cannot be attached to the stage.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance past its deadline and grace period", action: { type: "ADVANCE_5" } },
+            { label: "Retire the upload attempt", action: { type: "CLEANUP" } },
+            { label: "Finish the late R2 write", action: { type: "FINISH_UPLOAD" } },
+          ],
+        },
+      ];
+
+      function initialState() {
+        return {
+          minute: 0,
+          editorHead: "rev-7",
+          publishedRevision: "rev-6",
+          stage: null,
+          stageSerial: 1,
+          mintReceipt: null,
+          saveReceipt: null,
+          attemptSerial: 1,
+          attempt: null,
+          revisionCount: 7,
+          lastEvent: "Ready. The current editor head is rev-7.",
+          events: ["The owner opened the funnel editor."],
+        };
+      }
+
+      function addEvent(state, message) {
+        state.lastEvent = message;
+        state.events = [...state.events, message].slice(-8);
+        return state;
+      }
+
+      function reduce(state, action) {
+        const next = structuredClone(state);
+        const now = next.minute;
+        switch (action.type) {
+          case "MINT": {
+            if (next.stage && ["issued", "uploaded"].includes(next.stage.status)) {
+              return addEvent(next, "Mint denied: an active stage already exists for this editor head.");
+            }
+            const id = `stage-demo-${next.stageSerial}`;
+            next.stageSerial += 1;
+            next.stage = {
+              id,
+              status: "issued",
+              baseHead: next.editorHead,
+              digest: "sha256:demo-bytes-a",
+              length: 16384,
+              mintedAt: now,
+              expiresAt: now + 15,
+              objectKey: null,
+              objectPresent: false,
+              objectOrphaned: false,
+              metadataRemoved: false,
+            };
+            next.mintReceipt = {
+              key: `mint-key-${id}`,
+              stageId: id,
+              expiresAt: now + 15,
+              receiptExpiresAt: now + 1440,
+            };
+            return addEvent(next, `Mint succeeded. Stage ${id} is bound to ${next.editorHead} and expires in 15 minutes.`);
+          }
+          case "REPLAY_MINT": {
+            if (!next.mintReceipt) return addEvent(next, "Mint replay denied: no matching receipt exists.");
+            if (now >= next.mintReceipt.receiptExpiresAt) {
+              return addEvent(next, "Mint receipt expired after 24 hours. Re-read the editor head and mint with a fresh idempotency key.");
+            }
+            const terminal = !next.stage || next.stage.metadataRemoved || ["expired", "consumed"].includes(next.stage.status);
+            if (terminal) {
+              return addEvent(next, `Mint replay returned the original stage ${next.mintReceipt.stageId} and original expiry minute ${next.mintReceipt.expiresAt}. The current stage is terminal, so upload/save still reject it.`);
+            }
+            return addEvent(next, `Mint replay returned the original stage ${next.mintReceipt.stageId} and original expiry minute ${next.mintReceipt.expiresAt}; current stage state is checked separately.`);
+          }
+          case "BEGIN_UPLOAD": {
+            if (!next.stage || next.stage.status !== "issued" || now >= next.stage.expiresAt) {
+              return addEvent(next, "Upload denied: no unexpired issued stage is available.");
+            }
+            if (next.attempt?.status === "receiving") {
+              return addEvent(next, "Upload already has an active attempt.");
+            }
+            const id = `attempt-${next.attemptSerial}`;
+            next.attemptSerial += 1;
+            next.attempt = { id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false };
+            return addEvent(next, `Upload attempt ${id} registered in D1 before its private R2 write.`);
+          }
+          case "INTERRUPT_UPLOAD": {
+            if (!next.attempt || next.attempt.status !== "receiving") {
+              return addEvent(next, "Upload interruption recorded with no active receiving attempt.");
+            }
+            return addEvent(next, "The client disconnected. The R2 writer may continue, so the attempt remains registered until its deadline and cleanup grace pass.");
+          }
+          case "FINISH_UPLOAD": {
+            if (!next.attempt) return addEvent(next, "Upload finish denied: no attempt was registered.");
+            if (next.attempt.status === "abandoned") {
+              next.attempt.objectPresent = true;
+              next.stage.objectOrphaned = true;
+              return addEvent(next, "Late R2 write finished after its lease was retired. It is an orphan and cannot become the stage object.");
+            }
+            if (next.stage?.status === "uploaded" && next.stage.digest === "sha256:demo-bytes-a") {
+              return addEvent(next, "Upload retry acknowledged: the same bytes are already staged; no new R2 write was needed.");
+            }
+            if (next.attempt.status !== "receiving") return addEvent(next, "Upload finish denied: the attempt is no longer receiving.");
+            next.attempt.objectPresent = true;
+            if (now > next.attempt.deadline || !next.stage || now >= next.stage.expiresAt || next.stage.status !== "issued") {
+              next.attempt.status = "abandoned";
+              next.stage.objectOrphaned = true;
+              return addEvent(next, "Upload completion lost its D1 compare-and-set. The written object is unreferenced and cannot be finalized.");
+            }
+            next.attempt.status = "complete";
+            next.stage.status = "uploaded";
+            next.stage.objectPresent = true;
+            next.stage.objectKey = next.attempt.objectKey;
+            return addEvent(next, "Upload completed. D1 now points the stage at the verified private object.");
+          }
+          case "RETRY_SAME_UPLOAD": {
+            if (next.stage?.status === "uploaded" && next.stage.digest === "sha256:demo-bytes-a" && next.stage.length === 16384) {
+              return addEvent(next, "Same-byte retry acknowledged from stage metadata; R2 was not written again.");
+            }
+            return addEvent(next, "Same-byte retry is not available until the original upload succeeds.");
+          }
+          case "UPLOAD_DIFFERENT":
+            return addEvent(next, "Upload rejected: this stage accepts only its exact bound length and digest.");
+          case "CHANGE_HEAD":
+            next.editorHead = "rev-8";
+            next.revisionCount += 1;
+            return addEvent(next, "A separate editor save advanced the head to rev-8.");
+          case "ADVANCE_5":
+            next.minute += 5;
+            return addEvent(next, "Five minutes passed. The two-minute upload deadline and two-minute cleanup grace have elapsed.");
+          case "ADVANCE_16":
+            next.minute += 16;
+            return addEvent(next, "Sixteen minutes passed. The 15-minute upload stage has expired.");
+          case "CLEANUP": {
+            if (next.attempt?.status === "receiving" && now >= next.attempt.deadline + 2) {
+              next.attempt.status = "abandoned";
+              return addEvent(next, "Cleanup changed the overdue attempt from receiving to abandoned before queuing object deletion.");
+            }
+            if (next.stage?.status === "consumed") {
+              next.stage.objectPresent = false;
+              next.stage.metadataRemoved = true;
+              if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
+              return addEvent(next, "Cleanup removed the consumed stage and its temporary object. The immutable D1 revision remains.");
+            }
+            if (next.stage && now >= next.stage.expiresAt && next.stage.status !== "consumed") {
+              next.stage.status = "expired";
+              next.stage.objectPresent = false;
+              next.stage.metadataRemoved = true;
+              if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
+              return addEvent(next, "Cleanup made the stage terminal in D1, then removed its temporary object. Finalization can no longer win.");
+            }
+            if (next.attempt?.status === "abandoned" && next.attempt.objectPresent) {
+              next.attempt.objectPresent = false;
+              return addEvent(next, "Cleanup removed the unreferenced abandoned-attempt object.");
+            }
+            return addEvent(next, "Cleanup found no expired stage or retired upload to remove.");
+          }
+          case "SAVE":
+          case "SAVE_LOST":
+          case "SAVE_CHANGED": {
+            const key = "save-key-1";
+            if (next.saveReceipt && next.saveReceipt.key === key && action.type === "SAVE_CHANGED") {
+              return addEvent(next, "Idempotency mismatch: the same save key was reused with a changed stage/digest payload; the stage was not read.");
+            }
+            if (next.saveReceipt && next.saveReceipt.key === key && now < next.saveReceipt.receiptExpiresAt) {
+              return addEvent(next, `Receipt-first replay returned ${next.saveReceipt.revisionId} without looking up the stage.`);
+            }
+            if (!next.stage || next.stage.status !== "uploaded" || next.stage.metadataRemoved || now >= next.stage.expiresAt) {
+              return addEvent(next, "Save denied: no live uploaded stage is available; no receipt or revision was written.");
+            }
+            if (next.stage.baseHead !== next.editorHead) {
+              return addEvent(next, "Save conflict/editor_head_changed: the staged base is stale; no success receipt or revision was written.");
+            }
+            const revisionId = `rev-${next.revisionCount + 1}`;
+            next.revisionCount += 1;
+            next.editorHead = revisionId;
+            next.stage.status = "consumed";
+            next.saveReceipt = {
+              key,
+              stageId: next.stage.id,
+              digest: next.stage.digest,
+              baseHead: next.stage.baseHead,
+              revisionId,
+              receiptExpiresAt: now + 1440,
+            };
+            if (action.type === "SAVE_LOST") {
+              return addEvent(next, `Save committed ${revisionId}, then the response was lost. The 24-hour receipt is still active.`);
+            }
+            return addEvent(next, `Save committed ${revisionId}; the editor head moved, while the published pointer stayed at ${next.publishedRevision}.`);
+          }
+          case "REPLAY_SAVE":
+            if (next.saveReceipt && now < next.saveReceipt.receiptExpiresAt) {
+              return addEvent(next, `Receipt-first replay returned ${next.saveReceipt.revisionId}; stage lookup and R2 reads were skipped.`);
+            }
+            return addEvent(next, "Save replay unavailable: no active matching receipt exists.");
+          case "RESET":
+            return initialState();
+          default:
+            return addEvent(next, "Unknown action was ignored.");
+        }
+      }
+
+      let state = initialState();
+      let activeScenario = scenarios[0].id;
+      const completedSteps = new Set();
+      const stateElement = document.getElementById("state");
+      const eventsElement = document.getElementById("events");
+      const messageElement = document.getElementById("live-message");
+      const tabsElement = document.getElementById("scenario-tabs");
+      const panelElement = document.getElementById("scenario-panel");
+
+      function addStateCard(label, value) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "state-card";
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const detail = document.createElement("dd");
+        detail.textContent = value;
+        wrapper.append(term, detail);
+        stateElement.append(wrapper);
+      }
+
+      function renderState() {
+        stateElement.replaceChildren();
+        const stage = state.stage;
+        addStateCard("Elapsed time", `${state.minute} minutes after the walkthrough started`);
+        addStateCard("Current editor head", state.editorHead);
+        addStateCard("Published revision", state.publishedRevision);
+        addStateCard("Saved revisions", String(state.revisionCount));
+        addStateCard("Stage status", stage ? stage.status : "no stage");
+        addStateCard("Stage ID", stage ? stage.id : "—");
+        addStateCard("Stage base head", stage ? stage.baseHead : "—");
+        addStateCard("Stage expires", stage ? `minute ${stage.expiresAt}` : "—");
+        addStateCard("Expected upload", stage ? `${stage.length} bytes · ${stage.digest}` : "—");
+        addStateCard("Temporary object", stage?.objectKey ?? "—");
+        addStateCard("Attempt", state.attempt ? `${state.attempt.id} · ${state.attempt.status}` : "none");
+        addStateCard("Attempt object", state.attempt ? `${state.attempt.objectPresent ? "present" : "absent"}${stage?.objectOrphaned ? " · unreferenced" : ""}` : "—");
+        addStateCard("Mint receipt", state.mintReceipt ? `${state.mintReceipt.key} · stage expiry minute ${state.mintReceipt.expiresAt} · receipt expiry minute ${state.mintReceipt.receiptExpiresAt}` : "none");
+        addStateCard("Save receipt", state.saveReceipt ? `${state.saveReceipt.key} → ${state.saveReceipt.revisionId}` : "none");
+        addStateCard("Stage metadata", stage?.metadataRemoved ? "removed" : "retained");
+        messageElement.textContent = state.lastEvent;
+        eventsElement.replaceChildren();
+        for (const event of state.events) {
+          const item = document.createElement("li");
+          item.textContent = event;
+          eventsElement.append(item);
+        }
+      }
+
+      function dispatch(action) {
+        state = reduce(state, action);
+        renderState();
+        renderScenario();
+      }
+
+      function selectScenario(scenarioId) {
+        activeScenario = scenarioId;
+        state = initialState();
+        completedSteps.clear();
+        renderTabs();
+        renderState();
+        renderScenario();
+      }
+
+      function renderTabs() {
+        tabsElement.replaceChildren();
+        for (const scenario of scenarios) {
+          const tab = document.createElement("button");
+          tab.type = "button";
+          tab.id = `tab-${scenario.id}`;
+          tab.setAttribute("role", "tab");
+          tab.setAttribute("aria-selected", String(scenario.id === activeScenario));
+          tab.setAttribute("aria-controls", "scenario-panel");
+          tab.tabIndex = scenario.id === activeScenario ? 0 : -1;
+          tab.textContent = scenario.title;
+          tab.addEventListener("click", () => selectScenario(scenario.id));
+          tabsElement.append(tab);
+        }
+      }
+
+      function renderScenario() {
+        const scenario = scenarios.find((item) => item.id === activeScenario);
+        panelElement.replaceChildren();
+        panelElement.setAttribute("aria-labelledby", `tab-${scenario.id}`);
+        const title = document.createElement("h3");
+        title.textContent = scenario.title;
+        const description = document.createElement("p");
+        description.className = "scenario-description";
+        description.textContent = scenario.description;
+        const steps = document.createElement("div");
+        steps.className = "steps";
+        for (const [index, step] of scenario.steps.entries()) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.done = String(completedSteps.has(index));
+          button.textContent = `${index + 1}. ${step.label}`;
+          button.addEventListener("click", () => {
+            dispatch(step.action);
+            completedSteps.add(index);
+            renderScenario();
+          });
+          steps.append(button);
+        }
+        panelElement.append(title, description, steps);
+      }
+
+      document.querySelectorAll("button[data-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (button.dataset.action === "RESET") completedSteps.clear();
+          dispatch({ type: button.dataset.action });
+        });
+      });
+
+      tabsElement.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+        const tabs = [...tabsElement.querySelectorAll('[role="tab"]')];
+        const current = tabs.indexOf(document.activeElement);
+        const offset = event.key === "ArrowRight" ? 1 : -1;
+        const next = tabs[(current + offset + tabs.length) % tabs.length];
+        event.preventDefault();
+        next.focus();
+        selectScenario(next.id.slice("tab-".length));
+      });
+
+      renderTabs();
+      renderState();
+      renderScenario();
+    </script>
+  </body>
+</html>

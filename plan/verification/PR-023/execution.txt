@@ -1,0 +1,37 @@
+Task-ID: PR-023
+Purpose: compare the local staged-upload wire candidates; both candidates persist the same complete canonical document.
+
+Reported Node benchmark
+- Timestamp: 2026-10-16T01:29:35.549Z.
+- Node: v24.19.0; logical CPUs: 5.
+- Load immediately before the run: 0.28, 0.16, 0.11; no competing benchmark process was active.
+- Observed command wall time: 22.459 seconds.
+- Commands: `node --check scripts/benchmark-pr023-transport.mjs`; `node scripts/benchmark-pr023-transport.mjs`.
+- The separate CPU-profile diagnostic was not included in reported timings.
+
+Trial and results
+- 32 fixtures: 4 page counts × 4 document sizes × 2 edit families.
+- Five alternating warm-up pairs and 100 deterministically shuffled measured pairs per fixture; exactly 50 snapshot-first and 50 patch-first pairs each.
+- 6,400 measured candidate executions total (3,200 per candidate); zero errors.
+- Every typed patch expanded to byte-identical canonical output and the same SHA-256 as its snapshot counterpart.
+- Nine explicit negative checks rejected: unknown version, duplicate page ID, duplicate block ID, colliding slug, missing navigation target, cyclic page graph, malformed JSON, excessive nesting depth, and incorrect patch base digest.
+- Modeled client round trips per save: 3 for both candidates (mint command, binary stage upload, final save command); provider operations remain model inputs rather than observed traffic.
+- Median fixture upload-byte reduction: 98.38896% for sparse edits and 39.93208% for broad edits that change 60% of text blocks. Each family weights all 16 size/page-count fixtures equally.
+- Combined p95 local transform ratios, typed patch / snapshot: 1.7800 at 16,384 bytes; 1.7936 at 131,072; 1.8506 at 524,288; 1.8622 at 1,048,575.
+- Document and upload boundaries accepted 1,048,575 and 1,048,576 bytes and rejected 1,048,577 bytes.
+- The local typed-patch candidate passes its fixture gates for existing `text` block replacement. It is not a production-equivalent Worker/D1/R2 comparison. D22 therefore selects full-snapshot transfer for initial V2 runtime; no patch payload is accepted. Every saved revision remains a full canonical snapshot. A future patch decision requires runtime-equivalent correctness, latency, memory, and provider-operation evidence.
+
+Profiler and measurement limits
+- The separate CPU profile's largest named work was garbage collection and fixture `canonicalize`; `runPatch` was the next application frame. This identifies local JSON traversal/allocation as the measured limiter, not Worker CPU or network transfer.
+- The deterministic serializer covers the generated ASCII-property-name and safe-integer subset. It is not a full RFC 8785 implementation. The fixture validator is not a production schema validator.
+- The process memory snapshot is not attributable to either candidate because fixtures and results remain resident; it is excluded from the gate.
+- No Worker, D1, R2, browser, network, concurrent save, storage interruption, CAS race, render, or 100-revision restore ran. D1/R2 operation counts are modeled from D22. Pricing is documented in `research.md`; no project-account limit or bill was measured.
+
+Stage lifecycle model
+- Source artifact: `prototypes/stage-lifecycle.html`.
+- Headless assertions: `node scripts/test-pr023-stage-lifecycle.mjs`.
+- Verified expired and consumed mint replay, terminal capability rejection, receipt-first save replay after stage cleanup, stale-head rejection with no receipt/revision, same-byte upload retry, interrupted client request, retirement of the overdue attempt, late R2 completion as an orphan, save rejection, and cleanup of the orphan object.
+- The standalone model passed JavaScript syntax checking and its headless state assertions. It does not prove Worker, D1, or R2 runtime behavior.
+
+Fingerprints
+- SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
