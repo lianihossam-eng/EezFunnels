@@ -89,12 +89,18 @@ impl ApiError {
             | "conflict/idempotency_payload_mismatch"
             | "conflict/funnel_limit_reached"
             | "conflict/edit_stale_revision"
-            | "conflict/revision_limit_reached" => (
+            | "conflict/revision_limit_reached"
+            | "conflict/v2_conversion_blocked"
+            | "conflict/v2_publication_blocked"
+            | "conflict/v2_typed_command_required"
+            | "conflict/v2_stage_active" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
                 if code == "conflict/funnel_limit_reached" {
                     "The workspace has reached its funnel limit."
+                } else if code == "conflict/v2_conversion_blocked" {
+                    "This legacy revision cannot be converted to V2 without losing content."
                 } else {
                     "The request conflicts with the current state."
                 },
@@ -236,6 +242,22 @@ mod tests {
             ErrorCategory::Conflict,
             409,
         ),
+        (
+            "conflict/v2_conversion_blocked",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/v2_publication_blocked",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/v2_typed_command_required",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        ("conflict/v2_stage_active", ErrorCategory::Conflict, 409),
         ("rate_limit/exceeded", ErrorCategory::RateLimit, 429),
         ("external/timeout", ErrorCategory::External, 504),
         ("external/unavailable", ErrorCategory::External, 503),
