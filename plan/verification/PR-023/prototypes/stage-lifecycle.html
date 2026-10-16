@@ -88,6 +88,11 @@
     </section>
 
     <script>
+      const MAX_OUTSTANDING_STAGE_SLOTS = 10;
+      const MAX_OUTSTANDING_ATTEMPT_SLOTS = 10;
+      const TOMBSTONE_RETENTION_MINUTES = 1440;
+      const ORPHAN_RETENTION_MINUTES = 1440;
+
       const scenarios = [
         {
           id: "lost-response",
@@ -117,7 +122,7 @@
         {
           id: "interrupted-upload",
           title: "Interrupted upload",
-          description: "The client disconnects while a registered R2 write may still be running. Cleanup retires the attempt after its deadline and grace; any late completion remains orphaned and cannot be saved.",
+          description: "The client disconnects while a registered R2 write may still be running. Its unique key is fenced after the lease; confirmed writers can be deleted immediately, while any later completion is found by the scheduled R2 prefix sweep.",
           steps: [
             { label: "Mint an upload stage", action: { type: "MINT" } },
             { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
@@ -130,8 +135,8 @@
         },
         {
           id: "writer-quiescence",
-          title: "Wait for writer quiescence",
-          description: "Passing the upload deadline and grace period only retires the attempt. Cleanup retains its tombstone until the writer is confirmed quiescent, then records a post-quiescence absence check.",
+          title: "Early cleanup after writer quiescence",
+          description: "When a late writer is confirmed quiescent, cleanup can delete its orphan immediately and release the attempt slot before the 24-hour tombstone retention expires.",
           steps: [
             { label: "Mint an upload stage", action: { type: "MINT" } },
             { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
@@ -140,6 +145,32 @@
             { label: "Try cleanup before quiescence is known", action: { type: "CLEANUP" } },
             { label: "Confirm the writer has stopped", action: { type: "CONFIRM_WRITER_QUIESCENT" } },
             { label: "Observe absence after quiescence", action: { type: "CLEANUP" } },
+          ],
+        },
+        {
+          id: "bounded-staging-capacity",
+          title: "Bounded staging capacity",
+          description: "The installation retains at most ten stage metadata slots and ten tracked D1 attempt rows. Full capacity fails closed until cleanup releases a reservation; this is not a cap on unresolved provider-side R2 operations.",
+          steps: [
+            { label: "Fill installation stage capacity", action: { type: "FILL_STAGE_CAPACITY" } },
+            { label: "Try to mint a stage", action: { type: "MINT" } },
+          ],
+        },
+        {
+          id: "late-write-after-tombstone-retirement",
+          title: "Late write after tombstone retirement",
+          description: "An abandoned D1 attempt row retires after a fixed retention even if its simulated R2 writer remains unresolved. If that external writer later creates an object under its unique key, the scheduled prefix sweep can find it. The ten-row quota does not cap unresolved provider-side operations.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin an upload attempt", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance past the attempt lease", action: { type: "ADVANCE_5" } },
+            { label: "Retire the attempt", action: { type: "CLEANUP" } },
+            { label: "Advance one day", action: { type: "ADVANCE_1440" } },
+            { label: "Expire stage metadata", action: { type: "CLEANUP" } },
+            { label: "Compact the attempt tombstone", action: { type: "CLEANUP" } },
+            { label: "Complete the late R2 write", action: { type: "LATE_WRITE_AFTER_TOMBSTONE_RETIRE" } },
+            { label: "Advance one day", action: { type: "ADVANCE_1440" } },
+            { label: "Run the scheduled stage-prefix sweep", action: { type: "SWEEP_R2" } },
           ],
         },
         {
@@ -265,12 +296,16 @@
           publishedRevision: "rev-6",
           stage: null,
           stageSerial: 1,
+          outstandingStageSlots: 0,
           mintReceipts: [],
           retiredStages: [],
           retiredAttempts: [],
+          pendingLateWriterKeys: [],
           saveReceipts: [],
           attemptSerial: 1,
           attempt: null,
+          outstandingAttemptSlots: 0,
+          orphanObjects: [],
           revisionCount: 7,
           lastEvent: "Ready. The current editor head is rev-7.",
           events: ["The owner opened the funnel editor."],
@@ -296,6 +331,35 @@
         state.retiredStages.push({ stage, attempt, reason });
         state.stage = null;
         state.attempt = null;
+      }
+
+      function removeStageMetadata(state, stage) {
+        if (stage.metadataRemoved) return;
+        stage.metadataRemoved = true;
+        state.outstandingStageSlots -= 1;
+      }
+
+      function retireAttemptTombstone(state, attempt) {
+        if (attempt.capacityReleased) return;
+        if (!attempt.writerQuiescent) state.pendingLateWriterKeys.push(attempt.objectKey);
+        attempt.capacityReleased = true;
+        state.outstandingAttemptSlots -= 1;
+      }
+
+      function retainR2Orphan(state, attempt) {
+        if (!attempt.objectPresent) return;
+        state.orphanObjects.push({ key: attempt.objectKey, createdAt: state.minute });
+        attempt.objectPresent = false;
+      }
+
+      function deleteR2Orphan(state, attempt) {
+        state.orphanObjects = state.orphanObjects.filter((object) => object.key !== attempt.objectKey);
+        attempt.objectPresent = false;
+      }
+
+      function markAttemptAbandoned(state, attempt) {
+        attempt.status = "abandoned";
+        attempt.tombstoneRetireAt ??= state.minute + TOMBSTONE_RETENTION_MINUTES;
       }
 
       function replayMint(state, receipt) {
@@ -334,6 +398,9 @@
               return addEvent(next, "Mint denied: an active stage already exists for this editor head.");
             }
             retireCurrentStage(next);
+            if (next.outstandingStageSlots >= MAX_OUTSTANDING_STAGE_SLOTS) {
+              return addEvent(next, "Mint denied: installation staging capacity is full; cleanup must release a stage slot first.");
+            }
             next.mintReceipts = next.mintReceipts.filter((receipt) => now < receipt.receiptExpiresAt);
             const id = `stage-demo-${next.stageSerial}`;
             next.stageSerial += 1;
@@ -350,6 +417,7 @@
               objectOrphaned: false,
               metadataRemoved: false,
             };
+            next.outstandingStageSlots += 1;
             next.mintReceipts.push({
               key: `mint-key-${id}`,
               stageId: id,
@@ -369,12 +437,16 @@
             if (next.attempt?.status === "receiving") {
               return addEvent(next, "Upload already has an active attempt.");
             }
+            if (next.outstandingAttemptSlots >= MAX_OUTSTANDING_ATTEMPT_SLOTS) {
+              return addEvent(next, "Upload denied: installation upload-attempt capacity is full; cleanup must release an attempt slot first.");
+            }
             if (next.attempt?.status === "abandoned") {
               next.retiredAttempts.push(structuredClone(next.attempt));
             }
             const id = `attempt-${next.attemptSerial}`;
             next.attemptSerial += 1;
-            next.attempt = { id, stageId: next.stage.id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false };
+            next.attempt = { id, stageId: next.stage.id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false, tombstoneRetireAt: null, capacityReleased: false };
+            next.outstandingAttemptSlots += 1;
             return addEvent(next, `Upload attempt ${id} registered in D1 before its private R2 write.`);
           }
           case "INTERRUPT_UPLOAD": {
@@ -390,6 +462,7 @@
               next.attempt.objectPresent = true;
               next.attempt.writerQuiescent = true;
               next.stage.objectOrphaned = true;
+              retainR2Orphan(next, next.attempt);
               return addEvent(next, "Late R2 write finished after its lease was retired. It is an orphan and cannot become the stage object.");
             }
             if (next.stage?.status === "uploaded" && next.stage.digest === "sha256:demo-bytes-a") {
@@ -398,9 +471,10 @@
             if (next.attempt.status !== "receiving") return addEvent(next, "Upload finish denied: the attempt is no longer receiving.");
             next.attempt.objectPresent = true;
             next.attempt.writerQuiescent = true;
-            if (now > next.attempt.deadline || !next.stage || now >= next.stage.expiresAt || next.stage.status !== "issued") {
-              next.attempt.status = "abandoned";
-              next.stage.objectOrphaned = true;
+            if (now >= next.attempt.deadline || !next.stage || now >= next.stage.expiresAt || next.stage.status !== "issued") {
+              markAttemptAbandoned(next, next.attempt);
+              if (next.stage) next.stage.objectOrphaned = true;
+              retainR2Orphan(next, next.attempt);
               return addEvent(next, "Upload completion lost its D1 compare-and-set. The written object is unreferenced and cannot be finalized.");
             }
             next.attempt.status = "complete";
@@ -414,10 +488,11 @@
             const retiredStage = next.retiredStages.find((item) => item.attempt && ["receiving", "abandoned"].includes(item.attempt.status) && !item.attempt.writerQuiescent);
             const attempt = retiredAttempt ?? retiredStage?.attempt;
             if (attempt) {
-              attempt.status = "abandoned";
+              markAttemptAbandoned(next, attempt);
               attempt.objectPresent = true;
               attempt.objectOrphaned = true;
               attempt.writerQuiescent = true;
+              retainR2Orphan(next, attempt);
               return addEvent(next, `Late R2 write for ${attempt.id} finished after its attempt was retired. Its object remains an orphan and cannot be finalized.`);
             }
             return addEvent(next, "Late upload finish denied: no unsettled retired writer is eligible to complete.");
@@ -442,7 +517,26 @@
             return addEvent(next, "Sixteen minutes passed. The 15-minute upload stage has expired.");
           case "ADVANCE_1440":
             next.minute += 1440;
-            return addEvent(next, "Twenty-four hours passed. Active command receipts have expired.");
+            return addEvent(next, "Twenty-four hours passed. Active command receipts and object-age cleanup windows have advanced.");
+          case "FILL_STAGE_CAPACITY":
+            next.outstandingStageSlots = MAX_OUTSTANDING_STAGE_SLOTS;
+            return addEvent(next, "Other funnels filled the installation's ten outstanding stage slots.");
+          case "FILL_ATTEMPT_CAPACITY":
+            next.outstandingAttemptSlots = MAX_OUTSTANDING_ATTEMPT_SLOTS;
+            return addEvent(next, "Other upload attempts filled the installation's ten outstanding attempt slots.");
+          case "LATE_WRITE_AFTER_TOMBSTONE_RETIRE":
+            {
+              const key = next.pendingLateWriterKeys.shift();
+              if (!key) return addEvent(next, "Late R2 completion denied: no unresolved external writer remains after tombstone retirement.");
+              next.orphanObjects.push({ key, createdAt: now });
+              return addEvent(next, `The unresolved R2 operation for ${key} completed after its D1 attempt row retired. Its unique key is now an orphan for the scheduled prefix sweep.`);
+            }
+          case "SWEEP_R2": {
+            const priorCount = next.orphanObjects.length;
+            next.orphanObjects = next.orphanObjects.filter((object) => now < object.createdAt + ORPHAN_RETENTION_MINUTES);
+            const removed = priorCount - next.orphanObjects.length;
+            return addEvent(next, `Scheduled R2 stage-prefix sweep removed ${removed} unreferenced object${removed === 1 ? "" : "s"} at least 24 hours old.`);
+          }
           case "CONFIRM_WRITER_QUIESCENT": {
             const attempt = trackedAttempts(next).find((item) => item.status === "abandoned" && !item.writerQuiescent);
             if (!attempt) return addEvent(next, "No abandoned writer is waiting for quiescence confirmation.");
@@ -451,68 +545,100 @@
           }
           case "CLEANUP": {
             if (next.attempt?.status === "receiving" && now >= next.attempt.deadline + 2) {
-              next.attempt.status = "abandoned";
+              markAttemptAbandoned(next, next.attempt);
               return addEvent(next, "Cleanup changed the overdue attempt from receiving to abandoned before queuing object deletion.");
             }
             const currentCompletedObjectPresent = next.attempt?.status === "complete" && next.attempt.objectPresent;
             if (next.stage?.status === "consumed" && (!next.stage.metadataRemoved || next.stage.objectPresent || currentCompletedObjectPresent)) {
               next.stage.objectPresent = false;
-              next.stage.metadataRemoved = true;
-              if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
+              removeStageMetadata(next, next.stage);
+              if (next.attempt?.status === "complete") {
+                next.attempt.objectPresent = false;
+                next.attempt.cleanupConfirmed = true;
+                retireAttemptTombstone(next, next.attempt);
+              }
               return addEvent(next, "Cleanup removed the consumed stage and its temporary object. The immutable D1 revision remains.");
             }
             const currentStageNeedsCleanup = next.stage && (!next.stage.metadataRemoved || next.stage.objectPresent || currentCompletedObjectPresent);
             if (next.stage && now >= next.stage.expiresAt && next.stage.status !== "consumed" && currentStageNeedsCleanup) {
               next.stage.status = "expired";
               next.stage.objectPresent = false;
-              next.stage.metadataRemoved = true;
-              if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
+              removeStageMetadata(next, next.stage);
+              if (next.attempt?.status === "complete") {
+                next.attempt.objectPresent = false;
+                next.attempt.cleanupConfirmed = true;
+                retireAttemptTombstone(next, next.attempt);
+              }
               return addEvent(next, "Cleanup made the stage terminal in D1, then removed its temporary object. Finalization can no longer win.");
             }
             if (next.attempt?.status === "abandoned" && next.attempt.writerQuiescent && !next.attempt.cleanupConfirmed) {
-              next.attempt.objectPresent = false;
+              deleteR2Orphan(next, next.attempt);
               next.attempt.cleanupConfirmed = true;
+              retireAttemptTombstone(next, next.attempt);
               return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for ${next.attempt.id}.`);
             }
-            for (const attempt of next.retiredAttempts) {
+            if (next.attempt?.status === "abandoned" && !next.attempt.writerQuiescent && now >= next.attempt.tombstoneRetireAt) {
+              const id = next.attempt.id;
+              retireAttemptTombstone(next, next.attempt);
+              next.attempt = null;
+              return addEvent(next, `Compacted abandoned attempt ${id} after its 24-hour tombstone retention. Its permanent unique key remains covered by the scheduled R2 prefix sweep.`);
+            }
+            for (let index = 0; index < next.retiredAttempts.length; index += 1) {
+              const attempt = next.retiredAttempts[index];
               if (attempt.status === "receiving") {
                 if (now >= attempt.deadline + 2) {
-                  attempt.status = "abandoned";
+                  markAttemptAbandoned(next, attempt);
                   return addEvent(next, `Cleanup retired overdue writer ${attempt.id} before queuing its unique object key for deletion.`);
                 }
                 continue;
               }
               if (attempt.status === "abandoned" && attempt.writerQuiescent && !attempt.cleanupConfirmed) {
-                attempt.objectPresent = false;
+                deleteR2Orphan(next, attempt);
                 attempt.cleanupConfirmed = true;
+                retireAttemptTombstone(next, attempt);
                 return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for retired attempt ${attempt.id}.`);
+              }
+              if (attempt.status === "abandoned" && !attempt.writerQuiescent && now >= attempt.tombstoneRetireAt) {
+                next.retiredAttempts.splice(index, 1);
+                retireAttemptTombstone(next, attempt);
+                return addEvent(next, `Compacted abandoned attempt ${attempt.id} after its 24-hour tombstone retention. Its permanent unique key remains covered by the scheduled R2 prefix sweep.`);
               }
             }
             for (const entry of next.retiredStages) {
               if (entry.attempt?.status === "receiving") {
                 if (now >= entry.attempt.deadline + 2) {
-                  entry.attempt.status = "abandoned";
+                  markAttemptAbandoned(next, entry.attempt);
                   return addEvent(next, `Cleanup retired overdue writer ${entry.attempt.id} before queuing its unique object key for deletion.`);
                 }
                 continue;
               }
               if (entry.attempt?.status === "abandoned" && entry.attempt.writerQuiescent && !entry.attempt.cleanupConfirmed) {
-                entry.attempt.objectPresent = false;
+                deleteR2Orphan(next, entry.attempt);
                 entry.attempt.cleanupConfirmed = true;
+                retireAttemptTombstone(next, entry.attempt);
                 return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for retired attempt ${entry.attempt.id}.`);
+              }
+              if (entry.attempt?.status === "abandoned" && !entry.attempt.writerQuiescent && now >= entry.attempt.tombstoneRetireAt) {
+                retireAttemptTombstone(next, entry.attempt);
+                entry.attempt = null;
+                return addEvent(next, "Compacted an abandoned retired-stage attempt after 24 hours. The unique key remains covered by the scheduled R2 prefix sweep.");
               }
               const stageCanBeCleaned = ["consumed", "discarded", "expired"].includes(entry.stage.status) || now >= entry.stage.expiresAt;
               if (stageCanBeCleaned && !entry.stage.metadataRemoved) {
                 if (entry.stage.status !== "consumed" && entry.stage.status !== "discarded") entry.stage.status = "expired";
                 entry.stage.objectPresent = false;
-                entry.stage.metadataRemoved = true;
-                if (entry.attempt?.status === "complete") entry.attempt.objectPresent = false;
+                removeStageMetadata(next, entry.stage);
+                if (entry.attempt?.status === "complete") {
+                  entry.attempt.objectPresent = false;
+                  entry.attempt.cleanupConfirmed = true;
+                  retireAttemptTombstone(next, entry.attempt);
+                }
                 return addEvent(next, `Cleanup removed retired ${entry.reason} stage ${entry.stage.id} and its temporary object; its mint receipt remains replayable.`);
               }
             }
             const unresolvedAttempt = trackedAttempts(next).find((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent);
             if (unresolvedAttempt) {
-              return addEvent(next, `Cleanup retained ${unresolvedAttempt.id}; its writer is not confirmed quiescent.`);
+              return addEvent(next, `Cleanup retains ${unresolvedAttempt.id} until its 24-hour tombstone retention elapses; late objects are also found by the R2 prefix sweep.`);
             }
             return addEvent(next, "Cleanup found no expired stage or retired upload to remove.");
           }
@@ -608,6 +734,8 @@
         addStateCard("Stage expires", stage ? `minute ${stage.expiresAt}` : "—");
         addStateCard("Expected upload", stage ? `${stage.length} bytes · ${stage.digest}` : "—");
         addStateCard("Temporary object", stage?.objectKey ?? "—");
+        addStateCard("Tracked D1 stage slots", `${state.outstandingStageSlots} / ${MAX_OUTSTANDING_STAGE_SLOTS}`);
+        addStateCard("Tracked D1 attempt slots", `${state.outstandingAttemptSlots} / ${MAX_OUTSTANDING_ATTEMPT_SLOTS}`);
         addStateCard("Attempt", state.attempt ? `${state.attempt.id} · ${state.attempt.status} · writer ${state.attempt.writerQuiescent ? "quiescent" : "unconfirmed"}` : "none");
         addStateCard("Attempt object", state.attempt ? `${state.attempt.objectPresent ? "present" : "absent"}${stage?.objectOrphaned ? " · unreferenced" : ""}` : "—");
         const mintReceipt = state.mintReceipts.at(-1);
@@ -616,6 +744,8 @@
         addStateCard("Retired stages", String(state.retiredStages.length));
         const unresolvedRetiredAttempts = trackedAttempts(state).filter((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent).length;
         addStateCard("Retired upload attempts", `${state.retiredAttempts.length} · ${unresolvedRetiredAttempts} writer(s) unsettled`);
+        addStateCard("External R2 writes without a D1 row", String(state.pendingLateWriterKeys.length));
+        addStateCard("Orphan objects in R2", String(state.orphanObjects.length));
         const saveReceipt = state.saveReceipts.at(-1);
         addStateCard("Latest save receipt", saveReceipt ? `${saveReceipt.key} → ${saveReceipt.revisionId}` : "none");
         addStateCard("Retained save receipts", String(state.saveReceipts.length));

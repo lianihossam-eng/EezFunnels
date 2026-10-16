@@ -6,29 +6,90 @@ import vm from "node:vm";
 const html = readFileSync(resolve("plan/verification/PR-023/prototypes/stage-lifecycle.html"), "utf8");
 const script = html.split("<script>", 2)[1]?.split("</script>", 1)[0];
 assert(script, "stage lifecycle prototype script is missing");
-const pureReducer = script.slice(script.indexOf("const scenarios = ["), script.indexOf("let state = initialState();"));
+const pureReducer = script.slice(script.indexOf("const MAX_OUTSTANDING_STAGE_SLOTS ="), script.indexOf("let state = initialState();"));
 assert(pureReducer.length > 0, "stage lifecycle reducer is missing");
 const context = vm.createContext({ structuredClone: globalThis.structuredClone });
 vm.runInContext(`${pureReducer}\nglobalThis.testApi = { scenarios, initialState, reduce };`, context);
 const { scenarios, initialState, reduce } = context.testApi;
 
-function run(actions) {
+function runActions(actions) {
   let state = initialState();
-  for (const type of actions) state = reduce(state, { type });
+  for (const action of actions) state = reduce(state, action);
   return state;
+}
+
+function run(actions) {
+  return runActions(actions.map((type) => ({ type })));
+}
+
+function runScenario(id, stepCount = null) {
+  const scenario = scenarios.find((item) => item.id === id);
+  assert(scenario, `missing walkthrough scenario: ${id}`);
+  const steps = stepCount === null ? scenario.steps : scenario.steps.slice(0, stepCount);
+  return runActions(steps.map((step) => step.action));
 }
 
 assert(scenarios.some((scenario) => scenario.id === "interrupted-upload"));
 
+const concurrentMint = run(["MINT", "MINT"]);
+assert.equal(concurrentMint.stageSerial, 2);
+assert.equal(concurrentMint.mintReceipts.length, 1);
+assert.match(concurrentMint.lastEvent, /active stage already exists/);
+
+const exhaustedStageCapacity = initialState();
+exhaustedStageCapacity.outstandingStageSlots = 10;
+const rejectedMint = reduce(exhaustedStageCapacity, { type: "MINT" });
+assert.equal(rejectedMint.stage, null);
+assert.equal(rejectedMint.stageSerial, 1);
+assert.match(rejectedMint.lastEvent, /staging capacity is full/);
+
+const exhaustedAttemptCapacity = run(["MINT"]);
+exhaustedAttemptCapacity.outstandingAttemptSlots = 10;
+const rejectedAttempt = reduce(exhaustedAttemptCapacity, { type: "BEGIN_UPLOAD" });
+assert.equal(rejectedAttempt.attempt, null);
+assert.equal(rejectedAttempt.attemptSerial, 1);
+assert.match(rejectedAttempt.lastEvent, /upload-attempt capacity is full/);
+
+const attemptDeadlineBoundary = run(["MINT", "BEGIN_UPLOAD"]);
+attemptDeadlineBoundary.minute = attemptDeadlineBoundary.attempt.deadline;
+const deadlineRejected = reduce(attemptDeadlineBoundary, { type: "FINISH_UPLOAD" });
+assert.equal(deadlineRejected.stage.status, "issued");
+assert.notEqual(deadlineRejected.stage.status, "uploaded");
+
+const tombstoneRetiredBeforeLateWrite = runScenario("late-write-after-tombstone-retirement", 7);
+assert.equal(tombstoneRetiredBeforeLateWrite.attempt, null);
+assert.equal(tombstoneRetiredBeforeLateWrite.outstandingAttemptSlots, 0);
+assert.deepEqual(Array.from(tombstoneRetiredBeforeLateWrite.pendingLateWriterKeys), ["private/stage/attempt-1"]);
+assert.equal(tombstoneRetiredBeforeLateWrite.orphanObjects.length, 0);
+const lateWriteCompleted = runScenario("late-write-after-tombstone-retirement", 8);
+assert.equal(lateWriteCompleted.attempt, null);
+assert.equal(lateWriteCompleted.outstandingAttemptSlots, 0);
+assert.equal(lateWriteCompleted.pendingLateWriterKeys.length, 0);
+assert.equal(lateWriteCompleted.orphanObjects.length, 1);
+assert.equal(lateWriteCompleted.orphanObjects[0].key, "private/stage/attempt-1");
+assert.match(lateWriteCompleted.lastEvent, /completed after its D1 attempt row retired/);
+const retiredTombstoneLateWrite = runScenario("late-write-after-tombstone-retirement");
+assert.equal(retiredTombstoneLateWrite.retiredAttempts.length, 0);
+assert.equal(retiredTombstoneLateWrite.attempt, null);
+assert.equal(retiredTombstoneLateWrite.outstandingAttemptSlots, 0);
+assert.equal(retiredTombstoneLateWrite.outstandingStageSlots, 0);
+assert.equal(retiredTombstoneLateWrite.pendingLateWriterKeys.length, 0);
+assert.equal(retiredTombstoneLateWrite.orphanObjects.length, 0);
+assert.ok(retiredTombstoneLateWrite.events.some((event) => /removed 1 unreferenced object/.test(event)));
+assert.match(run(["LATE_WRITE_AFTER_TOMBSTONE_RETIRE"]).lastEvent, /no unresolved external writer remains/);
+
 const expiredMint = run(["MINT", "ADVANCE_16", "CLEANUP", "REPLAY_MINT", "BEGIN_UPLOAD"]);
 assert.equal(expiredMint.stage.status, "expired");
 assert.equal(expiredMint.stage.metadataRemoved, true);
+assert.equal(expiredMint.outstandingStageSlots, 0);
 assert.match(expiredMint.lastEvent, /Upload denied/);
 
 const consumedMint = run([
   "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "SAVE", "CLEANUP", "REPLAY_MINT", "REPLAY_SAVE",
 ]);
 assert.equal(consumedMint.revisionCount, 8);
+assert.equal(consumedMint.outstandingStageSlots, 0);
+assert.equal(consumedMint.outstandingAttemptSlots, 0);
 assert.equal(consumedMint.saveReceipts.at(-1).revisionId, "rev-8");
 assert.equal(consumedMint.saveReceipts.length, 1);
 assert.match(consumedMint.lastEvent, /Receipt-first replay/);
@@ -157,7 +218,7 @@ const writerQuiescence = run([
 assert.equal(writerQuiescence.attempt.status, "abandoned");
 assert.equal(writerQuiescence.attempt.writerQuiescent, false);
 assert.equal(writerQuiescence.attempt.cleanupConfirmed, false);
-assert.match(writerQuiescence.lastEvent, /not confirmed quiescent/);
+assert.match(writerQuiescence.lastEvent, /24-hour tombstone retention/);
 const writerQuiescenceConfirmed = run([
   "MINT", "BEGIN_UPLOAD", "ADVANCE_5", "CLEANUP", "CLEANUP", "CONFIRM_WRITER_QUIESCENT", "CLEANUP",
 ]);
@@ -189,4 +250,4 @@ assert.equal(uploadRetry.stage.status, "uploaded");
 assert.equal(uploadRetry.stage.objectPresent, true);
 assert.equal(uploadRetry.revisionCount, 7);
 
-process.stdout.write("PR-023 stage lifecycle assertions passed: mint/save receipt replay and expiry, distinct consecutive save keys, changed-payload rejection, stale-head recovery, replacement cleanup, late upload tombstones, retry-before-remint cleanup, interrupted upload cleanup, and retry identity.\n");
+process.stdout.write("PR-023 stage lifecycle assertions passed: ten-slot stage and attempt quotas, exclusive upload deadline, 24-hour tombstone retirement, late-orphan prefix sweeping, mint/save receipt replay and expiry, distinct consecutive save keys, changed-payload rejection, stale-head recovery, replacement cleanup, retry-before-remint cleanup, and retry identity.\n");

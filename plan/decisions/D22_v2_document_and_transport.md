@@ -62,6 +62,18 @@ establish Cloudflare production behavior.
    stale base head is discarded and allowed to expire and clean up. Same key
    with changed input remains an idempotency mismatch.
 
+   Bound staging admission atomically in D1: an installation may have at most
+   ten outstanding stage slots, and a funnel may have at most one nonterminal
+   stage. The slot is reserved in the same mutation that creates the stage and
+   mint receipt, and is released only after the stage is terminal and its D1
+   metadata and referenced temporary object are cleaned. If capacity is full,
+   mint returns the existing `rate_limit/exceeded` error without creating a
+   stage or receipt. Concurrent mint requests must contend on the same D1 capacity
+   state; a preflight count outside the mutation is not sufficient. This bounds
+   successfully staged bytes referenced by live stages to at most 10 MiB per
+   installation. It does not bound retry-generated orphans or unresolved R2
+   writes; the attempt-row quota below also does not provide that bound.
+
    The stage ID is a 256-bit bearer capability, not an owner credential. A
    separate binary HTTPS `PUT` sends it as `Authorization: Bearer <stage_id>`
    and writes only temporary bytes to a server-generated private R2 key. The
@@ -110,6 +122,22 @@ establish Cloudflare production behavior.
    require a newly minted stage. Finalization re-reads and independently
    verifies the object and stage row.
 
+   Bound D1 metadata admission separately: at most ten attempt-row quota slots
+   may be held per installation across `receiving`, `abandoned`, and
+   completed-but-not-cleaned attempts. Reserve a slot atomically with the
+   `receiving` D1 row before issuing `PUT`; return the stable
+   `rate_limit/exceeded` error without touching R2 when full. Release a slot
+   after a settled writer and successful cleanup, or when the fixed tombstone
+   retention below expires. Each attempt can write at most 1 MiB under a
+   globally unique key. These slots bound simultaneously tracked D1 attempt
+   rows; they do not establish a strict cap on unresolved provider-side R2
+   operations or aggregate orphan bytes after a tombstone expires. Because
+   Cloudflare does not document a fixed cancellation or settlement guarantee
+   for an interrupted `put()`, an unresolved writer may outlive its D1 row and
+   overlap a later admitted attempt. The scheduled prefix sweep below is a
+   repeatable discovery and deletion path, not a provider-side concurrency or
+   storage-volume bound.
+
    Every R2 `PUT` has a fresh `attempt_id` and object key. Before writing R2,
    the Worker creates a D1 `receiving` attempt row under a live-stage predicate
    requiring `state = issued` and `expires_at > database_now`, with a hard
@@ -133,21 +161,33 @@ establish Cloudflare production behavior.
    the conditional update must win before deletion is queued. An upload
    completing after that transition cannot change the attempt or stage, so its
    key can never become referenced. It may still create or recreate an orphan
-   after an earlier delete. Keep the abandoned-attempt tombstone and its key
-   until the R2 writer is known to be quiescent and a delete initiated after
-   that evidence succeeds (or a post-quiescence read observes absence). A
-   timeout alone is not writer quiescence unless it cancels the R2 operation.
-   If no settled or guaranteed cancellation outcome can be recorded, retain the
-   tombstone and continue bounded reconciliation; one early successful delete
-   is insufficient to retire it. No object key is written to R2 before its
-   attempt row exists.
+   after an earlier delete. If the writer is confirmed quiescent, cleanup may
+   delete the orphan immediately; a timeout alone is not evidence of
+   quiescence. Otherwise retain the D1 tombstone for 24 hours after abandonment,
+   then retire that row and release its attempt slot. A late write can no
+   longer be referenced: every attempt key is globally unique, never reused,
+   and the abandoned attempt has no transition that can publish its key into
+   stage metadata. This finite fencing rule replaces indefinite per-attempt
+   tombstone retention.
+
+   A scheduled R2 stage-prefix sweeper is the cleanup authority after
+   tombstone retirement. It lists only `private/stage/`, uses each object's
+   provider `uploaded` timestamp, and deletes objects at least 24 hours old only
+   when no live D1 stage references the key. A late write that completes after
+   an earlier sweep has a new upload timestamp and is removed by a later sweep.
+   The Worker must paginate R2 listing, keep each invocation bounded, persist
+   its cursor, and restart from the beginning after completing a full pass so
+   newly inserted keys are not permanently skipped. D1 tombstone retirement
+   never depends on a post-quiescence absence check. The sweeper and its
+   progress across failures are required in PR-024 before enabling V2 staging;
+   local Wrangler tests cannot establish production Cron or R2 scheduling.
+   No object key is written to R2 before its attempt row exists.
 
    Stage expiration first changes the stage to terminal `expired` in D1 and
    denies new attempt completion or finalization; an already-running PUT may
-   still leave a tracked orphan. A cleanup record retains every generated
-   attempt key until the writer-quiescence and post-quiescence deletion
-   condition above is met; R2 deletion follows the D1 transition and is
-   repeatable. Successful revisions contain their full bytes and never
+   still leave an orphan. The scheduled prefix sweep finds such objects after
+   the per-attempt tombstone is removed. Successful revisions contain their
+   full bytes and never
    reference staging objects. Finalization reads and
    verifies the bounded object before its D1 batch. If cleanup wins the stage
    predicate, no revision is committed; if finalization wins before expiry, it
