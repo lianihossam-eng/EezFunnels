@@ -38,7 +38,7 @@ Use only skills relevant to the current Task-ID. TDD and project validation appl
 | Task-ID | Skills to use | Why and limit |
 |:--|:--|:--|
 | PR-022 | `tdd`, `principle-prove-it-works`, `principle-experience-first` | Publication controls expose existing commands; CAS, replay, and public-route tests prove correctness. |
-| PR-023 | `research`, `prototype`, `benchmark-checklist`, `principle-type-system-discipline` | Compare bounded transfer models and preserve distinct 16 KiB, 1 MiB, and MCP limits. |
+| PR-023 | `research`, `prototype`, `benchmark-checklist`, `domain-modeling`, `principle-type-system-discipline`, `no-comments`, `interrogate` | Compare bounded transfer models, model the immutable document contract, challenge cross-phase dependencies, and preserve distinct 16 KiB, 1 MiB, and MCP limits. |
 | PR-024 | `architect`, `codebase-design`, `domain-modeling`, `tdd`; optional Impeccable only after the engine pilot | Build typed editing on the accepted V2 model; use a design critique only for an unresolved rendered interaction. |
 | PR-025 | `domain-modeling`, `tdd`, `principle-prove-it-works`; optional Impeccable for the rendered picker | UI review can improve picker states; R2 digest, authorization, retention, and GC need direct tests. |
 | PR-026 | `principle-experience-first`, `tdd`; optional Impeccable after the engine pilot | Refine themes and responsive states. Playwright/axe, keyboard, screen-reader, and contrast checks are the evidence. |
