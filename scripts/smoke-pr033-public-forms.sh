@@ -71,6 +71,10 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         connection.close()
         return status, content, response_headers
 
+    def assert_no_store(status, headers):
+        assert headers.get("cache-control") == "no-store", (status, headers)
+        assert "etag" not in headers, (status, headers)
+
     def wait_for_worker():
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
@@ -460,6 +464,205 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert "ada@example.test" not in result["context_json"], context
         assert "options" not in result["context_json"], context
 
+        seed_id_query = subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--json", "--command",
+                "SELECT submission_id FROM public_form_submissions WHERE marketing_opt_in = 0 LIMIT 1",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        seed_result = find_mapping(json.loads(seed_id_query), "submission_id")
+        assert seed_result is not None, seed_id_query
+        seed_id = seed_result["submission_id"]
+        seed_command = f"""
+            WITH RECURSIVE sequence(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < 52
+            )
+            INSERT INTO public_form_submissions (
+                submission_id, funnel_id, revision_id, page_id, form_id, submission_key,
+                field_values_json, request_consent_acknowledged,
+                request_consent_copy_version, request_consent_copy,
+                request_consent_recorded_at, marketing_opt_in,
+                marketing_opt_in_copy_version, marketing_opt_in_copy,
+                marketing_opt_in_recorded_at, submitted_at, expires_at
+            )
+            SELECT
+                printf('00000000-0000-4000-8000-%012x', sequence.n), source.funnel_id,
+                source.revision_id, source.page_id, source.form_id,
+                printf('00000000-0000-4000-8000-%012x', sequence.n + 1000),
+                source.field_values_json, source.request_consent_acknowledged,
+                source.request_consent_copy_version, source.request_consent_copy,
+                source.request_consent_recorded_at, source.marketing_opt_in,
+                source.marketing_opt_in_copy_version, source.marketing_opt_in_copy,
+                source.marketing_opt_in_recorded_at, unixepoch(), unixepoch() + 86400
+            FROM sequence CROSS JOIN (
+                SELECT * FROM public_form_submissions WHERE submission_id = '{seed_id}'
+            ) AS source;
+            UPDATE public_form_submissions SET submitted_at = unixepoch()
+            WHERE funnel_id = '{funnel_id}';
+        """
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", seed_command,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        leads_path = f"/api/funnels/{funnel_id}/leads"
+        page_status, page_body, page_headers = request(
+            "GET", leads_path, headers={"If-None-Match": '"stale"'}
+        )
+        assert page_status == 200, (page_status, page_body)
+        assert_no_store(page_status, page_headers)
+        page_one = json.loads(page_body)
+        leads_one = page_one["leads"]
+        assert len(leads_one) == 50, page_one
+        assert page_one["next_cursor"], page_one
+        assert len({lead["submission_id"] for lead in leads_one}) == 50, page_one
+        assert all(lead["submitted_at"] == leads_one[0]["submitted_at"] for lead in leads_one), page_one
+        assert [
+            (lead["submitted_at"], lead["submission_id"]) for lead in leads_one
+        ] == sorted(
+            [(lead["submitted_at"], lead["submission_id"]) for lead in leads_one],
+            reverse=True,
+        ), page_one
+        page_json = page_body.decode()
+        for forbidden in [
+            "ada@example.test",
+            "Ada Lovelace",
+            "I agree to be contacted about this request.",
+            "Send me occasional product news.",
+            "revision_id",
+            "submission_key",
+            "answers",
+        ]:
+            assert forbidden not in page_json, (forbidden, page_json)
+
+        page_two_status, page_two_body, page_two_headers = request(
+            "GET", f"{leads_path}?cursor={page_one['next_cursor']}"
+        )
+        assert page_two_status == 200, (page_two_status, page_two_body)
+        assert_no_store(page_two_status, page_two_headers)
+        page_two = json.loads(page_two_body)
+        leads_two = page_two["leads"]
+        assert len(leads_two) == 5, page_two
+        assert page_two["next_cursor"] is None, page_two
+        assert not ({lead["submission_id"] for lead in leads_one} & {lead["submission_id"] for lead in leads_two})
+        assert all(lead["submitted_at"] == leads_one[0]["submitted_at"] for lead in leads_two), page_two
+
+        unchecked_lead = next(
+            lead for lead in leads_one + leads_two if not lead["marketing_opt_in"]
+        )
+        detail_id = unchecked_lead["submission_id"]
+        detail_path = f"/api/funnels/{funnel_id}/leads/{detail_id}"
+        detail_status, detail_body, detail_headers = request(
+            "GET", detail_path, headers={"If-None-Match": '"stale"'}
+        )
+        assert detail_status == 200, (detail_status, detail_body)
+        assert_no_store(detail_status, detail_headers)
+        detail = json.loads(detail_body)
+        assert [answer["name"] for answer in detail["answers"]] == ["name", "email", "interest"], detail
+        assert detail["answers"][0]["value"] == "Ada Lovelace", detail
+        assert detail["answers"][1]["value"] == "ada@example.test", detail
+        assert detail["answers"][2]["value"] is None, detail
+        assert detail["request_consent"]["acknowledged"] is True, detail
+        assert detail["request_consent"]["copy"] == "I agree to be contacted about this request.", detail
+        assert detail["request_consent"]["recorded_at"] > 0, detail
+        assert detail["marketing_opt_in"] is False, detail
+        assert detail["marketing_consent"]["copy"] == "Send me occasional product news.", detail
+        assert detail["marketing_consent"]["recorded_at"] > 0, detail
+        assert "revision_id" not in detail and "submission_key" not in detail, detail
+
+        invalid_cursor_status, invalid_cursor_body, invalid_cursor_headers = request(
+            "GET", f"{leads_path}?cursor=invalid"
+        )
+        assert invalid_cursor_status == 400, invalid_cursor_status
+        assert json.loads(invalid_cursor_body)["code"] == "validation/invalid_query", invalid_cursor_body
+        assert_no_store(invalid_cursor_status, invalid_cursor_headers)
+        detail_query_status, detail_query_body, detail_query_headers = request(
+            "GET", f"{detail_path}?unexpected=true"
+        )
+        assert detail_query_status == 400, detail_query_status
+        assert json.loads(detail_query_body)["code"] == "validation/invalid_query", detail_query_body
+        assert_no_store(detail_query_status, detail_query_headers)
+        method_status, _, method_headers = request("POST", leads_path)
+        assert method_status == 405, method_status
+        assert_no_store(method_status, method_headers)
+        malformed_path_status, _, malformed_path_headers = request(
+            "GET", f"{detail_path}/extra"
+        )
+        assert malformed_path_status == 404, malformed_path_status
+        assert_no_store(malformed_path_status, malformed_path_headers)
+        host_status, _, host_headers = request(
+            "GET", leads_path, headers={"Host": "not-allowed.invalid"}
+        )
+        assert host_status == 403, host_status
+        assert_no_store(host_status, host_headers)
+
+        other_funnel_status, _, other_funnel_headers = request(
+            "GET", f"/api/funnels/other-funnel/leads/{detail_id}"
+        )
+        assert other_funnel_status == 404, other_funnel_status
+        assert_no_store(other_funnel_status, other_funnel_headers)
+
+        no_marketing_id = leads_two[0]["submission_id"]
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command",
+                f"UPDATE public_form_submissions SET marketing_opt_in = 0, marketing_opt_in_copy_version = NULL, marketing_opt_in_copy = NULL, marketing_opt_in_recorded_at = NULL WHERE submission_id = '{no_marketing_id}'",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        no_marketing_status, no_marketing_body, no_marketing_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/leads/{no_marketing_id}"
+        )
+        assert no_marketing_status == 200, (no_marketing_status, no_marketing_body)
+        assert_no_store(no_marketing_status, no_marketing_headers)
+        no_marketing_detail = json.loads(no_marketing_body)
+        assert no_marketing_detail["marketing_opt_in"] is False, no_marketing_detail
+        assert no_marketing_detail["marketing_consent"] is None, no_marketing_detail
+
+        expired_id = leads_two[1]["submission_id"]
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command",
+                f"UPDATE public_form_submissions SET submitted_at = unixepoch() - 10, expires_at = unixepoch() - 1 WHERE submission_id = '{expired_id}'",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        expired_status, _, expired_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/leads/{expired_id}"
+        )
+        assert expired_status == 404, expired_status
+        assert_no_store(expired_status, expired_headers)
+        next_page_status, next_page_body, next_page_headers = request(
+            "GET", f"{leads_path}?cursor={page_one['next_cursor']}"
+        )
+        assert next_page_status == 200, (next_page_status, next_page_body)
+        assert_no_store(next_page_status, next_page_headers)
+        next_page = json.loads(next_page_body)
+        assert expired_id not in {lead["submission_id"] for lead in next_page["leads"]}, next_page
+
         subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
@@ -495,7 +698,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
 
         log.close()
         assert "ada@example.test" not in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8")
-        print("PR-033 local Worker/D1 public form, consent, idempotency, retention, and rate-limit flow passed")
+        print("PR-033/039 local Worker/D1 public form, lead inbox, consent, paging, expiry, and privacy flow passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

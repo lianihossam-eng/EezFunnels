@@ -11,7 +11,9 @@ use eez_domain::document_v2::{
     validate_form_submission, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
 use eez_render::document_v2::validate_revision_v2;
-use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
+use eez_storage::repository::{
+    NewPublicFormSubmission, PublicFormLeadCursor, PublicFormSubmissionResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -96,7 +98,7 @@ pub async fn fetch(
     let method = request.method().as_str().to_owned();
     let correlation_id = normalize_correlation_id(request.headers_mut());
 
-    let response = if !request_host_allowed(&env, request.headers()) {
+    let mut response = if !request_host_allowed(&env, request.headers()) {
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
@@ -126,6 +128,10 @@ pub async fn fetch(
         .await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
         public_form_submission_response(&env, request, route, correlation_id.clone()).await
+    } else if let Some(route) = owner_lead_route_from_path(&request_path) {
+        owner_leads_response(&env, request, route, correlation_id.clone()).await
+    } else if is_owner_lead_api_path(&request_path) {
+        funnel_route_not_found_response(&correlation_id)
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/document") {
         funnel_document_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/convert-v2/preview") {
@@ -203,6 +209,10 @@ pub async fn fetch(
         let mut router = router();
         router.call(request).await?
     };
+
+    if is_owner_lead_api_path(&request_path) {
+        apply_owner_lead_cache_policy(&mut response);
+    }
 
     log_request(
         &method,
@@ -564,6 +574,17 @@ struct PublicFormSubmissionRoute<'a> {
     form_id: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnerLeadRoute<'a> {
+    List {
+        funnel_id: &'a str,
+    },
+    Detail {
+        funnel_id: &'a str,
+        submission_id: &'a str,
+    },
+}
+
 fn public_route_from_path(path: &str) -> Option<PublicFunnelRoute<'_>> {
     let mut segments = path.split('/');
     if !segments.next()?.is_empty() || segments.next()? != "f" {
@@ -605,6 +626,98 @@ fn public_form_submission_route_from_path(path: &str) -> Option<PublicFormSubmis
         funnel_slug: segments[0],
         page_id: segments[2],
         form_id: segments[4],
+    })
+}
+
+fn owner_lead_route_from_path(path: &str) -> Option<OwnerLeadRoute<'_>> {
+    let mut segments = path.strip_prefix("/api/funnels/")?.split('/');
+    let funnel_id = segments.next()?;
+    if !valid_funnel_route_id(funnel_id) || segments.next()? != "leads" {
+        return None;
+    }
+    match (segments.next(), segments.next()) {
+        (None, None) => Some(OwnerLeadRoute::List { funnel_id }),
+        (Some(submission_id), None) => {
+            let id = uuid::Uuid::parse_str(submission_id).ok()?;
+            (id.hyphenated().to_string() == submission_id).then_some(OwnerLeadRoute::Detail {
+                funnel_id,
+                submission_id,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn is_owner_lead_api_path(path: &str) -> bool {
+    let Some(segments) = path.strip_prefix("/api/funnels/") else {
+        return false;
+    };
+    segments.split('/').nth(1) == Some("leads")
+}
+
+fn apply_owner_lead_cache_policy(response: &mut Response<axum::body::Body>) {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().remove(axum::http::header::ETAG);
+}
+
+fn parse_owner_lead_query(query: Option<&str>) -> Result<Option<PublicFormLeadCursor>, ()> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    if query.len() > "cursor=".len() + 48 {
+        return Err(());
+    }
+    let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+    if pairs.len() != 1 || pairs[0].0 != "cursor" || pairs[0].1.is_empty() {
+        return Err(());
+    }
+    decode_owner_lead_cursor(&pairs[0].1).map(Some).ok_or(())
+}
+
+fn encode_owner_lead_cursor(cursor: &PublicFormLeadCursor) -> Option<String> {
+    let timestamp = cursor.submitted_at;
+    if timestamp <= 0 {
+        return None;
+    }
+    let submission_id = uuid::Uuid::parse_str(&cursor.submission_id).ok()?;
+    if submission_id.hyphenated().to_string() != cursor.submission_id {
+        return None;
+    }
+    let mut encoded = String::with_capacity(48);
+    for byte in timestamp
+        .to_be_bytes()
+        .into_iter()
+        .chain(submission_id.as_bytes().iter().copied())
+    {
+        use std::fmt::Write as _;
+        write!(encoded, "{byte:02x}").ok()?;
+    }
+    Some(encoded)
+}
+
+fn decode_owner_lead_cursor(value: &str) -> Option<PublicFormLeadCursor> {
+    if value.len() != 48
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let decoded = (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let submitted_at = i64::from_be_bytes(decoded.get(..8)?.try_into().ok()?);
+    if submitted_at <= 0 {
+        return None;
+    }
+    let submission_id = uuid::Uuid::from_slice(decoded.get(8..24)?).ok()?;
+    Some(PublicFormLeadCursor {
+        submitted_at,
+        submission_id: submission_id.hyphenated().to_string(),
     })
 }
 
@@ -912,6 +1025,97 @@ struct ParsedPublicFormBody {
     fields: std::collections::BTreeMap<String, String>,
     request_consent_accepted: bool,
     marketing_opt_in: bool,
+}
+
+async fn owner_leads_response(
+    env: &Env,
+    request: HttpRequest,
+    route: OwnerLeadRoute<'_>,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let query = request.uri().query();
+    let cursor = match route {
+        OwnerLeadRoute::List { .. } => match parse_owner_lead_query(query) {
+            Ok(cursor) => cursor,
+            Err(()) => {
+                return editor_payload_error_response(&correlation_id, "validation/invalid_query")
+            }
+        },
+        OwnerLeadRoute::Detail { .. } if query.is_some() => {
+            return editor_payload_error_response(&correlation_id, "validation/invalid_query")
+        }
+        OwnerLeadRoute::Detail { .. } => None,
+    };
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return lead_storage_error_response(&correlation_id),
+    };
+    let repository = bindings.repository();
+
+    match route {
+        OwnerLeadRoute::List { funnel_id } => {
+            match repository
+                .list_public_form_leads(funnel_id, cursor.as_ref())
+                .await
+            {
+                Ok(page) => {
+                    let next_cursor = match page.next_cursor.as_ref() {
+                        Some(cursor) => match encode_owner_lead_cursor(cursor) {
+                            Some(cursor) => Some(cursor),
+                            None => return lead_storage_error_response(&correlation_id),
+                        },
+                        None => None,
+                    };
+                    json_success_response(
+                        serde_json::json!({
+                            "leads": page.leads,
+                            "next_cursor": next_cursor,
+                        }),
+                        StatusCode::OK,
+                        &correlation_id,
+                        None,
+                    )
+                }
+                Err(error) => lead_repository_error_response(error, &correlation_id),
+            }
+        }
+        OwnerLeadRoute::Detail {
+            funnel_id,
+            submission_id,
+        } => {
+            match repository
+                .get_public_form_lead(funnel_id, submission_id)
+                .await
+            {
+                Ok(Some(detail)) => match serde_json::to_value(detail) {
+                    Ok(detail) => {
+                        json_success_response(detail, StatusCode::OK, &correlation_id, None)
+                    }
+                    Err(_) => lead_storage_error_response(&correlation_id),
+                },
+                Ok(None) => funnel_route_not_found_response(&correlation_id),
+                Err(error) => lead_repository_error_response(error, &correlation_id),
+            }
+        }
+    }
+}
+
+fn lead_repository_error_response(
+    error: eez_storage::repository::RepositoryError,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    let api_error = ApiError::from_code(error.code());
+    log_api_error(&api_error, correlation_id, api_error.code());
+    error_response(&api_error, correlation_id.to_owned())
+}
+
+fn lead_storage_error_response(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("external/unavailable");
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
 }
 
 async fn public_form_submission_response(
@@ -2823,18 +3027,150 @@ pub async fn scheduled(
 #[cfg(test)]
 mod tests {
     use super::{
-        correlation_id, editor_command_parameters, funnel_subroute, media_archive_route,
-        media_filename_header, media_list_query, media_owner_content_route,
-        normalize_correlation_id, parse_public_form_body, public_form_submission_key,
+        apply_owner_lead_cache_policy, correlation_id, decode_owner_lead_cursor,
+        editor_command_parameters, encode_owner_lead_cursor, funnel_subroute,
+        is_owner_lead_api_path, media_archive_route, media_filename_header, media_list_query,
+        media_owner_content_route, normalize_correlation_id, owner_lead_route_from_path,
+        parse_owner_lead_query, parse_public_form_body, public_form_submission_key,
         public_form_submission_route_from_path, public_form_success_location, public_html_etag,
         public_media_route, public_route_from_path, publication_command_parameters,
         request_if_none_match, stage_upload_token, v1_conversion_command_parameters,
         v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
         v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
-        EditorCommandParametersError,
+        EditorCommandParametersError, OwnerLeadRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
+
+    #[test]
+    fn owner_lead_routes_are_exact_and_cache_policy_covers_malformed_descendants() {
+        let id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            owner_lead_route_from_path("/api/funnels/funnel-01/leads"),
+            Some(OwnerLeadRoute::List {
+                funnel_id: "funnel-01"
+            })
+        );
+        assert_eq!(
+            owner_lead_route_from_path(&format!("/api/funnels/funnel-01/leads/{id}")),
+            Some(OwnerLeadRoute::Detail {
+                funnel_id: "funnel-01",
+                submission_id: &id
+            })
+        );
+        for path in [
+            "/api/funnels/funnel-01/leads/invalid",
+            "/api/funnels/funnel-01/leads/00000000-0000-0000-0000-000000000000/extra",
+            "/api/funnels/funnel-01/leads/00000000-0000-0000-0000-000000000000/",
+            "/api/funnels/funnel-01/leads/00000000-0000-0000-0000-000000000000/other",
+        ] {
+            assert_eq!(owner_lead_route_from_path(path), None);
+        }
+        for path in [
+            "/api/funnels/funnel-01/leads",
+            "/api/funnels/funnel-01/leads/extra/segments",
+            "/api/funnels//leads",
+        ] {
+            assert!(is_owner_lead_api_path(path), "{path}");
+        }
+        assert!(!is_owner_lead_api_path("/api/funnels/funnel-01/leadsx"));
+        assert!(!is_owner_lead_api_path("/api/funnels"));
+
+        for status in [
+            axum::http::StatusCode::OK,
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::http::StatusCode::NOT_FOUND,
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        ] {
+            let mut response = axum::response::Response::new(axum::body::Body::empty());
+            *response.status_mut() = status;
+            response.headers_mut().insert(
+                axum::http::header::ETAG,
+                HeaderValue::from_static("\"stale\""),
+            );
+            apply_owner_lead_cache_policy(&mut response);
+            assert_eq!(
+                response.headers()[axum::http::header::CACHE_CONTROL],
+                "no-store"
+            );
+            assert!(!response.headers().contains_key(axum::http::header::ETAG));
+        }
+    }
+
+    #[test]
+    fn owner_lead_cursor_is_opaque_strict_and_round_trips_timestamp_ties() {
+        let cursor = eez_storage::repository::PublicFormLeadCursor {
+            submitted_at: 4_294_967_296,
+            submission_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let encoded = encode_owner_lead_cursor(&cursor).expect("cursor encoding");
+        assert_eq!(encoded.len(), 48);
+        assert_eq!(decode_owner_lead_cursor(&encoded), Some(cursor.clone()));
+        assert_eq!(
+            parse_owner_lead_query(Some(&format!("cursor={encoded}"))),
+            Ok(Some(cursor))
+        );
+        assert_eq!(parse_owner_lead_query(None), Ok(None));
+        for query in [
+            Some(""),
+            Some("cursor="),
+            Some("cursor=short"),
+            Some("cursor=000000000000000000000000000000000000000000000000"),
+            Some(&format!("cursor={encoded}&cursor={encoded}")),
+            Some(&format!("cursor={encoded}&limit=1")),
+            Some(&format!(
+                "cursor={}&unused={}",
+                "a".repeat(48),
+                "x".repeat(4096)
+            )),
+        ] {
+            assert!(parse_owner_lead_query(query).is_err(), "{query:?}");
+        }
+        assert!(decode_owner_lead_cursor(&"f".repeat(48)).is_none());
+    }
+
+    #[test]
+    fn public_lead_list_projection_contains_no_answers_or_internal_identifiers() {
+        let summary = eez_storage::repository::PublicFormLeadSummary {
+            submission_id: uuid::Uuid::new_v4().to_string(),
+            submitted_at: 1_797_120_000,
+            expires_at: 1_805_760_000,
+            page_title: "Home".to_owned(),
+            form_purpose: "Contact request".to_owned(),
+            marketing_opt_in: false,
+        };
+        let value = serde_json::to_value(summary).expect("lead list projection serializes");
+        let object = value.as_object().expect("object projection");
+        assert_eq!(
+            object
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "expires_at",
+                "form_purpose",
+                "marketing_opt_in",
+                "page_title",
+                "submission_id",
+                "submitted_at",
+            ]
+            .into_iter()
+            .collect()
+        );
+        let encoded = value.to_string();
+        for forbidden in [
+            "answer",
+            "consent",
+            "revision_id",
+            "submission_key",
+            "ada@example.test",
+        ] {
+            assert!(
+                !encoded.contains(forbidden),
+                "projection contains {forbidden}"
+            );
+        }
+    }
 
     #[test]
     fn media_routes_require_one_lowercase_content_digest() {

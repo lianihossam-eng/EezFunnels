@@ -1,6 +1,9 @@
 use std::fmt::{Display, Formatter};
 
-use eez_domain::document_v2::FormSubmissionContext;
+use eez_domain::document_v2::{
+    FormSubmissionContext, FormSubmissionValue, SubmittedFieldContext, SubmittedFieldKind,
+};
+use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use worker::d1::D1Type;
 use worker::{D1Database, Error};
@@ -11,6 +14,7 @@ const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
+pub const PUBLIC_FORM_LEAD_PAGE_SIZE: usize = 50;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
 
@@ -35,6 +39,7 @@ pub enum RepositoryError {
     StageUnavailable,
     StageControlUnavailable,
     StageStorageUnavailable,
+    CorruptPublicFormLead,
 }
 
 impl Display for RepositoryError {
@@ -67,6 +72,7 @@ impl Display for RepositoryError {
             Self::StageControlUnavailable | Self::StageStorageUnavailable => {
                 formatter.write_str("external/unavailable")
             }
+            Self::CorruptPublicFormLead => formatter.write_str("internal/unexpected"),
         }
     }
 }
@@ -90,6 +96,7 @@ impl RepositoryError {
             Self::StageIdGenerationFailed => "internal/unexpected",
             Self::StageDigestMismatch => "validation/invalid_json",
             Self::StageControlUnavailable | Self::StageStorageUnavailable => "external/unavailable",
+            Self::CorruptPublicFormLead => "internal/unexpected",
         }
     }
 }
@@ -232,6 +239,273 @@ pub struct NewPublicFormSubmission<'a> {
     pub marketing_opt_in_copy: Option<&'a str>,
     pub retention_seconds: i32,
     pub limit_per_minute: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormLeadCursor {
+    pub submitted_at: i64,
+    pub submission_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormLeadSummary {
+    pub submission_id: String,
+    pub submitted_at: i64,
+    pub expires_at: i64,
+    pub page_title: String,
+    pub form_purpose: String,
+    pub marketing_opt_in: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormLeadPage {
+    pub leads: Vec<PublicFormLeadSummary>,
+    pub next_cursor: Option<PublicFormLeadCursor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PublicFormLeadAnswer {
+    pub name: String,
+    pub label: String,
+    pub kind: SubmittedFieldKind,
+    pub value: Option<FormSubmissionValue>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormConsentEvidence {
+    pub acknowledged: bool,
+    pub copy_version: String,
+    pub copy: String,
+    pub recorded_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicFormMarketingConsentEvidence {
+    pub copy_version: String,
+    pub copy: String,
+    pub recorded_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PublicFormLeadDetail {
+    pub submission_id: String,
+    pub submitted_at: i64,
+    pub expires_at: i64,
+    pub page_title: String,
+    pub form_purpose: String,
+    pub answers: Vec<PublicFormLeadAnswer>,
+    pub request_consent: PublicFormConsentEvidence,
+    pub marketing_opt_in: bool,
+    pub marketing_consent: Option<PublicFormMarketingConsentEvidence>,
+}
+
+fn validate_lead_context(context: &FormSubmissionContext) -> RepositoryResult<()> {
+    validate_lead_context_text(context.page_title(), 8192)?;
+    validate_lead_context_text(context.form_purpose(), 1024)?;
+    let fields = context.fields();
+    if !(1..=50).contains(&fields.len()) {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for field in fields {
+        validate_lead_field(field)?;
+        if !names.insert(field.name()) {
+            return Err(RepositoryError::CorruptPublicFormLead);
+        }
+    }
+    Ok(())
+}
+
+fn validate_lead_field(field: &SubmittedFieldContext) -> RepositoryResult<()> {
+    let name = field.name();
+    if !(1..=64).contains(&name.len())
+        || !name.bytes().enumerate().all(|(index, byte)| match index {
+            0 => byte.is_ascii_lowercase(),
+            _ => byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_',
+        })
+        || name == "request_consent"
+        || name == "marketing_opt_in"
+    {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    validate_lead_context_text(field.label(), 1024)?;
+    Ok(())
+}
+
+fn validate_lead_context_text(value: &str, maximum: usize) -> RepositoryResult<String> {
+    if value.is_empty() || value.len() > maximum {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_stored_boolean(value: i64) -> RepositoryResult<bool> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RepositoryError::CorruptPublicFormLead),
+    }
+}
+
+fn parse_marketing_consent(
+    opt_in: i64,
+    copy_version: Option<String>,
+    copy: Option<String>,
+    recorded_at: Option<i64>,
+) -> RepositoryResult<(bool, Option<PublicFormMarketingConsentEvidence>)> {
+    let opt_in = parse_stored_boolean(opt_in)?;
+    let evidence = match (copy_version, copy, recorded_at) {
+        (Some(copy_version), Some(copy), Some(recorded_at)) => {
+            Some(PublicFormMarketingConsentEvidence {
+                copy_version: validate_lead_context_text(&copy_version, 64)?,
+                copy: validate_lead_context_text(&copy, 1024)?,
+                recorded_at,
+            })
+        }
+        (None, None, None) => None,
+        _ => return Err(RepositoryError::CorruptPublicFormLead),
+    };
+    if opt_in && evidence.is_none() {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    Ok((opt_in, evidence))
+}
+
+struct UniqueLeadValues(std::collections::BTreeMap<String, serde_json::Value>);
+
+impl<'de> Deserialize<'de> for UniqueLeadValues {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct UniqueLeadValuesVisitor;
+
+        impl<'de> Visitor<'de> for UniqueLeadValuesVisitor {
+            type Value = UniqueLeadValues;
+
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an object with unique form field names")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut values = std::collections::BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    if values.insert(key.clone(), value).is_some() {
+                        return Err(de::Error::custom("duplicate stored form field"));
+                    }
+                }
+                Ok(UniqueLeadValues(values))
+            }
+        }
+
+        deserializer.deserialize_map(UniqueLeadValuesVisitor)
+    }
+}
+
+fn parse_lead_values(
+    field_values_json: &str,
+    context: &FormSubmissionContext,
+) -> RepositoryResult<std::collections::BTreeMap<String, FormSubmissionValue>> {
+    let UniqueLeadValues(mut raw_values) = serde_json::from_str(field_values_json)
+        .map_err(|_| RepositoryError::CorruptPublicFormLead)?;
+    let mut values = std::collections::BTreeMap::new();
+    for field in context.fields() {
+        let Some(raw) = raw_values.remove(field.name()) else {
+            continue;
+        };
+        let value = match field.kind() {
+            SubmittedFieldKind::Text => {
+                FormSubmissionValue::Text(lead_string_value(raw, 8192, true, false)?)
+            }
+            SubmittedFieldKind::Email => {
+                FormSubmissionValue::Text(lead_string_value(raw, 320, true, true)?)
+            }
+            SubmittedFieldKind::Phone => {
+                FormSubmissionValue::Text(lead_string_value(raw, 64, true, false)?)
+            }
+            SubmittedFieldKind::Select => {
+                FormSubmissionValue::Select(lead_string_value(raw, 1024, false, true)?)
+            }
+            SubmittedFieldKind::Checkbox => raw
+                .as_bool()
+                .map(FormSubmissionValue::Checkbox)
+                .ok_or(RepositoryError::CorruptPublicFormLead)?,
+        };
+        values.insert(field.name().to_owned(), value);
+    }
+    if !raw_values.is_empty() {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    Ok(values)
+}
+
+fn build_lead_answers(
+    context: &FormSubmissionContext,
+    values: &std::collections::BTreeMap<String, FormSubmissionValue>,
+) -> RepositoryResult<Vec<PublicFormLeadAnswer>> {
+    context
+        .fields()
+        .iter()
+        .map(|field| {
+            validate_lead_field(field)?;
+            Ok(PublicFormLeadAnswer {
+                name: field.name().to_owned(),
+                label: field.label().to_owned(),
+                kind: field.kind(),
+                value: values.get(field.name()).cloned(),
+            })
+        })
+        .collect()
+}
+
+fn lead_string_value(
+    value: serde_json::Value,
+    maximum: usize,
+    reject_controls: bool,
+    count_bytes: bool,
+) -> RepositoryResult<String> {
+    let value = value
+        .as_str()
+        .ok_or(RepositoryError::CorruptPublicFormLead)?;
+    let length = if count_bytes {
+        value.len()
+    } else {
+        value.chars().count()
+    };
+    if length > maximum || (reject_controls && value.chars().any(char::is_control)) {
+        return Err(RepositoryError::CorruptPublicFormLead);
+    }
+    Ok(value.to_owned())
+}
+
+#[derive(Deserialize)]
+struct PublicFormLeadListRow {
+    submission_id: String,
+    submitted_at: i64,
+    expires_at: i64,
+    page_title: String,
+    form_purpose: String,
+    marketing_opt_in: i64,
+}
+
+#[derive(Deserialize)]
+struct PublicFormLeadDetailRow {
+    submission_id: String,
+    submitted_at: i64,
+    expires_at: i64,
+    field_values_json: String,
+    context_json: String,
+    request_consent_acknowledged: i64,
+    request_consent_copy_version: String,
+    request_consent_copy: String,
+    request_consent_recorded_at: i64,
+    marketing_opt_in: i64,
+    marketing_opt_in_copy_version: Option<String>,
+    marketing_opt_in_copy: Option<String>,
+    marketing_opt_in_recorded_at: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1269,6 +1543,129 @@ impl<'a> Repository<'a> {
         Err(RepositoryError::InvalidField("public_form_submission"))
     }
 
+    pub async fn list_public_form_leads(
+        &self,
+        funnel_id: &str,
+        cursor: Option<&PublicFormLeadCursor>,
+    ) -> RepositoryResult<PublicFormLeadPage> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        if self.get_funnel(funnel_id).await?.is_none() {
+            return Err(RepositoryError::FunnelNotFound);
+        }
+
+        let funnel_id_value = D1Type::Text(funnel_id);
+        let mut rows = if let Some(cursor) = cursor {
+            if cursor.submitted_at <= 0 {
+                return Err(RepositoryError::InvalidField("cursor"));
+            }
+            let submitted_at_value = cursor.submitted_at.to_string();
+            let submitted_at = D1Type::Text(&submitted_at_value);
+            let submission_id = D1Type::Text(&cursor.submission_id);
+            self.database
+                .prepare(
+                    "SELECT submissions.submission_id, submissions.submitted_at, submissions.expires_at, submissions.marketing_opt_in, json_extract(contexts.context_json, '$.page_title') AS page_title, json_extract(contexts.context_json, '$.form_purpose') AS form_purpose FROM public_form_submissions AS submissions JOIN public_form_contexts AS contexts ON contexts.funnel_id = submissions.funnel_id AND contexts.revision_id = submissions.revision_id AND contexts.page_id = submissions.page_id AND contexts.form_id = submissions.form_id WHERE submissions.funnel_id = ? AND submissions.expires_at > unixepoch() AND (submissions.submitted_at < CAST(? AS INTEGER) OR (submissions.submitted_at = CAST(? AS INTEGER) AND submissions.submission_id < ?)) ORDER BY submissions.submitted_at DESC, submissions.submission_id DESC LIMIT 51",
+                )
+                .bind_refs([
+                    &funnel_id_value,
+                    &submitted_at,
+                    &submitted_at,
+                    &submission_id,
+                ])?
+                .all()
+                .await?
+                .results::<PublicFormLeadListRow>()?
+        } else {
+            self.database
+                .prepare(
+                    "SELECT submissions.submission_id, submissions.submitted_at, submissions.expires_at, submissions.marketing_opt_in, json_extract(contexts.context_json, '$.page_title') AS page_title, json_extract(contexts.context_json, '$.form_purpose') AS form_purpose FROM public_form_submissions AS submissions JOIN public_form_contexts AS contexts ON contexts.funnel_id = submissions.funnel_id AND contexts.revision_id = submissions.revision_id AND contexts.page_id = submissions.page_id AND contexts.form_id = submissions.form_id WHERE submissions.funnel_id = ? AND submissions.expires_at > unixepoch() ORDER BY submissions.submitted_at DESC, submissions.submission_id DESC LIMIT 51",
+                )
+                .bind_refs([&funnel_id_value])?
+                .all()
+                .await?
+                .results::<PublicFormLeadListRow>()?
+        };
+
+        let has_more = rows.len() > PUBLIC_FORM_LEAD_PAGE_SIZE;
+        rows.truncate(PUBLIC_FORM_LEAD_PAGE_SIZE);
+        let leads = rows
+            .into_iter()
+            .map(|row| {
+                Ok(PublicFormLeadSummary {
+                    submission_id: row.submission_id,
+                    submitted_at: row.submitted_at,
+                    expires_at: row.expires_at,
+                    page_title: validate_lead_context_text(&row.page_title, 8192)?,
+                    form_purpose: validate_lead_context_text(&row.form_purpose, 1024)?,
+                    marketing_opt_in: parse_stored_boolean(row.marketing_opt_in)?,
+                })
+            })
+            .collect::<RepositoryResult<Vec<_>>>()?;
+        let next_cursor = has_more
+            .then(|| {
+                leads.last().map(|lead| PublicFormLeadCursor {
+                    submitted_at: lead.submitted_at,
+                    submission_id: lead.submission_id.clone(),
+                })
+            })
+            .flatten();
+
+        Ok(PublicFormLeadPage { leads, next_cursor })
+    }
+
+    pub async fn get_public_form_lead(
+        &self,
+        funnel_id: &str,
+        submission_id: &str,
+    ) -> RepositoryResult<Option<PublicFormLeadDetail>> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        validate_required_field(submission_id, "submission_id")?;
+        let funnel_id = D1Type::Text(funnel_id);
+        let submission_id = D1Type::Text(submission_id);
+        let Some(row) = self
+            .database
+            .prepare(
+                "SELECT submissions.submission_id, submissions.submitted_at, submissions.expires_at, submissions.field_values_json, contexts.context_json, submissions.request_consent_acknowledged, submissions.request_consent_copy_version, submissions.request_consent_copy, submissions.request_consent_recorded_at, submissions.marketing_opt_in, submissions.marketing_opt_in_copy_version, submissions.marketing_opt_in_copy, submissions.marketing_opt_in_recorded_at FROM public_form_submissions AS submissions JOIN public_form_contexts AS contexts ON contexts.funnel_id = submissions.funnel_id AND contexts.revision_id = submissions.revision_id AND contexts.page_id = submissions.page_id AND contexts.form_id = submissions.form_id WHERE submissions.funnel_id = ? AND submissions.submission_id = ? AND submissions.expires_at > unixepoch()",
+            )
+            .bind_refs([&funnel_id, &submission_id])?
+            .first::<PublicFormLeadDetailRow>(None)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let context: FormSubmissionContext = serde_json::from_str(&row.context_json)
+            .map_err(|_| RepositoryError::CorruptPublicFormLead)?;
+        validate_lead_context(&context)?;
+        let values = parse_lead_values(&row.field_values_json, &context)?;
+        let answers = build_lead_answers(&context, &values)?;
+        let (marketing_opt_in, marketing_consent) = parse_marketing_consent(
+            row.marketing_opt_in,
+            row.marketing_opt_in_copy_version,
+            row.marketing_opt_in_copy,
+            row.marketing_opt_in_recorded_at,
+        )?;
+        if row.request_consent_acknowledged != 1 {
+            return Err(RepositoryError::CorruptPublicFormLead);
+        }
+
+        Ok(Some(PublicFormLeadDetail {
+            submission_id: row.submission_id,
+            submitted_at: row.submitted_at,
+            expires_at: row.expires_at,
+            page_title: context.page_title().to_owned(),
+            form_purpose: context.form_purpose().to_owned(),
+            answers,
+            request_consent: PublicFormConsentEvidence {
+                acknowledged: true,
+                copy_version: validate_lead_context_text(&row.request_consent_copy_version, 64)?,
+                copy: validate_lead_context_text(&row.request_consent_copy, 1024)?,
+                recorded_at: row.request_consent_recorded_at,
+            },
+            marketing_opt_in,
+            marketing_consent,
+        }))
+    }
+
     pub async fn cleanup_expired_public_form_submissions(&self) -> RepositoryResult<()> {
         for _ in 0..PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES {
             let batch_size = D1Type::Integer(PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE);
@@ -1473,8 +1870,11 @@ fn validate_payload_size(value: &str) -> RepositoryResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_payload_size, validate_required_field, validate_schema_version, RepositoryError,
+        build_lead_answers, parse_lead_values, parse_marketing_consent, validate_lead_context,
+        validate_payload_size, validate_required_field, validate_schema_version,
+        PublicFormLeadSummary, RepositoryError,
     };
+    use eez_domain::document_v2::FormSubmissionValue;
 
     #[test]
     fn schema_versions_one_and_two_are_supported_for_storage_dispatch() {
@@ -1516,5 +1916,145 @@ mod tests {
             validate_required_field("  ", "id"),
             Err(RepositoryError::InvalidField("id"))
         ));
+    }
+
+    fn lead_context() -> eez_domain::document_v2::FormSubmissionContext {
+        serde_json::from_str(
+            r#"{
+                "page_title":"Home",
+                "form_purpose":"Contact request",
+                "fields":[
+                    {"name":"email","label":"Email","kind":"email"},
+                    {"name":"name","label":"Name","kind":"text"},
+                    {"name":"consent","label":"Consent","kind":"checkbox"},
+                    {"name":"interest","label":"Interest","kind":"select"},
+                    {"name":"optional","label":"Optional","kind":"phone"}
+                ]
+            }"#,
+        )
+        .expect("valid historical form context")
+    }
+
+    #[test]
+    fn lead_answers_keep_context_order_and_distinguish_absent_empty_and_false() {
+        let context = lead_context();
+        let values = parse_lead_values(
+            r#"{"interest":"","consent":false,"name":"","email":"ada@example.test"}"#,
+            &context,
+        )
+        .expect("typed stored answers");
+        let answers = build_lead_answers(&context, &values).expect("ordered answers");
+        assert_eq!(
+            answers
+                .iter()
+                .map(|answer| answer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["email", "name", "consent", "interest", "optional"]
+        );
+        assert_eq!(
+            answers[0].value,
+            Some(FormSubmissionValue::Text("ada@example.test".to_owned()))
+        );
+        assert_eq!(
+            answers[1].value,
+            Some(FormSubmissionValue::Text(String::new()))
+        );
+        assert_eq!(answers[2].value, Some(FormSubmissionValue::Checkbox(false)));
+        assert_eq!(
+            answers[3].value,
+            Some(FormSubmissionValue::Select(String::new()))
+        );
+        assert_eq!(answers[4].value, None);
+    }
+
+    #[test]
+    fn corrupt_lead_answers_fail_closed_without_exposing_stored_values() {
+        let context = lead_context();
+        for corrupt in [
+            "not-json",
+            "[]",
+            r#"{"consent":"false"}"#,
+            r#"{"email":false}"#,
+            r#"{"name":"line\nbreak"}"#,
+            r#"{"unexpected":"sensitive"}"#,
+            r#"{"email":"first","email":"second"}"#,
+        ] {
+            let result = parse_lead_values(corrupt, &context);
+            assert!(matches!(
+                result,
+                Err(RepositoryError::CorruptPublicFormLead)
+            ));
+            assert_eq!(
+                result.err().map(|error| error.code()),
+                Some("internal/unexpected")
+            );
+        }
+    }
+
+    #[test]
+    fn historical_context_and_select_text_follow_domain_limits_without_html_assumptions() {
+        let title = "T".repeat(2048);
+        let context_json = serde_json::json!({
+            "page_title": title,
+            "form_purpose": "Contact\nrequest",
+            "fields": [{"name":"choice", "label":"Topic\nchoice", "kind":"select"}]
+        })
+        .to_string();
+        let context: eez_domain::document_v2::FormSubmissionContext =
+            serde_json::from_str(&context_json).expect("valid serialized context");
+        validate_lead_context(&context).expect("domain-valid historical labels");
+        let values = parse_lead_values(r#"{"choice":"Option\nA"}"#, &context)
+            .expect("select text allowed by the original form domain");
+        assert_eq!(
+            values.get("choice"),
+            Some(&FormSubmissionValue::Select("Option\nA".to_owned()))
+        );
+    }
+
+    #[test]
+    fn marketing_consent_evidence_is_independent_of_opt_in_choice() {
+        let (opted_in, unchecked_evidence) = parse_marketing_consent(
+            0,
+            Some("marketing-v2".to_owned()),
+            Some("Occasional news".to_owned()),
+            Some(1_797_120_000),
+        )
+        .expect("configured unchecked marketing consent");
+        assert!(!opted_in);
+        assert_eq!(
+            unchecked_evidence
+                .as_ref()
+                .map(|evidence| evidence.copy.as_str()),
+            Some("Occasional news")
+        );
+
+        let (opted_in, absent_evidence) =
+            parse_marketing_consent(0, None, None, None).expect("no configured consent");
+        assert!(!opted_in);
+        assert!(absent_evidence.is_none());
+
+        assert!(matches!(
+            parse_marketing_consent(1, None, None, None),
+            Err(RepositoryError::CorruptPublicFormLead)
+        ));
+    }
+
+    #[test]
+    fn lead_list_projection_does_not_serialize_answers_or_internal_keys() {
+        let summary = PublicFormLeadSummary {
+            submission_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            submitted_at: 1_797_120_000,
+            expires_at: 1_805_760_000,
+            page_title: "Home".to_owned(),
+            form_purpose: "Contact request".to_owned(),
+            marketing_opt_in: false,
+        };
+        let json = serde_json::to_value(summary).expect("public list projection");
+        let object = json.as_object().expect("object");
+        assert_eq!(object.len(), 6);
+        assert!(!json.to_string().contains("submission_key"));
+        assert!(!json.to_string().contains("revision_id"));
+        assert!(!json.to_string().contains("answers"));
+        assert!(!json.to_string().contains("consent"));
     }
 }
