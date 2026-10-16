@@ -90,8 +90,13 @@
     <script>
       const MAX_OUTSTANDING_STAGE_SLOTS = 10;
       const MAX_OUTSTANDING_ATTEMPT_SLOTS = 10;
+      const MAX_SWEEP_PAGE_ITEMS = 2;
       const TOMBSTONE_RETENTION_MINUTES = 1440;
       const ORPHAN_RETENTION_MINUTES = 1440;
+
+      function stageObjectKey(sequence, attemptId) {
+        return `private/stage/${String(sequence).padStart(20, "0")}/${attemptId}`;
+      }
 
       const scenarios = [
         {
@@ -303,9 +308,12 @@
           pendingLateWriterKeys: [],
           saveReceipts: [],
           attemptSerial: 1,
+          attemptSequence: 1,
           attempt: null,
           outstandingAttemptSlots: 0,
           orphanObjects: [],
+          sweepCursorKey: null,
+          sweepHighWatermark: null,
           revisionCount: 7,
           lastEvent: "Ready. The current editor head is rev-7.",
           events: ["The owner opened the funnel editor."],
@@ -341,14 +349,16 @@
 
       function retireAttemptTombstone(state, attempt) {
         if (attempt.capacityReleased) return;
-        if (!attempt.writerQuiescent) state.pendingLateWriterKeys.push(attempt.objectKey);
+        if (!attempt.writerQuiescent) {
+          state.pendingLateWriterKeys.push({ key: attempt.objectKey, sequence: attempt.sequence });
+        }
         attempt.capacityReleased = true;
         state.outstandingAttemptSlots -= 1;
       }
 
       function retainR2Orphan(state, attempt) {
         if (!attempt.objectPresent) return;
-        state.orphanObjects.push({ key: attempt.objectKey, createdAt: state.minute });
+        state.orphanObjects.push({ key: attempt.objectKey, sequence: attempt.sequence, createdAt: state.minute });
         attempt.objectPresent = false;
       }
 
@@ -445,7 +455,9 @@
             }
             const id = `attempt-${next.attemptSerial}`;
             next.attemptSerial += 1;
-            next.attempt = { id, stageId: next.stage.id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false, tombstoneRetireAt: null, capacityReleased: false };
+            const sequence = next.attemptSequence;
+            next.attemptSequence += 1;
+            next.attempt = { id, sequence, stageId: next.stage.id, status: "receiving", objectKey: stageObjectKey(sequence, id), deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false, tombstoneRetireAt: null, capacityReleased: false };
             next.outstandingAttemptSlots += 1;
             return addEvent(next, `Upload attempt ${id} registered in D1 before its private R2 write.`);
           }
@@ -526,16 +538,35 @@
             return addEvent(next, "Other upload attempts filled the installation's ten outstanding attempt slots.");
           case "LATE_WRITE_AFTER_TOMBSTONE_RETIRE":
             {
-              const key = next.pendingLateWriterKeys.shift();
-              if (!key) return addEvent(next, "Late R2 completion denied: no unresolved external writer remains after tombstone retirement.");
-              next.orphanObjects.push({ key, createdAt: now });
-              return addEvent(next, `The unresolved R2 operation for ${key} completed after its D1 attempt row retired. Its unique key is now an orphan for the scheduled prefix sweep.`);
+              const writer = next.pendingLateWriterKeys.shift();
+              if (!writer) return addEvent(next, "Late R2 completion denied: no unresolved external writer remains after tombstone retirement.");
+              next.orphanObjects.push({ ...writer, createdAt: now });
+              return addEvent(next, `The unresolved R2 operation for ${writer.key} completed after its D1 attempt row retired. Its unique key is now an orphan for the scheduled prefix sweep.`);
             }
           case "SWEEP_R2": {
-            const priorCount = next.orphanObjects.length;
-            next.orphanObjects = next.orphanObjects.filter((object) => now < object.createdAt + ORPHAN_RETENTION_MINUTES);
-            const removed = priorCount - next.orphanObjects.length;
-            return addEvent(next, `Scheduled R2 stage-prefix sweep removed ${removed} unreferenced object${removed === 1 ? "" : "s"} at least 24 hours old.`);
+            if (next.sweepHighWatermark === null) {
+              next.sweepHighWatermark = next.attemptSequence - 1;
+              next.sweepCursorKey = null;
+            }
+            const highWatermark = next.sweepHighWatermark;
+            const candidates = next.orphanObjects
+              .filter((object) => object.sequence <= highWatermark && (!next.sweepCursorKey || object.key > next.sweepCursorKey))
+              .sort((left, right) => left.key.localeCompare(right.key));
+            const page = candidates.slice(0, MAX_SWEEP_PAGE_ITEMS);
+            const removableKeys = new Set(page
+              .filter((object) => now >= object.createdAt + ORPHAN_RETENTION_MINUTES)
+              .map((object) => object.key));
+            const removed = removableKeys.size;
+            next.orphanObjects = next.orphanObjects.filter((object) => !removableKeys.has(object.key));
+            if (page.length > 0) next.sweepCursorKey = page.at(-1).key;
+            const passComplete = candidates.length <= page.length;
+            if (passComplete) {
+              next.sweepHighWatermark = null;
+              next.sweepCursorKey = null;
+            }
+            const progress = page.length === 0 ? "no listed keys remained" : `scanned ${page.length} key${page.length === 1 ? "" : "s"}`;
+            const outcome = passComplete ? `completed the pass through sequence ${highWatermark}` : `will resume through sequence ${highWatermark}`;
+            return addEvent(next, `Scheduled R2 stage-prefix sweep ${progress}, removed ${removed} unreferenced object${removed === 1 ? "" : "s"} at least 24 hours old, and ${outcome}.`);
           }
           case "CONFIRM_WRITER_QUIESCENT": {
             const attempt = trackedAttempts(next).find((item) => item.status === "abandoned" && !item.writerQuiescent);
@@ -746,6 +777,7 @@
         addStateCard("Retired upload attempts", `${state.retiredAttempts.length} · ${unresolvedRetiredAttempts} writer(s) unsettled`);
         addStateCard("External R2 writes without a D1 row", String(state.pendingLateWriterKeys.length));
         addStateCard("Orphan objects in R2", String(state.orphanObjects.length));
+        addStateCard("R2 sweep pass", state.sweepHighWatermark === null ? "not in progress" : `through sequence ${state.sweepHighWatermark} · after ${state.sweepCursorKey ?? "start"}`);
         const saveReceipt = state.saveReceipts.at(-1);
         addStateCard("Latest save receipt", saveReceipt ? `${saveReceipt.key} → ${saveReceipt.revisionId}` : "none");
         addStateCard("Retained save receipts", String(state.saveReceipts.length));

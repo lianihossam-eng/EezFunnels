@@ -170,17 +170,34 @@ establish Cloudflare production behavior.
    stage metadata. This finite fencing rule replaces indefinite per-attempt
    tombstone retention.
 
-   A scheduled R2 stage-prefix sweeper is the cleanup authority after
-   tombstone retirement. It lists only `private/stage/`, uses each object's
-   provider `uploaded` timestamp, and deletes objects at least 24 hours old only
-   when no live D1 stage references the key. A late write that completes after
-   an earlier sweep has a new upload timestamp and is removed by a later sweep.
-   The Worker must paginate R2 listing, keep each invocation bounded, persist
-   its cursor, and restart from the beginning after completing a full pass so
-   newly inserted keys are not permanently skipped. D1 tombstone retirement
-   never depends on a post-quiescence absence check. The sweeper and its
-   progress across failures are required in PR-024 before enabling V2 staging;
-   local Wrangler tests cannot establish production Cron or R2 scheduling.
+   A scheduled R2 stage-prefix sweeper reconciles temporary objects after
+   tombstone retirement. Allocate each attempt a monotonically increasing
+   installation sequence atomically with its D1 row, and put that sequence as
+   fixed-width decimal text before the unique attempt ID in the R2 key under
+   `private/stage/`. At the start of each sweep pass, read and persist the
+   highest allocated sequence as a fixed high-water mark. Paginate in key order
+   only through that sequence; attempts admitted later have a higher sequence
+   and cannot extend the in-progress pass. Bound each Cron invocation, persist
+   its R2 cursor, and resume it on the next invocation. Stop a pass as soon as
+   listing reaches a key whose sequence exceeds its high-water mark, or when
+   the current listing reaches its end; then start a new pass from the
+   beginning with a newly captured high-water mark. Never retire an old
+   sequence range from future passes: a late writer may create an
+   object behind the saved cursor after a pass has already visited that key.
+   Its finite attempt key is eligible again on the next pass, regardless of
+   newer admissions. Retry a failed list/delete page without advancing past
+   unprocessed keys. The sequence must never regress or be reused within the
+   same R2 namespace; a D1 restore must preserve its high-water counter or
+   rotate and register a fresh namespace before V2 staging resumes.
+
+   Each pass lists only `private/stage/`, uses the provider `uploaded`
+   timestamp, excludes any live D1 stage reference, and deletes unreferenced
+   objects at least 24 hours old. A late write that completes after an earlier
+   pass has a new upload timestamp and is removed in a later pass. The sweep
+   cursor, fixed high-water mark, failure retry, namespace restore rule, and
+   late insertion behind the cursor are required PR-024 behaviors; local
+   Wrangler tests cannot establish production Cron or R2 scheduling. D1
+   tombstone retirement never depends on a post-quiescence absence check.
    No object key is written to R2 before its attempt row exists.
 
    Stage expiration first changes the stage to terminal `expired` in D1 and

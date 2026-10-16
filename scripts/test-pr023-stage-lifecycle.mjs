@@ -12,6 +12,10 @@ const context = vm.createContext({ structuredClone: globalThis.structuredClone }
 vm.runInContext(`${pureReducer}\nglobalThis.testApi = { scenarios, initialState, reduce };`, context);
 const { scenarios, initialState, reduce } = context.testApi;
 
+function stageObjectKey(sequence, attemptId = `attempt-${sequence}`) {
+  return `private/stage/${String(sequence).padStart(20, "0")}/${attemptId}`;
+}
+
 function runActions(actions) {
   let state = initialState();
   for (const action of actions) state = reduce(state, action);
@@ -59,14 +63,15 @@ assert.notEqual(deadlineRejected.stage.status, "uploaded");
 const tombstoneRetiredBeforeLateWrite = runScenario("late-write-after-tombstone-retirement", 7);
 assert.equal(tombstoneRetiredBeforeLateWrite.attempt, null);
 assert.equal(tombstoneRetiredBeforeLateWrite.outstandingAttemptSlots, 0);
-assert.deepEqual(Array.from(tombstoneRetiredBeforeLateWrite.pendingLateWriterKeys), ["private/stage/attempt-1"]);
+assert.deepEqual(Array.from(tombstoneRetiredBeforeLateWrite.pendingLateWriterKeys, (writer) => writer.key), [stageObjectKey(1)]);
 assert.equal(tombstoneRetiredBeforeLateWrite.orphanObjects.length, 0);
 const lateWriteCompleted = runScenario("late-write-after-tombstone-retirement", 8);
 assert.equal(lateWriteCompleted.attempt, null);
 assert.equal(lateWriteCompleted.outstandingAttemptSlots, 0);
 assert.equal(lateWriteCompleted.pendingLateWriterKeys.length, 0);
 assert.equal(lateWriteCompleted.orphanObjects.length, 1);
-assert.equal(lateWriteCompleted.orphanObjects[0].key, "private/stage/attempt-1");
+assert.equal(lateWriteCompleted.orphanObjects[0].key, stageObjectKey(1));
+assert.equal(lateWriteCompleted.orphanObjects[0].sequence, 1);
 assert.match(lateWriteCompleted.lastEvent, /completed after its D1 attempt row retired/);
 const retiredTombstoneLateWrite = runScenario("late-write-after-tombstone-retirement");
 assert.equal(retiredTombstoneLateWrite.retiredAttempts.length, 0);
@@ -77,6 +82,44 @@ assert.equal(retiredTombstoneLateWrite.pendingLateWriterKeys.length, 0);
 assert.equal(retiredTombstoneLateWrite.orphanObjects.length, 0);
 assert.ok(retiredTombstoneLateWrite.events.some((event) => /removed 1 unreferenced object/.test(event)));
 assert.match(run(["LATE_WRITE_AFTER_TOMBSTONE_RETIRE"]).lastEvent, /no unresolved external writer remains/);
+
+const fairSweep = initialState();
+fairSweep.minute = 1440;
+fairSweep.attemptSequence = 7;
+fairSweep.orphanObjects = [1, 3, 4, 5, 6].map((sequence) => ({
+  key: stageObjectKey(sequence), sequence, createdAt: 0,
+}));
+let sweepState = reduce(fairSweep, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, 6);
+assert.equal(sweepState.sweepCursorKey, stageObjectKey(3));
+assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [4, 5, 6]);
+
+sweepState.orphanObjects.push(
+  { key: stageObjectKey(2), sequence: 2, createdAt: sweepState.minute },
+  { key: stageObjectKey(7), sequence: 7, createdAt: sweepState.minute },
+  { key: stageObjectKey(8), sequence: 8, createdAt: sweepState.minute },
+);
+sweepState.attemptSequence = 9;
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, 6);
+assert.equal(sweepState.sweepCursorKey, stageObjectKey(5));
+assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [2, 6, 7, 8]);
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, null);
+assert.equal(sweepState.sweepCursorKey, null);
+assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [2, 7, 8]);
+
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, 8);
+assert.equal(sweepState.sweepCursorKey, stageObjectKey(7));
+assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [2, 7, 8]);
+sweepState = reduce(sweepState, { type: "ADVANCE_1440" });
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, null);
+assert.deepEqual(Array.from(sweepState.orphanObjects, (object) => object.sequence).sort((a, b) => a - b), [2, 7]);
+sweepState = reduce(sweepState, { type: "SWEEP_R2" });
+assert.equal(sweepState.sweepHighWatermark, null);
+assert.equal(sweepState.orphanObjects.length, 0);
 
 const expiredMint = run(["MINT", "ADVANCE_16", "CLEANUP", "REPLAY_MINT", "BEGIN_UPLOAD"]);
 assert.equal(expiredMint.stage.status, "expired");
