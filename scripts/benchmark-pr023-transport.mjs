@@ -145,6 +145,112 @@ function buildExactDocument(pageCount, targetBytes) {
   throw new Error(`cannot build ${pageCount}-page fixture at ${targetBytes} bytes`);
 }
 
+function emptyLegacyDocument(formatVersion) {
+  const document = {
+    format_version: formatVersion,
+    schema_version: 1,
+    blueprint: "tripwire",
+    theme_id: "minimal",
+    sections: [
+      { id: "hero", type: "hero", order: 0 },
+      { id: "features", type: "features", order: 1 },
+      { id: "cta", type: "cta", order: 2 },
+    ],
+    contents: {
+      cta: {
+        type: "cta",
+        title: "Ready?",
+        body: "Start now",
+        cta_label: "Start",
+        cta_url: "https://example.com/start",
+      },
+      features: {
+        type: "features",
+        items: [{ title: "One", description: "Useful" }],
+      },
+      hero: {
+        type: "hero",
+        title: "",
+        subtitle: "A short introduction",
+        cta_label: "Start",
+        cta_url: "https://example.com/start",
+        image: null,
+      },
+    },
+  };
+  if (formatVersion === 2) {
+    document.theme_overrides = { primary_color: null, square_buttons: false };
+  }
+  return document;
+}
+
+function validateLegacyDocument(document, formatVersion, encoded) {
+  const expectedKeys = ["format_version", "schema_version", "blueprint", "theme_id", "sections", "contents"];
+  if (formatVersion === 2) expectedKeys.push("theme_overrides");
+  exactKeys(document, expectedKeys, "legacy snapshot");
+  assert(document.format_version === formatVersion, "wrong legacy envelope format");
+  assert(document.schema_version === 1, "legacy structural schema version changed");
+  assert(document.blueprint === "tripwire" && document.theme_id === "minimal", "wrong legacy fixture identity");
+  assert(Array.isArray(document.sections) && document.sections.length === 3, "wrong legacy section count");
+  assert(document.sections.map((section) => section.id).join(",") === "hero,features,cta", "wrong legacy section order");
+  assert(document.sections.every((section, index) => section.order === index), "wrong legacy section ordinal");
+  exactKeys(document.contents, ["cta", "features", "hero"], "legacy contents map");
+  exactKeys(document.contents.hero, ["type", "title", "subtitle", "cta_label", "cta_url", "image"], "legacy hero content");
+  exactKeys(document.contents.features, ["type", "items"], "legacy features content");
+  exactKeys(document.contents.cta, ["type", "title", "body", "cta_label", "cta_url"], "legacy CTA content");
+  assert(document.contents.hero.type === "hero" && document.contents.features.type === "features" && document.contents.cta.type === "cta", "legacy content/section mismatch");
+  assert(typeof document.contents.hero.title === "string", "legacy hero title is not text");
+  if (formatVersion === 2) {
+    exactKeys(document.theme_overrides, ["primary_color", "square_buttons"], "legacy theme overrides");
+    assert(document.theme_overrides.primary_color === null && document.theme_overrides.square_buttons === false, "legacy default theme overrides changed");
+  }
+  assert(utf8Bytes(encoded) <= MAX_DOCUMENT_BYTES, "legacy snapshot exceeds the 1 MiB cap");
+  assertJsonNestingDepth(document);
+}
+
+function buildLegacyCompatibilityFixture(formatVersion, targetBytes) {
+  assert([1, 2].includes(formatVersion), "unsupported legacy format version");
+  assert(targetBytes <= MAX_DOCUMENT_BYTES, "legacy snapshot exceeds the 1 MiB cap");
+  const document = emptyLegacyDocument(formatVersion);
+  const emptyEncoded = JSON.stringify(document);
+  const remaining = targetBytes - utf8Bytes(emptyEncoded);
+  assert(remaining >= 0, "legacy target is smaller than its schema fixture");
+  document.contents.hero.title = "x".repeat(remaining);
+  const encoded = JSON.stringify(document);
+  assert(utf8Bytes(encoded) === targetBytes, `legacy fixture size mismatch: ${formatVersion}/${targetBytes}`);
+  validateLegacyDocument(JSON.parse(encoded), formatVersion, encoded);
+  assert(JSON.stringify(JSON.parse(encoded)) === encoded, "legacy parse/serialize bytes changed");
+  return { formatVersion, targetBytes, encoded, digest: sha256(encoded) };
+}
+
+function runLegacyCompatibilityChecks() {
+  const fixtures = [];
+  for (const formatVersion of [1, 2]) {
+    for (const targetBytes of TARGET_BYTES) {
+      const fixture = buildLegacyCompatibilityFixture(formatVersion, targetBytes);
+      fixtures.push({
+        id: `legacy-format-${formatVersion}-${targetBytes}b`,
+        format_version: fixture.formatVersion,
+        schema_version: 1,
+        pages: 1,
+        document_bytes: fixture.targetBytes,
+        sha256: fixture.digest,
+        accepted: true,
+        parse_serialize_bytes_equal: true,
+        measured_as_patch_candidate: false,
+      });
+    }
+  }
+  let oversizedRejected = false;
+  try {
+    buildLegacyCompatibilityFixture(1, MAX_DOCUMENT_BYTES + 1);
+  } catch (error) {
+    oversizedRejected = /1 MiB cap/.test(error.message);
+  }
+  assert(oversizedRejected, "legacy snapshot above the 1 MiB cap was not rejected");
+  return { fixtures, oversized_rejected: oversizedRejected };
+}
+
 function exactKeys(value, expected, label) {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
@@ -495,6 +601,7 @@ function runBenchmark() {
   const fixtures = [];
   const errors = [];
   const contractRejectionChecks = runContractRejectionChecks();
+  const legacyCompatibilityChecks = runLegacyCompatibilityChecks();
   for (const pageCount of PAGE_COUNTS) {
     for (const targetBytes of TARGET_BYTES) {
       for (const editKind of ["sparse", "broad"]) {
@@ -597,15 +704,28 @@ function runBenchmark() {
       snapshot_p95_ms: snapshotP95,
       typed_patch_p95_ms: patchP95,
       p95_ratio: snapshotP95 === 0 ? null : patchP95 / snapshotP95,
-      within_two_times: patchP95 <= snapshotP95 * 2,
+      pooled_within_two_times: patchP95 <= snapshotP95 * 2,
     };
   }
+
+  const perFixtureLatency = measured.map((fixture) => {
+    const snapshotP95 = fixture.candidates.snapshot.transform_ms.p95;
+    const patchP95 = fixture.candidates.typed_patch.transform_ms.p95;
+    return {
+      fixture_id: fixture.id,
+      snapshot_p95_ms: snapshotP95,
+      typed_patch_p95_ms: patchP95,
+      p95_ratio: snapshotP95 === 0 ? null : patchP95 / snapshotP95,
+      within_two_times: patchP95 <= snapshotP95 * 2,
+    };
+  });
 
   const outputsEqual = measured.every((fixture) => fixture.outputs_equal);
   const noErrors = errors.length === 0;
   const sparsePass = familySavings.sparse.median_upload_byte_reduction_fraction >= 0.25;
   const broadPass = familySavings.broad.median_upload_byte_reduction_fraction >= 0.25;
-  const latencyPass = Object.values(latencyRatios).every((row) => row.within_two_times);
+  const latencyPass = perFixtureLatency.every((row) => row.within_two_times);
+  const pooledLatencyPass = Object.values(latencyRatios).every((row) => row.pooled_within_two_times);
   const choice = noErrors && outputsEqual && sparsePass && broadPass && latencyPass
     ? "typed_patch_wire"
     : "complete_snapshot_wire";
@@ -617,13 +737,18 @@ function runBenchmark() {
     task_id: "PR-023",
     generated_at_utc: new Date().toISOString(),
     node_version: process.version,
-    claim_under_test: "Measure whether the typed-patch candidate for eligible replace_text edits passes local fixture correctness, byte-saving, and p95 gates. This Node-only result does not select a runtime wire without equivalent Worker/D1/R2 evidence.",
+    claim_under_test: "Measure whether the V2 typed-patch candidate for eligible replace_text edits passes local fixture correctness, byte-saving, and per-fixture p95 gates; separately check representative legacy V1 snapshots for byte-preserving parse/serialize compatibility. This Node-only result does not select a runtime wire without equivalent Worker/D1/R2 evidence.",
     measurement_scope: "Node in-memory parse/expand/validate/canonicalize/hash and encoded upload bytes only; no Worker, D1, R2, network, browser, or production latency was measured.",
     validation_scope: "Generated V2 fixture subset: exact top-level/theme/page/section/text/button shapes, IDs, section/block/page/byte caps, entry route, slug uniqueness, and reachable acyclic navigation chain. This is not a production schema validator.",
     canonicalization_scope: "The deterministic serializer matches the JCS rules exercised by this fixture subset (ASCII property names and safe-integer numbers); it is not a complete RFC 8785 implementation or parity test.",
     trial_design: {
       page_counts: PAGE_COUNTS,
       canonical_document_bytes: TARGET_BYTES,
+      legacy_compatibility_formats: [1, 2],
+      legacy_compatibility_page_count: 1,
+      legacy_compatibility_sizes: TARGET_BYTES,
+      legacy_compatibility_fixture_count: legacyCompatibilityChecks.fixtures.length,
+      patch_candidates_apply_to_legacy_fixtures: false,
       edit_families: ["sparse", "broad"],
       broad_edit_fraction: 0.6,
       warmup_pairs_per_fixture: WARMUP_PAIRS,
@@ -634,10 +759,12 @@ function runBenchmark() {
     },
     boundary_checks: runBoundaries(),
     contract_rejection_checks: contractRejectionChecks,
+    legacy_v1_compatibility_checks: legacyCompatibilityChecks,
     errors,
     correctness: { all_outputs_equal: outputsEqual, all_samples_error_free: noErrors },
     fixture_family_upload_savings: familySavings,
     transform_latency_by_size: latencyRatios,
+    transform_latency_by_fixture: perFixtureLatency,
     modeled_provider_operations: {
       client_round_trips_per_save: {
         both: 3,
@@ -661,7 +788,13 @@ function runBenchmark() {
       patch_eligibility: "Measured candidate only: closed replace_text grammar for existing text blocks, with exact base digest and canonical operation order.",
       candidate_fallback_rule_if_reconsidered: "Use the complete canonical snapshot for any ineligible edit, when patch wire is not strictly smaller than the snapshot, or when patch wire exceeds the 1,048,576-byte upload cap.",
       full_snapshot_persistence: "selected independently; both candidates persist complete snapshots",
-      criteria: { sparse_upload_savings_pass: sparsePass, broad_upload_savings_pass: broadPass, p95_latency_pass: latencyPass, correctness_pass: outputsEqual && noErrors },
+      criteria: {
+        sparse_upload_savings_pass: sparsePass,
+        broad_upload_savings_pass: broadPass,
+        per_fixture_p95_latency_pass: latencyPass,
+        pooled_p95_by_size_pass: pooledLatencyPass,
+        correctness_pass: outputsEqual && noErrors,
+      },
     },
     fixtures: measured,
   };

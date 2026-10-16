@@ -1,11 +1,11 @@
 # D22 - V2 document and bounded transfer
 
 Status: proposed for approval in PR-023. Persist complete immutable snapshots.
-The local Node benchmark passes its typed-patch fixture gates, but does not
-exercise the Worker/D1/R2 runtime. D22 selects the complete-snapshot wire for
-initial V2 runtime use; the patch remains an unselected candidate pending
-runtime-equivalent evidence. No V2 reader, stage route, migration, or Cloudflare
-readiness is claimed.
+The local Node benchmark meets typed-patch byte-savings and pooled-size p95
+gates, but fails its stricter per-fixture p95 gate in 5 of 32 V2 fixtures. It
+does not exercise the Worker/D1/R2 runtime. D22 selects the complete-snapshot
+wire for initial V2 runtime use. No V2 reader, stage route, migration, or
+Cloudflare readiness is claimed.
 
 ## Context
 
@@ -278,41 +278,51 @@ are outside this tested candidate. It is eligible only for edits fully
 represented by that grammar, with strictly fewer encoded bytes than the
 complete snapshot and no more than the 1,048,576-byte upload cap. The benchmark
 requires matching output, at least 25% median upload-byte reduction for both
-edit families, and no more than 2x local p95 transform time at any tested size.
-This is not a general structural patch protocol. Both candidates use the same
+edit families, and no more than 2x local p95 transform time in every V2
+page/size/edit fixture. A p95 pooled by document size is descriptive only. This
+is not a general structural patch protocol. Both candidates use the same
 modeled stage/save command count; patch expansion adds one modeled base-revision
 D1 read. These are model counts, not observed provider operations.
 
-The harness generates valid 1/10/25/50-page V2 documents at exactly 16,384,
-131,072, 524,288, and 1,048,575 canonical UTF-8 bytes. For each page-count and
-size pair it tests a one-block sparse edit and a broad edit affecting 60% of
-text blocks, with unchanged-length replacement text so the resulting document
-has the exact target size. Five unreported warm-ups per candidate precede 100
-paired samples per fixture. Each fixture has exactly 50 snapshot-first and 50
-patch-first measured pairs, deterministically shuffled. The harness must fail on
-any rejected valid fixture, output mismatch, oversized upload, lost operation,
-or uncounted error; explicit negative fixtures pass only when rejected. No
-failed sample is omitted. It reports wire bytes, Node parse/expand/validate/canonicalize/
-hash p50/p95/max, 100-pair spread, three modeled client round trips per save,
-and modeled D1/R2 operation/byte counts.
+The harness checks the legacy V1 one-page snapshot envelopes at
+`format_version: 1` and `format_version: 2` with `schema_version: 1`, at exactly
+16,384, 131,072, 524,288, and 1,048,575 bytes. These eight compatibility
+fixtures verify accepted shape and byte-preserving parse/serialize behavior;
+the V2 typed-patch candidate does not apply to them. V2 fixtures cover 1/10/25/50
+pages at the same exact canonical UTF-8 sizes. For each V2 page-count and size
+pair the benchmark tests a one-block sparse edit and a broad edit affecting 60%
+of text blocks, with unchanged-length replacement text so the resulting
+document has the exact target size. Five unreported warm-ups per candidate
+precede 100 paired samples per V2 fixture. Each fixture has exactly 50
+snapshot-first and 50 patch-first measured pairs, deterministically shuffled.
+The harness must fail on any rejected valid fixture, output mismatch, oversized
+upload, lost operation, or uncounted error; explicit negative fixtures pass
+only when rejected. No failed sample is omitted. It reports wire bytes, Node
+parse/expand/validate/canonicalize/hash p50/p95/max, per-fixture paired spread,
+three modeled client round trips per save, and modeled D1/R2 operation/byte
+counts.
 Boundary tests also reject 1,048,577-byte upload and canonical documents and
 accept valid 1,048,575- and 1,048,576-byte documents.
 
 The paired fixture verdict and raw measurements are recorded in
 [PR-023 results](../verification/PR-023/results.json) and
-[execution notes](../verification/PR-023/execution.txt). The 32 fixtures,
-6,400 measured candidate executions, exact output/digest parity, zero errors,
-size-boundary cases, and nine explicit negative fixtures passed. Median
-upload-byte reduction was 98.38896% for sparse edits and 39.93208% for broad
-edits. Combined typed-patch/snapshot p95 transform ratios were 1.7800, 1.7936,
-1.8506, and 1.8622 at 16,384,
-131,072, 524,288, and 1,048,575 bytes. Each size remains below the 2x gate,
-and both edit families exceed the 25% byte-saving gate. These are local Node
-fixture results, not two production-equivalent implementations under the
-Worker/D1/R2 runtime, so they do not establish the wire choice for adoption.
-D22 selects complete-snapshot transfer for every edit in the initial V2
-runtime. The typed-patch candidate is not an accepted request format and has no
-runtime fallback path. Every saved revision remains a complete canonical
+[execution notes](../verification/PR-023/execution.txt). Eight legacy V1-shaped
+fixture checks passed shape validation and Node JSON parse/serialize byte
+round trips; they do not exercise the Rust V1 decoder. The 32 paired V2
+fixtures completed 6,400 candidate executions with exact output/digest parity
+and zero errors. The nine explicit negative fixtures and size-boundary checks
+passed. Median upload-byte reduction was 98.38896% for sparse edits and
+39.93208% for broad edits. Pooled typed-patch/snapshot p95 transform ratios by
+document size were 1.7545, 1.8407, 1.6091, and 1.9287 at 16,384, 131,072,
+524,288, and 1,048,575 bytes, respectively. However, 5 of 32 individual V2
+fixture p95 ratios exceeded 2x; the maximum was 2.6277x for the 1-page,
+524,288-byte sparse fixture. The typed-patch candidate therefore fails the
+per-fixture latency gate despite passing byte-savings and pooled-size p95.
+These are local Node fixture results, not two production-equivalent
+implementations under the Worker/D1/R2 runtime. D22 selects complete-snapshot
+transfer for every edit in the initial V2 runtime. The typed-patch candidate is
+not an accepted request format and has no runtime fallback path. Every saved
+revision remains a complete canonical
 snapshot. PR-024 must verify snapshot upload, finalization, and direct
 save/render parity in local Worker/D1 before enabling V2. Reopen the patch
 candidate only through a later decision backed by runtime-equivalent
