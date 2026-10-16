@@ -30,8 +30,16 @@ Profiler and measurement limits
 Stage lifecycle model
 - Source artifact: `prototypes/stage-lifecycle.html`.
 - Headless assertions: `node scripts/test-pr023-stage-lifecycle.mjs`.
-- Verified expired and consumed mint replay, terminal capability rejection, receipt-first save replay after stage cleanup, stale-head rejection with no receipt/revision, same-byte upload retry, interrupted client request, retirement of the overdue attempt, late R2 completion as an orphan, save rejection, and cleanup of the orphan object.
+- Verified expired and consumed mint replay, terminal capability rejection, receipt-first save replay after stage cleanup, stale-head rejection with no receipt/revision, fresh-key mint after stale-head conflict and expiry, preservation/replay of prior mint receipts, retired-stage cleanup after replacement save/expiry, same-byte upload retry, interrupted client request, retry with a fresh upload attempt while an earlier writer is unresolved, preservation of both attempt tombstones across remint, each late R2 completion as an orphan, writer-quiescence confirmation, and post-quiescence absence/delete checks.
 - The standalone model passed JavaScript syntax checking and its headless state assertions. It does not prove Worker, D1, or R2 runtime behavior.
+
+Final local validation for the review fix
+- Timestamp: 2026-10-16T01:58Z.
+- `cargo xtask check` passed with the pinned Rust 1.85.0 toolchain.
+- `node --check scripts/test-pr023-stage-lifecycle.mjs`, the extracted prototype-script syntax check, and `node scripts/test-pr023-stage-lifecycle.mjs` passed; all lifecycle assertions passed.
+- `git diff --check` passed.
+- After installing the repository-pinned local tools (`wasm-bindgen 0.2.129`, `cargo-audit 0.22.2`) under `/tmp`, `cargo xtask ci` passed, including Worker WASM and dashboard asset builds, local funnel/MCP smoke tests, and vulnerability scanning of 355 locked dependencies. The advisory database loaded 1,329 advisories; no vulnerability gate failed.
+- Smoke tests used local temporary D1 databases; no remote Cloudflare binding or deployment was used.
 
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.

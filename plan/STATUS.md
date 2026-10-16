@@ -1,6 +1,6 @@
 # Eez Funnel - Status
 
-Current phase: PR-023 V2 document and bounded transfer decision (three commits prepared; local full CI passed; exact-head review and hosted checks pending)
+Current phase: PR-023 V2 document and bounded transfer decision (review-fix implementation and full local CI pass; exact-head review and hosted checks pending)
 Last updated: 2026-10-16
 
 ## Phases
@@ -29,11 +29,11 @@ Last updated: 2026-10-16
 - [x] PR-021 Shared product boundary and roadmap (merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`; no feature implementation)
 - [x] PR-053 Project-local skills and workflow (merged as PR #24 at `5ddb6ac1580d155a24ce13671b677dbfdf184489`)
 - [x] PR-022 Dashboard publication controls (PR #25 merged at `e3088d370110f60a424a8c311ed2a7b148a8ae23`; exact-head reviews and hosted checks passed)
-- [ ] PR-023 V2 document and bounded transfer decision (all three commits prepared locally; full CI passed; exact-head PR review and hosted checks pending)
+- [ ] PR-023 V2 document and bounded transfer decision (review fix adds fresh-key stage recovery after stale-head conflict/expiry and retains cleanup records; local `cargo xtask ci` passes, exact-head review and hosted checks pending)
 
 ## Verified locally
 
-PR-023 defines the immutable V2 document/manifest and bounded staged-transfer proposal without changing frozen C-01 or C-01_config. D22 selects full-snapshot transfer and persistence for initial V2 runtime use. Its 100-pair-per-fixture Node benchmark shows the typed-patch candidate passes local byte-saving, correctness, and p95 gates, but does not establish a production-equivalent winner. The latest 32-fixture run reports p95 transform ratios of 1.7800, 1.7936, 1.8506, and 1.8622 by document size, with all 6,400 candidate executions passing; the artifact also records nine negative fixture checks and three modeled client round trips per save. The lifecycle model checks receipt replay, stale-head, expiry, interrupted upload, and cleanup interleavings, but the prototypes do not prove Worker/D1/R2 runtime behavior. V2 decoding, stage routes, migrations, Cloudflare production readiness, and hosted review remain pending. V2 stage/save commands must stay out of MCP discovery and invocation until a bounded transfer path and a separately named, versioned D21 addendum are reviewed and approved; frozen D21 stays unchanged.
+PR-023 defines the immutable V2 document/manifest and bounded staged-transfer proposal without changing frozen C-01 or C-01_config. D22 selects full-snapshot transfer and persistence for initial V2 runtime use. Its 100-pair-per-fixture Node benchmark shows the typed-patch candidate passes local byte-saving, correctness, and p95 gates, but does not establish a production-equivalent winner. The latest 32-fixture run reports p95 transform ratios of 1.7800, 1.7936, 1.8506, and 1.8622 by document size, with all 6,400 candidate executions passing; the artifact also records nine negative fixture checks and three modeled client round trips per save. The lifecycle model now checks fresh-key recovery after stale-head conflict/expiry, prior mint-receipt replay, cleanup after replacement save/expiry, retrying with an unresolved earlier upload while preserving both attempt tombstones, each late writer's completion, and post-quiescence cleanup; it does not prove Worker/D1/R2 runtime behavior. V2 decoding, stage routes, migrations, Cloudflare production readiness, and hosted review remain pending. V2 stage/save commands must stay out of MCP discovery and invocation until a bounded transfer path and a separately named, versioned D21 addendum are reviewed and approved; frozen D21 stays unchanged.
 
 PR-014 adds atomic receipt-backed publish/unpublish and public `GET /f/:slug` rendering from the stored `render_manifest`. The local publication fixes require a newly claimed receipt in the exact D1 batch before pointer mutation, classify missing publish/unpublish fields and public-read slug before typed decode, map unsupported stored schema to HTTP 400, and classify an invalid route against active receipts before returning its route error. D18 records these boundaries; the 16 KiB request cap and C-01/C-04 receipt/CAS behavior remain unchanged. No frozen contract, migration, dependency, lockfile, or renderer changed.
 
@@ -326,4 +326,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Push the three-commit branch and open PR-023 with a clear `@codex` request and exact-head Sol review. Resolve review threads and require green hosted checks before merge. Keep real Cloudflare validation separate until a roadmap task needs configured credentials or resource IDs.
+Commit the review fix as the fourth PR-023 commit, push the branch, and update PR-023 with a clear `@codex` request and exact-head Sol review. Resolve review threads and require green hosted checks before merge. Keep real Cloudflare validation separate until a roadmap task needs configured credentials or resource IDs.

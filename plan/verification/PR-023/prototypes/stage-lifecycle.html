@@ -60,8 +60,10 @@
       <div class="actions">
         <button type="button" data-action="MINT">Mint stage</button>
         <button type="button" data-action="REPLAY_MINT">Retry mint with same key</button>
+        <button type="button" data-action="REPLAY_PREVIOUS_MINT">Retry previous mint key</button>
         <button type="button" data-action="BEGIN_UPLOAD">Begin upload</button>
         <button type="button" data-action="FINISH_UPLOAD">Finish current upload</button>
+        <button type="button" data-action="FINISH_RETIRED_UPLOAD">Finish retired upload late</button>
         <button type="button" data-action="RETRY_SAME_UPLOAD">Retry identical bytes</button>
         <button type="button" data-action="UPLOAD_DIFFERENT">Try different bytes</button>
         <button type="button" data-action="SAVE">Save revision</button>
@@ -70,6 +72,7 @@
         <button type="button" data-action="CHANGE_HEAD">Simulate another editor save</button>
         <button type="button" data-action="ADVANCE_5">Advance 5 minutes</button>
         <button type="button" data-action="ADVANCE_16">Advance 16 minutes</button>
+        <button type="button" data-action="CONFIRM_WRITER_QUIESCENT">Confirm writer quiescence</button>
         <button type="button" data-action="CLEANUP">Run cleanup</button>
         <button type="button" data-action="REPLAY_SAVE">Retry save with same key</button>
         <button type="button" class="primary" data-action="RESET">Reset model</button>
@@ -124,15 +127,31 @@
           ],
         },
         {
+          id: "writer-quiescence",
+          title: "Wait for writer quiescence",
+          description: "Passing the upload deadline and grace period only retires the attempt. Cleanup retains its tombstone until the writer is confirmed quiescent, then records a post-quiescence absence check.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance past its deadline and grace period", action: { type: "ADVANCE_5" } },
+            { label: "Retire the overdue attempt", action: { type: "CLEANUP" } },
+            { label: "Try cleanup before quiescence is known", action: { type: "CLEANUP" } },
+            { label: "Confirm the writer has stopped", action: { type: "CONFIRM_WRITER_QUIESCENT" } },
+            { label: "Observe absence after quiescence", action: { type: "CLEANUP" } },
+          ],
+        },
+        {
           id: "mint-expired-replay",
           title: "Mint receipt after expiry",
-          description: "An exact mint replay returns the original result during the receipt window, while current stage checks still reject an expired capability.",
+          description: "An exact mint replay returns the original result during the receipt window, while a fresh key creates a new stage after the expired capability is rejected.",
           steps: [
             { label: "Mint an upload stage", action: { type: "MINT" } },
             { label: "Advance beyond stage expiry", action: { type: "ADVANCE_16" } },
             { label: "Expire and clean the stage", action: { type: "CLEANUP" } },
             { label: "Replay the same mint key", action: { type: "REPLAY_MINT" } },
             { label: "Try to upload with the terminal stage", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Mint a fresh stage with a new key", action: { type: "MINT" } },
+            { label: "Replay the previous mint key", action: { type: "REPLAY_PREVIOUS_MINT" } },
           ],
         },
         {
@@ -151,13 +170,47 @@
         {
           id: "stale-head",
           title: "Stale editor head",
-          description: "Another save advances the editor head after upload. The stale stage cannot create a revision or claim a success receipt.",
+          description: "Another save advances the editor head after upload. The stale stage cannot create a revision or claim a success receipt; a fresh stage binds to the new head while the earlier mint receipt remains replayable.",
           steps: [
             { label: "Mint an upload stage", action: { type: "MINT" } },
             { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
             { label: "Finish the upload", action: { type: "FINISH_UPLOAD" } },
             { label: "Advance the editor head elsewhere", action: { type: "CHANGE_HEAD" } },
             { label: "Attempt the stale save", action: { type: "SAVE" } },
+            { label: "Mint a fresh stage for the new head", action: { type: "MINT" } },
+            { label: "Replay the previous mint key", action: { type: "REPLAY_PREVIOUS_MINT" } },
+          ],
+        },
+        {
+          id: "expired-late-upload-remint",
+          title: "Remint during a late upload",
+          description: "A stage expires while its R2 writer may still be running. A fresh stage can proceed while the old attempt tombstone remains available to quarantine and clean a late object.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin the upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance beyond stage expiry", action: { type: "ADVANCE_16" } },
+            { label: "Mint a fresh stage", action: { type: "MINT" } },
+            { label: "Observe the late R2 completion", action: { type: "FINISH_RETIRED_UPLOAD" } },
+            { label: "Remove the orphaned late object", action: { type: "CLEANUP" } },
+            { label: "Remove retired stage metadata", action: { type: "CLEANUP" } },
+          ],
+        },
+        {
+          id: "upload-retry-late-writer",
+          title: "Retry with a late writer",
+          description: "An overdue attempt is abandoned, then the owner retries with a unique key before expiry. The older attempt tombstone remains available after remint so its late object can be quarantined and deleted.",
+          steps: [
+            { label: "Mint an upload stage", action: { type: "MINT" } },
+            { label: "Begin upload attempt 1", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance past the attempt deadline and grace", action: { type: "ADVANCE_5" } },
+            { label: "Retire attempt 1", action: { type: "CLEANUP" } },
+            { label: "Retry with upload attempt 2", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Advance beyond stage expiry", action: { type: "ADVANCE_16" } },
+            { label: "Mint a fresh stage", action: { type: "MINT" } },
+            { label: "Observe attempt 1's late object", action: { type: "FINISH_RETIRED_UPLOAD" } },
+            { label: "Delete attempt 1's orphan object", action: { type: "CLEANUP" } },
+            { label: "Observe attempt 2's late object", action: { type: "FINISH_RETIRED_UPLOAD" } },
+            { label: "Delete attempt 2's orphan object", action: { type: "CLEANUP" } },
           ],
         },
         {
@@ -194,7 +247,9 @@
           publishedRevision: "rev-6",
           stage: null,
           stageSerial: 1,
-          mintReceipt: null,
+          mintReceipts: [],
+          retiredStages: [],
+          retiredAttempts: [],
           saveReceipt: null,
           attemptSerial: 1,
           attempt: null,
@@ -210,14 +265,58 @@
         return state;
       }
 
+      function retireCurrentStage(state) {
+        if (!state.stage) return;
+        const stage = structuredClone(state.stage);
+        const attempt = state.attempt ? structuredClone(state.attempt) : null;
+        const stale = stage.baseHead !== state.editorHead;
+        const expired = state.minute >= stage.expiresAt;
+        const reason = stale ? "stale editor head" : expired ? "expiry" : stage.status;
+        if (stale) stage.status = "discarded";
+        else if (expired && stage.status !== "consumed") stage.status = "expired";
+        if (stage.objectPresent) stage.objectOrphaned = true;
+        state.retiredStages.push({ stage, attempt, reason });
+        state.stage = null;
+        state.attempt = null;
+      }
+
+      function replayMint(state, receipt) {
+        const now = state.minute;
+        if (!receipt) return addEvent(state, "Mint replay denied: no matching receipt exists.");
+        if (now >= receipt.receiptExpiresAt) {
+          return addEvent(state, "Mint receipt expired after 24 hours. Re-read the editor head and mint with a fresh idempotency key.");
+        }
+        const stage = state.stage?.id === receipt.stageId
+          ? state.stage
+          : state.retiredStages.find((entry) => entry.stage.id === receipt.stageId)?.stage;
+        const terminal = !stage || stage.metadataRemoved || ["expired", "consumed", "discarded"].includes(stage.status);
+        if (terminal) {
+          return addEvent(state, `Mint replay returned the original stage ${receipt.stageId} and original expiry minute ${receipt.expiresAt}. The original stage is terminal, so upload/save still reject it.`);
+        }
+        return addEvent(state, `Mint replay returned the original stage ${receipt.stageId} and original expiry minute ${receipt.expiresAt}; current stage state is checked separately.`);
+      }
+
+      function trackedAttempts(state) {
+        return [
+          ...(state.attempt ? [state.attempt] : []),
+          ...state.retiredAttempts,
+          ...state.retiredStages.flatMap((entry) => entry.attempt ? [entry.attempt] : []),
+        ];
+      }
+
       function reduce(state, action) {
         const next = structuredClone(state);
         const now = next.minute;
         switch (action.type) {
           case "MINT": {
-            if (next.stage && ["issued", "uploaded"].includes(next.stage.status)) {
+            const stageIsActive = next.stage && ["issued", "uploaded"].includes(next.stage.status);
+            const stageIsStale = next.stage && next.stage.baseHead !== next.editorHead;
+            const stageIsExpired = next.stage && now >= next.stage.expiresAt;
+            if (stageIsActive && !stageIsStale && !stageIsExpired) {
               return addEvent(next, "Mint denied: an active stage already exists for this editor head.");
             }
+            retireCurrentStage(next);
+            next.mintReceipts = next.mintReceipts.filter((receipt) => now < receipt.receiptExpiresAt);
             const id = `stage-demo-${next.stageSerial}`;
             next.stageSerial += 1;
             next.stage = {
@@ -233,25 +332,18 @@
               objectOrphaned: false,
               metadataRemoved: false,
             };
-            next.mintReceipt = {
+            next.mintReceipts.push({
               key: `mint-key-${id}`,
               stageId: id,
               expiresAt: now + 15,
               receiptExpiresAt: now + 1440,
-            };
+            });
             return addEvent(next, `Mint succeeded. Stage ${id} is bound to ${next.editorHead} and expires in 15 minutes.`);
           }
-          case "REPLAY_MINT": {
-            if (!next.mintReceipt) return addEvent(next, "Mint replay denied: no matching receipt exists.");
-            if (now >= next.mintReceipt.receiptExpiresAt) {
-              return addEvent(next, "Mint receipt expired after 24 hours. Re-read the editor head and mint with a fresh idempotency key.");
-            }
-            const terminal = !next.stage || next.stage.metadataRemoved || ["expired", "consumed"].includes(next.stage.status);
-            if (terminal) {
-              return addEvent(next, `Mint replay returned the original stage ${next.mintReceipt.stageId} and original expiry minute ${next.mintReceipt.expiresAt}. The current stage is terminal, so upload/save still reject it.`);
-            }
-            return addEvent(next, `Mint replay returned the original stage ${next.mintReceipt.stageId} and original expiry minute ${next.mintReceipt.expiresAt}; current stage state is checked separately.`);
-          }
+          case "REPLAY_MINT":
+            return replayMint(next, next.mintReceipts.at(-1));
+          case "REPLAY_PREVIOUS_MINT":
+            return replayMint(next, next.mintReceipts.at(-2));
           case "BEGIN_UPLOAD": {
             if (!next.stage || next.stage.status !== "issued" || now >= next.stage.expiresAt) {
               return addEvent(next, "Upload denied: no unexpired issued stage is available.");
@@ -259,9 +351,12 @@
             if (next.attempt?.status === "receiving") {
               return addEvent(next, "Upload already has an active attempt.");
             }
+            if (next.attempt?.status === "abandoned") {
+              next.retiredAttempts.push(structuredClone(next.attempt));
+            }
             const id = `attempt-${next.attemptSerial}`;
             next.attemptSerial += 1;
-            next.attempt = { id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false };
+            next.attempt = { id, stageId: next.stage.id, status: "receiving", objectKey: `private/stage/${id}`, deadline: now + 2, objectPresent: false, writerQuiescent: false, cleanupConfirmed: false };
             return addEvent(next, `Upload attempt ${id} registered in D1 before its private R2 write.`);
           }
           case "INTERRUPT_UPLOAD": {
@@ -273,7 +368,9 @@
           case "FINISH_UPLOAD": {
             if (!next.attempt) return addEvent(next, "Upload finish denied: no attempt was registered.");
             if (next.attempt.status === "abandoned") {
+              if (next.attempt.writerQuiescent) return addEvent(next, "Late upload ignored: this writer is already quiescent; duplicate completion is ignored.");
               next.attempt.objectPresent = true;
+              next.attempt.writerQuiescent = true;
               next.stage.objectOrphaned = true;
               return addEvent(next, "Late R2 write finished after its lease was retired. It is an orphan and cannot become the stage object.");
             }
@@ -282,6 +379,7 @@
             }
             if (next.attempt.status !== "receiving") return addEvent(next, "Upload finish denied: the attempt is no longer receiving.");
             next.attempt.objectPresent = true;
+            next.attempt.writerQuiescent = true;
             if (now > next.attempt.deadline || !next.stage || now >= next.stage.expiresAt || next.stage.status !== "issued") {
               next.attempt.status = "abandoned";
               next.stage.objectOrphaned = true;
@@ -292,6 +390,19 @@
             next.stage.objectPresent = true;
             next.stage.objectKey = next.attempt.objectKey;
             return addEvent(next, "Upload completed. D1 now points the stage at the verified private object.");
+          }
+          case "FINISH_RETIRED_UPLOAD": {
+            const retiredAttempt = next.retiredAttempts.find((item) => ["receiving", "abandoned"].includes(item.status) && !item.writerQuiescent);
+            const retiredStage = next.retiredStages.find((item) => item.attempt && ["receiving", "abandoned"].includes(item.attempt.status) && !item.attempt.writerQuiescent);
+            const attempt = retiredAttempt ?? retiredStage?.attempt;
+            if (attempt) {
+              attempt.status = "abandoned";
+              attempt.objectPresent = true;
+              attempt.objectOrphaned = true;
+              attempt.writerQuiescent = true;
+              return addEvent(next, `Late R2 write for ${attempt.id} finished after its attempt was retired. Its object remains an orphan and cannot be finalized.`);
+            }
+            return addEvent(next, "Late upload finish denied: no unsettled retired writer is eligible to complete.");
           }
           case "RETRY_SAME_UPLOAD": {
             if (next.stage?.status === "uploaded" && next.stage.digest === "sha256:demo-bytes-a" && next.stage.length === 16384) {
@@ -311,27 +422,76 @@
           case "ADVANCE_16":
             next.minute += 16;
             return addEvent(next, "Sixteen minutes passed. The 15-minute upload stage has expired.");
+          case "CONFIRM_WRITER_QUIESCENT": {
+            const attempt = trackedAttempts(next).find((item) => item.status === "abandoned" && !item.writerQuiescent);
+            if (!attempt) return addEvent(next, "No abandoned writer is waiting for quiescence confirmation.");
+            attempt.writerQuiescent = true;
+            return addEvent(next, `Writer ${attempt.id} is confirmed quiescent. Cleanup may now verify post-quiescence absence or delete its object.`);
+          }
           case "CLEANUP": {
             if (next.attempt?.status === "receiving" && now >= next.attempt.deadline + 2) {
               next.attempt.status = "abandoned";
               return addEvent(next, "Cleanup changed the overdue attempt from receiving to abandoned before queuing object deletion.");
             }
-            if (next.stage?.status === "consumed") {
+            const currentCompletedObjectPresent = next.attempt?.status === "complete" && next.attempt.objectPresent;
+            if (next.stage?.status === "consumed" && (!next.stage.metadataRemoved || next.stage.objectPresent || currentCompletedObjectPresent)) {
               next.stage.objectPresent = false;
               next.stage.metadataRemoved = true;
               if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
               return addEvent(next, "Cleanup removed the consumed stage and its temporary object. The immutable D1 revision remains.");
             }
-            if (next.stage && now >= next.stage.expiresAt && next.stage.status !== "consumed") {
+            const currentStageNeedsCleanup = next.stage && (!next.stage.metadataRemoved || next.stage.objectPresent || currentCompletedObjectPresent);
+            if (next.stage && now >= next.stage.expiresAt && next.stage.status !== "consumed" && currentStageNeedsCleanup) {
               next.stage.status = "expired";
               next.stage.objectPresent = false;
               next.stage.metadataRemoved = true;
               if (next.attempt?.status === "complete") next.attempt.objectPresent = false;
               return addEvent(next, "Cleanup made the stage terminal in D1, then removed its temporary object. Finalization can no longer win.");
             }
-            if (next.attempt?.status === "abandoned" && next.attempt.objectPresent) {
+            if (next.attempt?.status === "abandoned" && next.attempt.writerQuiescent && !next.attempt.cleanupConfirmed) {
               next.attempt.objectPresent = false;
-              return addEvent(next, "Cleanup removed the unreferenced abandoned-attempt object.");
+              next.attempt.cleanupConfirmed = true;
+              return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for ${next.attempt.id}.`);
+            }
+            for (const attempt of next.retiredAttempts) {
+              if (attempt.status === "receiving") {
+                if (now >= attempt.deadline + 2) {
+                  attempt.status = "abandoned";
+                  return addEvent(next, `Cleanup retired overdue writer ${attempt.id} before queuing its unique object key for deletion.`);
+                }
+                continue;
+              }
+              if (attempt.status === "abandoned" && attempt.writerQuiescent && !attempt.cleanupConfirmed) {
+                attempt.objectPresent = false;
+                attempt.cleanupConfirmed = true;
+                return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for retired attempt ${attempt.id}.`);
+              }
+            }
+            for (const entry of next.retiredStages) {
+              if (entry.attempt?.status === "receiving") {
+                if (now >= entry.attempt.deadline + 2) {
+                  entry.attempt.status = "abandoned";
+                  return addEvent(next, `Cleanup retired overdue writer ${entry.attempt.id} before queuing its unique object key for deletion.`);
+                }
+                continue;
+              }
+              if (entry.attempt?.status === "abandoned" && entry.attempt.writerQuiescent && !entry.attempt.cleanupConfirmed) {
+                entry.attempt.objectPresent = false;
+                entry.attempt.cleanupConfirmed = true;
+                return addEvent(next, `Cleanup completed a post-quiescence absence/delete check for retired attempt ${entry.attempt.id}.`);
+              }
+              const stageCanBeCleaned = ["consumed", "discarded", "expired"].includes(entry.stage.status) || now >= entry.stage.expiresAt;
+              if (stageCanBeCleaned && !entry.stage.metadataRemoved) {
+                if (entry.stage.status !== "consumed" && entry.stage.status !== "discarded") entry.stage.status = "expired";
+                entry.stage.objectPresent = false;
+                entry.stage.metadataRemoved = true;
+                if (entry.attempt?.status === "complete") entry.attempt.objectPresent = false;
+                return addEvent(next, `Cleanup removed retired ${entry.reason} stage ${entry.stage.id} and its temporary object; its mint receipt remains replayable.`);
+              }
+            }
+            const unresolvedAttempt = trackedAttempts(next).find((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent);
+            if (unresolvedAttempt) {
+              return addEvent(next, `Cleanup retained ${unresolvedAttempt.id}; its writer is not confirmed quiescent.`);
             }
             return addEvent(next, "Cleanup found no expired stage or retired upload to remove.");
           }
@@ -413,9 +573,14 @@
         addStateCard("Stage expires", stage ? `minute ${stage.expiresAt}` : "—");
         addStateCard("Expected upload", stage ? `${stage.length} bytes · ${stage.digest}` : "—");
         addStateCard("Temporary object", stage?.objectKey ?? "—");
-        addStateCard("Attempt", state.attempt ? `${state.attempt.id} · ${state.attempt.status}` : "none");
+        addStateCard("Attempt", state.attempt ? `${state.attempt.id} · ${state.attempt.status} · writer ${state.attempt.writerQuiescent ? "quiescent" : "unconfirmed"}` : "none");
         addStateCard("Attempt object", state.attempt ? `${state.attempt.objectPresent ? "present" : "absent"}${stage?.objectOrphaned ? " · unreferenced" : ""}` : "—");
-        addStateCard("Mint receipt", state.mintReceipt ? `${state.mintReceipt.key} · stage expiry minute ${state.mintReceipt.expiresAt} · receipt expiry minute ${state.mintReceipt.receiptExpiresAt}` : "none");
+        const mintReceipt = state.mintReceipts.at(-1);
+        addStateCard("Latest mint receipt", mintReceipt ? `${mintReceipt.key} · stage expiry minute ${mintReceipt.expiresAt} · receipt expiry minute ${mintReceipt.receiptExpiresAt}` : "none");
+        addStateCard("Retained mint receipts", String(state.mintReceipts.length));
+        addStateCard("Retired stages", String(state.retiredStages.length));
+        const unresolvedRetiredAttempts = trackedAttempts(state).filter((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent).length;
+        addStateCard("Retired upload attempts", `${state.retiredAttempts.length} · ${unresolvedRetiredAttempts} writer(s) unsettled`);
         addStateCard("Save receipt", state.saveReceipt ? `${state.saveReceipt.key} → ${state.saveReceipt.revisionId}` : "none");
         addStateCard("Stage metadata", stage?.metadataRemoved ? "removed" : "retained");
         messageElement.textContent = state.lastEvent;

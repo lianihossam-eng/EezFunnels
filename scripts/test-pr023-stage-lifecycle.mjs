@@ -36,6 +36,91 @@ assert.equal(staleHead.editorHead, "rev-8");
 assert.equal(staleHead.saveReceipt, null);
 assert.match(staleHead.lastEvent, /no success receipt or revision/);
 
+const staleHeadRecovery = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT"]);
+assert.equal(staleHeadRecovery.stage.id, "stage-demo-2");
+assert.equal(staleHeadRecovery.stage.baseHead, "rev-8");
+assert.equal(staleHeadRecovery.saveReceipt, null);
+assert.equal(staleHeadRecovery.retiredStages[0].stage.id, "stage-demo-1");
+assert.equal(staleHeadRecovery.retiredStages[0].stage.status, "discarded");
+assert.equal(staleHeadRecovery.retiredStages[0].stage.objectPresent, true);
+assert.equal(staleHeadRecovery.mintReceipts.length, 2);
+assert.notEqual(staleHeadRecovery.mintReceipts[0].key, staleHeadRecovery.mintReceipts[1].key);
+
+const staleMintReplay = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT", "REPLAY_PREVIOUS_MINT",
+]);
+assert.match(staleMintReplay.lastEvent, /original stage stage-demo-1/);
+
+const staleHeadCleanup = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT", "CLEANUP",
+]);
+assert.equal(staleHeadCleanup.retiredStages[0].stage.metadataRemoved, true);
+assert.equal(staleHeadCleanup.retiredStages[0].stage.objectPresent, false);
+assert.equal(staleHeadCleanup.retiredStages[0].attempt.objectPresent, false);
+
+const staleCleanupAfterReplacementSave = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT",
+  "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "CLEANUP", "CLEANUP",
+]);
+assert.equal(staleCleanupAfterReplacementSave.stage.metadataRemoved, true);
+assert.equal(staleCleanupAfterReplacementSave.retiredStages[0].stage.metadataRemoved, true);
+assert.equal(staleCleanupAfterReplacementSave.retiredStages[0].stage.objectPresent, false);
+
+const staleCleanupAfterReplacementExpiry = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT",
+  "ADVANCE_16", "CLEANUP", "CLEANUP",
+]);
+assert.equal(staleCleanupAfterReplacementExpiry.stage.metadataRemoved, true);
+assert.equal(staleCleanupAfterReplacementExpiry.retiredStages[0].stage.metadataRemoved, true);
+assert.equal(staleCleanupAfterReplacementExpiry.retiredStages[0].stage.objectPresent, false);
+
+const expiredStageRecovery = run(["MINT", "ADVANCE_16", "MINT"]);
+assert.equal(expiredStageRecovery.stage.id, "stage-demo-2");
+assert.equal(expiredStageRecovery.stage.baseHead, "rev-7");
+assert.equal(expiredStageRecovery.retiredStages[0].stage.status, "expired");
+assert.match(run(["MINT", "ADVANCE_16", "MINT", "REPLAY_PREVIOUS_MINT"]).lastEvent, /original stage stage-demo-1/);
+
+const expiredUploadedStage = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "ADVANCE_16", "MINT", "CLEANUP"]);
+assert.equal(expiredUploadedStage.retiredStages[0].stage.metadataRemoved, true);
+assert.equal(expiredUploadedStage.retiredStages[0].stage.objectPresent, false);
+
+const lateRetiredUpload = run([
+  "MINT", "BEGIN_UPLOAD", "ADVANCE_16", "MINT", "FINISH_RETIRED_UPLOAD", "CLEANUP", "CLEANUP",
+]);
+assert.equal(lateRetiredUpload.retiredStages[0].attempt.status, "abandoned");
+assert.equal(lateRetiredUpload.retiredStages[0].attempt.objectPresent, false);
+assert.equal(lateRetiredUpload.retiredStages[0].stage.metadataRemoved, true);
+
+const retriedLateWriter = run([
+  "MINT", "BEGIN_UPLOAD", "ADVANCE_5", "CLEANUP", "BEGIN_UPLOAD", "ADVANCE_16", "MINT",
+  "FINISH_RETIRED_UPLOAD", "CLEANUP", "FINISH_RETIRED_UPLOAD", "CLEANUP",
+]);
+assert.equal(retriedLateWriter.retiredAttempts[0].id, "attempt-1");
+assert.equal(retriedLateWriter.retiredAttempts[0].status, "abandoned");
+assert.equal(retriedLateWriter.retiredAttempts[0].writerQuiescent, true);
+assert.equal(retriedLateWriter.retiredAttempts[0].cleanupConfirmed, true);
+assert.equal(retriedLateWriter.retiredAttempts[0].objectPresent, false);
+assert.equal(retriedLateWriter.retiredStages[0].attempt.id, "attempt-2");
+assert.equal(retriedLateWriter.retiredStages[0].attempt.writerQuiescent, true);
+assert.equal(retriedLateWriter.retiredStages[0].attempt.cleanupConfirmed, true);
+assert.equal(retriedLateWriter.retiredStages[0].attempt.objectPresent, false);
+assert.ok(retriedLateWriter.events.some((event) => /Late R2 write for attempt-1/.test(event)));
+assert.ok(retriedLateWriter.events.some((event) => /Late R2 write for attempt-2/.test(event)));
+
+const writerQuiescence = run([
+  "MINT", "BEGIN_UPLOAD", "ADVANCE_5", "CLEANUP", "CLEANUP",
+]);
+assert.equal(writerQuiescence.attempt.status, "abandoned");
+assert.equal(writerQuiescence.attempt.writerQuiescent, false);
+assert.equal(writerQuiescence.attempt.cleanupConfirmed, false);
+assert.match(writerQuiescence.lastEvent, /not confirmed quiescent/);
+const writerQuiescenceConfirmed = run([
+  "MINT", "BEGIN_UPLOAD", "ADVANCE_5", "CLEANUP", "CLEANUP", "CONFIRM_WRITER_QUIESCENT", "CLEANUP",
+]);
+assert.equal(writerQuiescenceConfirmed.attempt.writerQuiescent, true);
+assert.equal(writerQuiescenceConfirmed.attempt.cleanupConfirmed, true);
+assert.match(writerQuiescenceConfirmed.lastEvent, /post-quiescence absence\/delete check/);
+
 const interrupted = run([
   "MINT",
   "BEGIN_UPLOAD",
@@ -50,6 +135,8 @@ assert.equal(interrupted.stage.status, "issued");
 assert.equal(interrupted.stage.objectOrphaned, true);
 assert.equal(interrupted.attempt.status, "abandoned");
 assert.equal(interrupted.attempt.objectPresent, false);
+assert.equal(interrupted.attempt.writerQuiescent, true);
+assert.equal(interrupted.attempt.cleanupConfirmed, true);
 assert.equal(interrupted.revisionCount, 7);
 assert.equal(interrupted.saveReceipt, null);
 
@@ -58,4 +145,4 @@ assert.equal(uploadRetry.stage.status, "uploaded");
 assert.equal(uploadRetry.stage.objectPresent, true);
 assert.equal(uploadRetry.revisionCount, 7);
 
-process.stdout.write("PR-023 stage lifecycle assertions passed: expiry, receipt replay, stale head, interrupted upload cleanup, and retry identity.\n");
+process.stdout.write("PR-023 stage lifecycle assertions passed: expiry, receipt replay, stale-head recovery, replacement cleanup, late upload tombstones, retry-before-remint cleanup, interrupted upload cleanup, and retry identity.\n");
