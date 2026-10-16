@@ -22,6 +22,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_json_canonicalizer = "=0.4.1"
 uuid = { version = "1", features = ["v4", "serde", "js"] }
 thiserror = "1"
 worker = { version = "=0.8.3", features = ["http", "axum", "d1"] }
@@ -33,7 +34,7 @@ dioxus-web = { version = "=0.7.10", default-features = false }
 dioxus-dnd = { version = "=3.1.0", default-features = false, features = ["web"] }
 wasm-bindgen = "=0.2.129"
 sha2 = { version = "0.10", default-features = false }
-url = "2.5"
+url = "=2.5.8"
 
 [profile.release]
 opt-level = "z"
