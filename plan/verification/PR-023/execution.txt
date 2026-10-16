@@ -98,5 +98,12 @@ Follow-up C-05 reserved consent role keys
 - Timestamp: 2026-10-16T03:25Z. `cargo xtask check` passed with the pinned Rust 1.85.0 toolchain; `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed.
 - No Cloudflare remote account, D1 restore, R2 bucket, Cron schedule, credential, or deployment was used.
 
+Follow-up exact-head review and hosted validation
+- Timestamp: 2026-10-16T03:31Z, exact head `c4463bc1837964e7b54f42076608d11e1514e3ca`.
+- Sol's exact-head review and the GitHub `@codex` review reported no findings. All eight earlier review threads have evidence-backed replies and are resolved.
+- GitHub CI run `38845449329` passed the full test pipeline: `cargo xtask ci`, local Wrangler/D1 integration and smoke tests, migration/browser/fuzz/load/finalizer/worker-signal tests, PR-022 browser tests, and CLI help. Release run `38845449363` passed Linux, macOS, and Windows CLI builds; its release-publish job correctly skipped for this documentation PR.
+- Local `cargo xtask check`, lifecycle assertions, Node syntax check, evidence fingerprints, and `git diff --check` also passed on the reviewed head. The only follow-up is to remove a stale hosted-checks-pending phrase from STATUS; it does not change product code or the evidence model.
+- No remote Cloudflare account, production D1/R2 resources, Cron schedule, credential, or deployment was used.
+
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
