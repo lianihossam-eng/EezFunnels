@@ -100,10 +100,10 @@ Frozen files C-01, C-03, C-04, D19, D21, and current configuration are immutable
 ### PR-022: dashboard publication controls
 
 - Branch: `feat/pr-022-dashboard-publish`.
-- Commits: `feat(dashboard): add revision-aware publish controls`; `test(dashboard): cover publication conflict and unpublish`.
+- Commits: `feat(dashboard): add revision-aware publish controls`; `test(dashboard): cover publication conflict and unpublish`; `fix(dashboard): reconcile the current live pointer after receipt replay`.
 - Depends on current PR-014 publication commands and the merged editor.
-- UI invokes existing `funnel.publish` and `funnel.unpublish` semantics. Show saved draft revision, live revision, stale pointer conflict, live URL, retry-safe status, and an explicit unpublish confirmation. Preserve unsaved edits on conflict. No new owner command or schema migration.
-- Test create → edit → save → publish → public read → unpublish → 404; two stale publish requests; same-key replay and payload mismatch; visible keyboard focus and status announcements. Do not claim immediate CDN purge; D18's authoritative published pointer and revalidation remain the source of truth.
+- UI invokes existing `funnel.publish` and `funnel.unpublish` semantics. Show saved draft revision, live revision, stale pointer conflict, live URL, retry-safe status, and an explicit unpublish confirmation. Preserve unsaved edits on conflict and ambiguous retries. After a successful receipt replay, refresh the current pointer before treating the receipt's historical result as live. No new owner command or schema migration.
+- Test create → edit → save → publish → public read → unpublish → 404; two stale publish requests; same-key replay and payload mismatch; a competing unpublish between a lost response and its exact retry; refreshed pointer and preserved draft; visible keyboard focus and status announcements. Do not claim immediate CDN purge; D18's authoritative published pointer and revalidation remain the source of truth.
 
 ### PR-023: V2 document and bounded transfer decision
 

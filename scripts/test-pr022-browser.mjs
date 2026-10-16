@@ -382,6 +382,21 @@ try {
     "Verify server committed the lost-response publish",
   );
   assert.equal(publishedLiveState.published_revision_id, finalRevisionId);
+  const competingUnpublish = await fetch(`${worker.origin}/api/funnels/${funnelId}/unpublish`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `pr022-competing-unpublish-${randomUUID()}`,
+    },
+    body: JSON.stringify({ expected_published_revision_id: finalRevisionId }),
+  });
+  await responseJson(competingUnpublish, 200, "Competing session unpublishes after the lost response");
+  const competingUnpublishState = await responseJson(
+    await fetch(`${worker.origin}/api/funnels/${funnelId}`),
+    200,
+    "Verify competing unpublish changed the current live pointer",
+  );
+  assert.equal(competingUnpublishState.published_revision_id, null);
   await tabUntil(
     page,
     (active) => active.tag === "BUTTON" && hasName(active, "Retry publish"),
@@ -393,7 +408,7 @@ try {
   );
   await pressKeyboard(page, "Enter");
   await responseJson(await retryResponsePromise, 200, "Retry publish with original key and body");
-  await publicationPanel.getByRole("status").filter({ hasText: `Published revision ${finalRevisionId}` }).waitFor();
+  await publicationPanel.getByRole("status").filter({ hasText: "Unpublished." }).waitFor();
   assert.equal(await titleInput.inputValue(), lostResponseDraftTitle);
   await page.getByText("Unsaved changes").waitFor();
   await tabUntil(
@@ -415,10 +430,32 @@ try {
     "Read draft after publication retry recovery",
   );
   assert.notEqual(recoveredDraft.base_revision_id, finalRevisionId);
-  assert.equal(recoveredDraft.published_revision_id, finalRevisionId);
+  assert.equal(recoveredDraft.published_revision_id, null);
   const lostResponseDraftPreserved = (await titleInput.inputValue()) === lostResponseDraftTitle;
   assert.equal(lostResponseDraftPreserved, true);
   await page.unroute(publishUrl, lostResponseRoute);
+  const republishButton = page.getByRole("button", { name: "Publish revision" });
+  await republishButton.waitFor({ state: "visible" });
+  await tabUntil(
+    page,
+    (active) => active.tag === "BUTTON" && hasName(active, "Publish revision"),
+    "Publish the recovered local draft",
+  );
+  const republishResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url() === publishUrl,
+  );
+  await pressKeyboard(page, "Enter");
+  await responseJson(await republishResponsePromise, 200, "Publish the recovered local draft");
+  const republishedDraft = await responseJson(
+    await fetch(`${worker.origin}/api/funnels/${funnelId}`),
+    200,
+    "Read current publication after republishing the recovered draft",
+  );
+  assert.equal(republishedDraft.published_revision_id, recoveredDraft.base_revision_id);
+  await publicationPanel
+    .getByRole("status")
+    .filter({ hasText: `Published revision ${recoveredDraft.base_revision_id}` })
+    .waitFor();
   const dashboardPointerEvents = await page.evaluate(() => window.__pr022PointerEvents);
   assert.equal(dashboardPointerEvents, 0);
   const dashboardKeyboardOnly = keyboardActions.length > 0 && dashboardPointerEvents === 0;
@@ -426,10 +463,10 @@ try {
 
   const publicResponse = await page.goto(`${worker.origin}/f/${slug}`, { waitUntil: "networkidle" });
   assert.equal(publicResponse?.status(), 200);
-  await page.getByRole("heading", { name: postConflictTitle }).waitFor();
+  await page.getByRole("heading", { name: lostResponseDraftTitle }).waitFor();
   await assertCriticalAxeFindingsAbsent(page, "Published funnel");
   await page.goBack({ waitUntil: "networkidle" });
-  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(finalRevisionId).waitFor();
+  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(recoveredDraft.base_revision_id).waitFor();
   await tabUntil(
     page,
     (active) => active.tag === "BUTTON" && hasName(active, "Unpublish"),
@@ -442,7 +479,7 @@ try {
   await assertVisibleFocus(page, "Unpublish confirmation cancel button");
   await pressKeyboard(page, "Escape");
   await unpublishDialog.waitFor({ state: "hidden" });
-  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(finalRevisionId).waitFor();
+  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(recoveredDraft.base_revision_id).waitFor();
 
   await tabUntil(
     page,
@@ -455,7 +492,7 @@ try {
   await unpublishDialog.waitFor({ state: "hidden" });
   const pointerEventsAfterCancel = await page.evaluate(() => window.__pr022PointerEvents);
   assert.ok(pointerEventsAfterCancel > 0, "The confirmation dialog must support pointer input");
-  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(finalRevisionId).waitFor();
+  await publicationPanel.locator(".editor-publication-facts p").nth(1).getByText(recoveredDraft.base_revision_id).waitFor();
 
   await tabUntil(
     page,

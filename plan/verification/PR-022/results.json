@@ -1,21 +1,21 @@
 {
   "task": "PR-022",
-  "evidence_refreshed_at_utc": "2026-10-15T23:44:04Z",
+  "evidence_refreshed_at_utc": "2026-10-15T23:59:49Z",
   "branch": "feat/pr-022-dashboard-publish",
   "base_commit": "5ddb6ac1580d155a24ce13671b677dbfdf184489",
   "implementation_commit": "8598a62c819d6fd025b060e822ff3a737b22035e",
   "source_fingerprint_algorithm": "SHA-256 of sorted path and file-hash lines for changed source files in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
-  "source_fingerprint_sha256": "6a2014380d636b0a1e2ff5d7e1aa349e146c3c03d01ac39fcd83fc9a3961a63d",
+  "source_fingerprint_sha256": "73992024d5f197df2db87c579e3964ff0640eaa3bdc56cec783eeff62b2c9e42",
   "source_file_count": 8,
   "source_sha256": {
     ".github/workflows/ci.yml": "02db357e8951e165f36a7db2ed6b360d96be129d948390cd9d41060eee656bc7",
     "crates/commands/src/funnel.rs": "713b0b5b76dacbf3fe65bfa5e28fd64e820265274ae9dce17c16c610d902a3ff",
     "crates/dashboard-presentation/assets/dashboard.css": "3b5570e5e02c2e02a01ff543d4d82d78165e2b9c38fee4da489bfd2490ee37fb",
-    "crates/dashboard-presentation/src/routes/editor.rs": "9d2a2d5a2122f6a955a48bfabdf3638741d33c82f86f7fd4146844c82ea748a2",
+    "crates/dashboard-presentation/src/routes/editor.rs": "179e7dcbf6cd22590f09b9cd01ce333c0613feade36f1df5d0f9e4101239d75a",
     "crates/dashboard-presentation/src/routes/editor/inspector.rs": "98d0d8b3f56d8bfdf9af47b81e6ffd075931fcfa8ad9f026c1259e8e9b9779c4",
     "crates/storage/src/repository.rs": "f76c1b12d086673270856e12e77e150aa8fd81049f8c7a6e0b7198d59f1a566a",
     "package.json": "553a5ee033b270b89d1ffc6c2ae7ec5c33b88d263cf4373db3646793a030ca81",
-    "scripts/test-pr022-browser.mjs": "5708264166fd226cc7b93d700522374660c983f014b442c2abfee47a6b2ae829"
+    "scripts/test-pr022-browser.mjs": "2ed3020406caf8a742414d3fa0663c91c4c1def6ed74e2684540f045e2859d58"
   },
   "implementation": {
     "published_revision_id_in_editor_snapshot": true,
@@ -27,7 +27,9 @@
     "new_owner_command": false,
     "schema_migration": false,
     "application_dependency_added": false,
-    "immediate_cdn_purge_claimed": false
+    "immediate_cdn_purge_claimed": false,
+    "successful_publication_receipt_followed_by_pointer_refresh": true,
+    "pointer_refresh_preserves_local_editor_document": true
   },
   "validation": {
     "cargo_xtask_check": {
@@ -50,16 +52,16 @@
       "command": "npm run test:pr022:browser",
       "exit_code": 0,
       "result": {
-        "workflow": "create -> edit -> save -> stale publish conflict -> preserve draft -> save -> publish -> lose response while editing -> exact retry -> save preserved draft -> public read -> confirm unpublish -> 404",
-        "funnelId": "79aef50b-66dc-4ca7-a353-191dc05f58eb",
-        "slug": "pr-022-publication-journey-79aef50b-66dc-4ca7-a353-191dc05f58eb",
-        "initialRevisionId": "da611084-4edd-4cd6-8d63-7e1ec315aee4",
-        "firstSavedRevisionId": "7a925ab0-d24f-420f-b0c4-7f675fdbc6f3",
-        "finalRevisionId": "96aa4f71-2eb2-46e5-9943-3eb261ca988e",
-        "recoveredDraftRevisionId": "d711a363-68ba-4823-9035-ef9d48175472",
+        "workflow": "create -> edit -> save -> stale publish conflict -> preserve draft -> publish -> lose response while editing -> competing unpublish -> exact key/body retry -> refresh current pointer -> save recovered draft -> republish -> public read -> confirmed unpublish -> 404",
+        "funnelId": "c02613a4-8c24-4b3e-9c04-811cc9b6f319",
+        "slug": "pr-022-publication-journey-c02613a4-8c24-4b3e-9c04-811cc9b6f319",
+        "initialRevisionId": "b709a9a4-8fdc-4445-a65c-284864cf443b",
+        "firstSavedRevisionId": "850fb491-6dfa-487d-8c7c-095245eec054",
+        "finalRevisionId": "7f61ec09-f0c6-4137-ace3-e36e3aed3cdc",
+        "recoveredDraftRevisionId": "19d8d420-a946-4698-a3ef-581313589eab",
         "dashboardKeyboardOnly": true,
         "keyboardScope": "dashboard create/edit/save/publish/conflict recovery/unpublish",
-        "keyboardActionCount": 197,
+        "keyboardActionCount": 196,
         "publicationMethod": "dashboard UI",
         "staleRequests": 2,
         "lostResponseDraftPreserved": true,
@@ -68,7 +70,6 @@
         "finalPointerEvents": 0,
         "axeCritical": {
           "dashboard": 0,
-          "funnelDashboard": 0,
           "editor": 0,
           "publishedFunnel": 0
         }
@@ -90,13 +91,15 @@
       "exit_code": 0
     },
     "tdd_red_phase": {
-      "test": "ambiguous_publish_retry_stays_available_after_an_edit_during_the_request",
-      "outcome": "Expected failure observed before the retry-gating fix; passes after the fix."
+      "test": "PR-022 browser retry after competing unpublish; unit state test replayed_publication_receipt_refreshes_the_current_live_pointer",
+      "outcome": "Browser regression failed before the fix while waiting for Unpublished after replay, confirming the UI kept the receipt’s stale live pointer. The focused state test and browser regression pass after the fix."
     }
   },
   "review": {
-    "no_comments": "Final audit found no added/changed comments or lint suppressions; zero deletions.",
-    "interrogate": "Two independent exact-diff reviews found the retry deadlock before the fix and reported no findings after the fix and regression coverage."
+    "no_comments": "Final diff audit: no added or changed comments or lint suppressions.",
+    "codex_exact_head_840a5fd": "Found that a successful receipt replay can report a stale publication pointer after another session changes it; follow-up keeps status unknown and refreshes the current pointer before re-enabling publication.",
+    "sol_follow_up_review": "No findings. Route/funnel guards, draft preservation, refreshed CAS baseline, and deterministic competing-unpublish browser coverage verified.",
+    "interrogate_follow_up": "No findings in the follow-up diff."
   },
   "external_proof": {
     "cloudflare_production": "NOT_RUN; this task uses local Worker/D1 only and does not require production credentials.",
@@ -104,18 +107,18 @@
   },
   "logs": {
     "plan/verification/PR-022/logs/cargo-xtask-check.log.gz": {
-      "sha256": "961bd4909bb30ef92a9bfb6574482e175dfa348606cb85a34428f2e9b7ed63be",
-      "raw_sha256": "022311b49901837a48965d4c38d3d2468fe657ca9dd9f3752dbc91a014697855",
+      "sha256": "4c13f93c0d0c54c872e1ab02be67e0ad494471457400a60b5f29deef123177b9",
+      "raw_sha256": "9a0b5d92132c7278c2341b0d525ce31524ddb1bf6a254ebe3e2fbd97adc31477",
       "compression": "gzip -n; gzip -cd restores captured output"
     },
     "plan/verification/PR-022/logs/cargo-xtask-ci.log.gz": {
-      "sha256": "e015cb96e039d69f5f8cf354e4917dd29ecef9498e2bbb9bde4761483361828c",
-      "raw_sha256": "cc14a4b48164e48cc90387ed68362e40251e0354a42d0fff941e591e8425642e",
+      "sha256": "7865b8f51c127e835bcd1f025e2b9fc6629ec61afddb097f5eab802d5b12492a",
+      "raw_sha256": "b20cbe30ef44bbe9ab7bbefd9614902d67705104ff33562035e002d85ffbfb84",
       "compression": "gzip -n; gzip -cd restores captured output"
     },
     "plan/verification/PR-022/logs/browser.log.gz": {
-      "sha256": "d6ca130bdaa7c39df41d6d52ee0325a38a7dd35731eab3f219d3c28645c8f1d9",
-      "raw_sha256": "ca5d79dce50affc1671116b862e448779f14924ceb92fdbf70800e5f65e9fe11",
+      "sha256": "80915940550a5452ef733a567bcefebe50664fdede7de245a426b9eceb9b1234",
+      "raw_sha256": "0f11609de77cb205e60c41753480d33afde869eb0ea9902ed46c29f743a758c2",
       "compression": "gzip -n; gzip -cd restores captured output"
     }
   }

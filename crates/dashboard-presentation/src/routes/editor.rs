@@ -505,25 +505,22 @@ impl EditorState {
         &mut self,
         capture: &PublicationCapture,
         published_revision_id: Option<String>,
-    ) -> bool {
+    ) -> Option<(u64, String)> {
         if !self.is_current_publication(capture)
             || published_revision_id.as_deref() != capture.action.resulting_revision_id()
         {
-            return false;
+            return None;
         }
-        self.publication.known = true;
-        self.publication.live_revision_id = published_revision_id.clone();
+        self.publication.known = false;
         self.publication.pending = false;
         self.publication.retryable = false;
         self.publication.attempt = None;
-        self.publication.refreshing = false;
+        self.publication.refreshing = true;
         self.publication.conflict = false;
         self.publication.error = None;
-        self.publication.status = Some(match published_revision_id {
-            Some(revision_id) => format!("Published revision {revision_id}."),
-            None => "Unpublished. The public route now has no live revision.".to_owned(),
-        });
-        true
+        self.publication.status =
+            Some("Publication request confirmed; checking the current live revision…".to_owned());
+        Some((self.route_epoch, self.funnel_id.clone()))
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -583,7 +580,12 @@ impl EditorState {
                         .to_owned()
                 });
                 self.publication.status =
-                    (!conflict).then(|| "Live revision status refreshed.".to_owned());
+                    (!conflict).then(|| match self.publication.live_revision_id.as_deref() {
+                        Some(revision_id) => format!("Published revision {revision_id}."),
+                        None => {
+                            "Unpublished. The public route now has no live revision.".to_owned()
+                        }
+                    });
             }
             _ => {
                 self.publication.known = false;
@@ -1086,6 +1088,16 @@ async fn refresh_publication_status(mut state: Signal<EditorState>) {
     else {
         return;
     };
+    refresh_publication_status_from(state, route_epoch, funnel_id, conflict).await;
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_publication_status_from(
+    mut state: Signal<EditorState>,
+    route_epoch: u64,
+    funnel_id: String,
+    conflict: bool,
+) {
     let response = load_editor(&funnel_id).await;
     if state.try_peek().is_ok() {
         state.with_mut(|state| {
@@ -1173,9 +1185,12 @@ async fn change_publication(
                         &capture,
                         &prepared_key,
                     );
-                    state.with_mut(|state| {
-                        state.finish_publication(&capture, result.published_revision_id);
+                    let refresh = state.with_mut(|state| {
+                        state.finish_publication(&capture, result.published_revision_id)
                     });
+                    if let Some((route_epoch, funnel_id)) = refresh {
+                        refresh_publication_status_from(state, route_epoch, funnel_id, false).await;
+                    }
                 }
                 _ => {
                     state.with_mut(|state| {
@@ -2379,7 +2394,19 @@ mod tests {
         assert_eq!(retry.action, first.action);
         assert_eq!(retry.action.body(), first_body);
         assert_eq!(retry.action.resulting_revision_id(), Some("revision-1"));
-        assert!(state.finish_publication(&retry, Some("revision-1".to_owned())));
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the retry response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-1"),
+            )),
+            false,
+        );
         assert!(!state.can_publish(), "the saved revision is now live");
 
         let unpublish = state
@@ -2393,10 +2420,63 @@ mod tests {
             unpublish.action.body(),
             r#"{"expected_published_revision_id":"revision-1"}"#
         );
-        assert!(state.finish_publication(&unpublish, None));
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&unpublish, None)
+            .expect("unpublish response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(&funnel_id, "revision-1", None)),
+            false,
+        );
         assert!(state.publication.known);
         assert_eq!(state.publication.live_revision_id, None);
         assert!(!state.can_unpublish());
+    }
+
+    #[test]
+    fn replayed_publication_receipt_refreshes_the_current_live_pointer() {
+        let mut state = loaded_editor_state();
+        let first = state.begin_publish().expect("saved draft can be published");
+        assert!(state.fail_publication(&first, "request outcome unknown".to_owned(), true, false));
+        let retry = state
+            .begin_publish()
+            .expect("ambiguous publish can be retried");
+
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the successful replay starts a current-pointer refresh");
+        assert!(state.publication.refreshing);
+        assert!(
+            !state.publication.known,
+            "the stored replay response is not treated as the current live pointer"
+        );
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-external"),
+            )),
+            false,
+        );
+
+        assert_eq!(
+            state.publication.live_revision_id.as_deref(),
+            Some("revision-external")
+        );
+        assert!(state.can_publish());
+        let next = state
+            .begin_publish()
+            .expect("the draft can publish against the refreshed current pointer");
+        assert_eq!(
+            next.action,
+            PublicationAction::Publish {
+                revision_id: "revision-1".to_owned(),
+                expected_published_revision_id: Some("revision-external".to_owned()),
+            }
+        );
     }
 
     #[test]
@@ -2427,7 +2507,19 @@ mod tests {
         assert_eq!(retry.action, first.action);
         assert_eq!(retry.action.body(), first.action.body());
         assert_eq!(state.document, local_draft);
-        assert!(state.finish_publication(&retry, Some("revision-1".to_owned())));
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the retry response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-1"),
+            )),
+            false,
+        );
         assert_eq!(state.keyboard_section.as_deref(), Some("hero"));
         assert!(state.cancel_keyboard_drag().is_none());
         assert!(

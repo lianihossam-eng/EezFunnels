@@ -1,28 +1,28 @@
 PR-022 dashboard publication controls verification
-Evidence refreshed: 2026-10-15 23:44:04 UTC
+Evidence refreshed: 2026-10-15T23:59:49Z
 Branch: feat/pr-022-dashboard-publish
 Base: 5ddb6ac1580d155a24ce13671b677dbfdf184489
-Implementation commit: 8598a62c819d6fd025b060e822ff3a737b22035e
-Source fingerprint: 6a2014380d636b0a1e2ff5d7e1aa349e146c3c03d01ac39fcd83fc9a3961a63d (8 changed source files)
+Implementation commit before follow-up commit: 8598a62c819d6fd025b060e822ff3a737b22035e
+Source fingerprint: 73992024d5f197df2db87c579e3964ff0640eaa3bdc56cec783eeff62b2c9e42 (8 changed source files)
 
 Behavior verified:
 - The editor's initial snapshot includes the saved draft head and published pointer from one storage read. Publication state remains separate from the editable document.
-- Publish uses the saved draft and current published pointer as its CAS baseline. A stale response refreshes publication state only, retaining the unsaved editor draft.
-- An ambiguous publish can be replayed with the exact same request key and body, including when an edit or keyboard drag began while the request was pending. The local draft remains intact and can be saved after the retry resolves.
-- Unpublish names the live revision, requires explicit confirmation, and removes the public route (404).
-- No new command, schema migration, dependency, or immediate-CDN-purge claim was added.
+- Publish uses the saved draft and current published pointer as its CAS baseline. Conflict refresh updates publication state only and retains unsaved editor state.
+- A successful idempotent receipt replay is followed by a current editor read before the receipt's historical pointer is treated as live. The refreshed pointer remains separate from and does not replace the local draft.
+- The browser race commits and loses a publish response, unpublishes from a competing session, retries the exact same key and body, observes the current unpublished state, saves the recovered draft, republishes its new revision, reads the public route, then confirms unpublish and observes 404.
+- Unpublish names the live revision and requires explicit confirmation. No new command, migration, dependency, or immediate-CDN-purge claim was added.
 
 TDD and local validation:
-- Before the retry-gating fix, the new focused state test failed at the expected retry-eligibility assertion. It passes after the fix and covers a pending edit, active keyboard drag, exact action replay, preserved state, and saving after resolution.
-- `source .project-tools/env.sh && cargo xtask check` passed before each planned commit. The check includes formatting, Clippy, workspace tests, and layer checks.
-- `source .project-tools/env.sh && cargo xtask ci` passed: workspace checks/tests, dashboard WASM and assets, local Worker/D1 publication smoke, local MCP smoke, and RustSec audit (355 locked dependencies, 1,329 advisories, zero findings).
-- `npm run test:pr022:browser` passed the dashboard create/edit/save → stale publish conflict → preserve draft → publish → lost response during a pending edit → same-key/same-body retry → save recovered draft → public read → confirmed unpublish → 404 journey. It observed 197 keyboard actions and verified the main dashboard flow without pointer input. Axe reported no violations on dashboard home, funnel dashboard, editor, or published funnel.
+- The stale-receipt browser regression failed before the fix while waiting for the current Unpublished state; after the fix the focused state test and browser journey pass.
+- `source .project-tools/env.sh && cargo xtask check` passed before the follow-up commit.
+- `source .project-tools/env.sh && cargo xtask ci` passed: workspace tests, dashboard WASM/assets, local Worker/D1 and MCP smokes, and RustSec audit (355 locked dependencies; zero findings across 1,329 advisories).
+- `npm run test:pr022:browser` passed; it observed 196 keyboard actions, exact key/body retry, preserved and saved local draft, competing unpublish and republish, plus zero serious or critical Axe findings on all four routes.
 - `node --check scripts/test-pr022-browser.mjs` and `git diff --check` passed.
+- GitHub CI on prior head `840a5fd3fc4dcdf6ffe4ff0aeb4122166cf9c768` had one failed `cargo xtask ci` attempt at the local PR-017 MCP fallback request (`Network connection lost`). Two subsequent full local CI runs passed, including that MCP smoke; the pushed follow-up head will receive a fresh hosted run.
 
 Review:
-- The required no-comments audit found no added/changed comments or lint suppressions.
-- Two independent adversarial reviewers identified the ambiguous-retry deadlock before the fix. Both re-reviewed the final diff and reported no remaining findings; the regression now covers the reported case.
+- The exact-head Codex review identified the stale receipt-pointer case. The follow-up review by Sol found no findings; the no-comments diff audit found no added or changed comments or lint suppressions.
 
-Delivery state at evidence capture: implementation and local verification are complete; exact-head hosted checks and reviews are pending. No remote Cloudflare operation or deployment ran.
+Delivery state at evidence capture: follow-up implementation and local verification are complete; hosted checks and exact-head Codex re-review on the updated commit are pending. No remote Cloudflare operation or deployment ran.
 
-Captured, compressed logs and their hashes are listed in `results.json`.
+Captured compressed logs and their hashes are listed in `results.json`.
