@@ -4,7 +4,7 @@ The typed dashboard editor can add a form to a page section, configure its purpo
 
 Published V2 documents render these definitions as native HTML forms and accept submissions on the same Worker. The renderer uses native input types and associated labels so browser validation and keyboard interaction work without client-side JavaScript. The dashboard currently configures inline confirmation text; creating multiple pages and selecting a success page remain part of the page-routing work.
 
-The owner API now provides a read-only lead inbox contract; there is no dashboard UI yet. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence. The lead API has no application login or per-user authorization, so keep it behind the external Cloudflare Access or equivalent perimeter described in [Security](security.md).
+The owner API and dashboard provide a read-only lead inbox. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence. The lead API has no application login or per-user authorization, so keep it behind the external Cloudflare Access or equivalent perimeter described in [Security](security.md).
 
 ## Submission behavior
 
