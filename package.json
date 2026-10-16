@@ -13,6 +13,7 @@
     "test:pr012:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr019:fuzz": "cargo test -p eez-api --locked deterministic_",
     "test:pr019:browser": "node scripts/test-pr019-browser.mjs",
+    "test:pr022:browser": "node scripts/test-pr022-browser.mjs",
     "test:pr019:load": "node scripts/test-pr019-load.mjs",
     "test:pr019:browser-finalizer": "node scripts/test-pr019-browser-finalizer.mjs",
     "test:pr019:worker-signals": "node scripts/test-pr019-worker-signals.mjs"

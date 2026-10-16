@@ -130,7 +130,7 @@ a:focus-visible {
 }
 
 .breadcrumb {
-  color: #69758d;
+  color: #5e6a82;
   font-size: 12px;
 }
 
@@ -168,7 +168,7 @@ a:focus-visible {
 
 .eyebrow {
   margin: 0 0 9px;
-  color: #6975a6;
+  color: #5b668f;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -187,7 +187,7 @@ h1 {
 .page-description {
   max-width: 600px;
   margin: 11px 0 0;
-  color: #69758d;
+  color: #5e6a82;
   font-size: 14px;
   line-height: 1.65;
 }
@@ -280,7 +280,7 @@ h1 {
 }
 
 .section-heading span {
-  color: #8993a8;
+  color: #5d687d;
   font-size: 11px;
 }
 
@@ -288,7 +288,7 @@ h1 {
   padding: 28px;
   border: 1px dashed #ccd3e3;
   border-radius: 12px;
-  color: #6b778f;
+  color: #5f6b80;
   background: rgb(255 255 255 / 72%);
   font-size: 13px;
   line-height: 1.65;
@@ -402,7 +402,7 @@ h1 {
 
 .funnel-slug {
   margin: 6px 0 0;
-  color: #818ba0;
+  color: #5d687b;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
@@ -411,7 +411,7 @@ h1 {
   display: grid;
   gap: 6px;
   justify-items: start;
-  color: #818ba0;
+  color: #5d687b;
   font-size: 10px;
 }
 
@@ -489,7 +489,7 @@ h1 {
 .dialog-heading > p:last-child,
 .confirmation-dialog > p {
   margin: 9px 0 0;
-  color: #69758d;
+  color: #5e6a82;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -562,7 +562,7 @@ h1 {
 }
 
 .blueprint-copy span {
-  color: #778198;
+  color: #5d687d;
   font-size: 10px;
   line-height: 1.5;
 }
@@ -594,7 +594,7 @@ h1 {
 
 .detail-panel p {
   margin: 0;
-  color: #69758d;
+  color: #5e6a82;
   font-size: 13px;
   line-height: 1.65;
 }
@@ -662,6 +662,69 @@ h1 {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.editor-publication-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  border: 1px solid #d8e0ed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(24 34 57 / 3%);
+}
+
+.editor-publication-panel > .section-heading {
+  margin: 0;
+}
+
+.editor-publication-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  color: #27344f;
+}
+
+.editor-publication-facts p,
+.editor-publication-status,
+.editor-publication-help {
+  margin: 0;
+}
+
+.editor-publication-facts code {
+  color: #27344f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.editor-live-link {
+  color: #284b8f;
+  font-weight: 650;
+  text-underline-offset: 3px;
+}
+
+.editor-publication-status {
+  color: #175d43;
+  font-weight: 650;
+}
+
+.editor-publication-help {
+  color: #37445e;
+  font-size: 13px;
+}
+
+.editor-publication-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.editor-publication-panel :focus-visible {
+  outline: 3px solid #305ba8;
+  outline-offset: 3px;
 }
 
 .editor-workspace {
@@ -765,7 +828,7 @@ h1 {
 .editor-setting-optional,
 .editor-image-preview-note,
 .editor-selected-section {
-  color: #778198;
+  color: #5d687d;
   font-size: 10px;
 }
 
@@ -788,7 +851,7 @@ h1 {
 }
 
 .section-heading > span {
-  color: #778198;
+  color: #5d687d;
   font-size: 10px;
 }
 
@@ -889,7 +952,7 @@ h1 {
 
 .editor-keyboard-help {
   margin: 14px 0 0;
-  color: #778198;
+  color: #5d687d;
   font-size: 10px;
   line-height: 1.55;
 }
