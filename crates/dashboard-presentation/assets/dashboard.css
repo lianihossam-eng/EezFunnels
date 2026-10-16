@@ -664,6 +664,17 @@ h1 {
   gap: 9px;
 }
 
+.editor-capacity-note {
+  margin: 0 0 18px;
+  padding: 11px 14px;
+  border: 1px solid #d9dfeb;
+  border-radius: 8px;
+  color: #37445e;
+  background: #f1f3fb;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .editor-publication-panel {
   display: grid;
   gap: 14px;
@@ -673,6 +684,89 @@ h1 {
   border-radius: 12px;
   background: #fff;
   box-shadow: 0 5px 18px rgb(24 34 57 / 3%);
+}
+
+.editor-conversion-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  border: 1px solid #d8e0ed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(24 34 57 / 3%);
+}
+
+.editor-conversion-panel > .section-heading {
+  margin: 0;
+}
+
+.editor-conversion-panel > p,
+.editor-conversion-help,
+.editor-conversion-preview h3 {
+  margin: 0;
+}
+
+.editor-conversion-help {
+  color: #37445e;
+  font-size: 13px;
+}
+
+.editor-conversion-notes {
+  padding: 12px 14px;
+  border: 1px solid #d9dfeb;
+  border-radius: 8px;
+  color: #27344f;
+  background: #f7f8fc;
+}
+
+.editor-conversion-notes h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.editor-conversion-notes ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.editor-conversion-notes li p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.editor-conversion-notes code {
+  overflow-wrap: anywhere;
+}
+
+.editor-conversion-preview {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #e5e9f1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.editor-conversion-preview h3 {
+  padding: 12px 14px 0;
+  color: #27344f;
+  font-size: 14px;
+}
+
+.editor-conversion-preview .editor-preview-frame {
+  width: 960px;
+  max-width: 100%;
+  min-height: 500px;
+}
+
+.editor-conversion-panel :focus-visible {
+  outline: 3px solid #305ba8;
+  outline-offset: 3px;
 }
 
 .editor-publication-panel > .section-heading {
@@ -893,7 +987,7 @@ h1 {
 
 .editor-section-copy code {
   overflow: hidden;
-  color: #8992a7;
+  color: #5d687d;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 9px;
   text-overflow: ellipsis;
@@ -932,6 +1026,17 @@ h1 {
 .editor-move-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+@media (max-width: 1440px) and (min-width: 761px) {
+  .editor-section-list[aria-label="Sections on this page"] .editor-section-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-section-list[aria-label="Sections on this page"] .editor-section-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }
 
 .editor-drag-grip {
