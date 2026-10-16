@@ -63,4 +63,5 @@ The full workflow uses local Wrangler bindings for its smoke checks. It does not
 - [CLI and command reference](commands.md)
 - [Connect an MCP client](mcp.md)
 - [Theme presets and editor controls](themes.md)
+- [Page search and sharing settings](seo.md)
 - [Security and Cloudflare Access](security.md)

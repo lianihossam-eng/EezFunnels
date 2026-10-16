@@ -21,3 +21,6 @@ pub const DOCUMENT_VERSION_V2: u32 = 2;
 pub const MAX_RAW_DOCUMENT_BYTES: usize = 1_048_576;
 pub const MAX_PERSISTED_DOCUMENT_BYTES: usize = 1_048_576;
 pub const MAX_DOCUMENT_DEPTH: usize = 8;
+
+pub const MAX_PAGE_SEO_TITLE_SCALARS: usize = 120;
+pub const MAX_PAGE_SEO_DESCRIPTION_SCALARS: usize = 320;

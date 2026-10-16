@@ -110,6 +110,18 @@ pub enum Edit {
     SetThemeOverrides {
         overrides: Box<ThemeOverrides>,
     },
+    SetPageSeoTitle {
+        page: PageId,
+        value: String,
+    },
+    SetPageSeoDescription {
+        page: PageId,
+        value: String,
+    },
+    SetPageNoIndex {
+        page: PageId,
+        noindex: bool,
+    },
     AddSection {
         page: PageId,
         after: Option<SectionId>,
@@ -229,6 +241,9 @@ impl DocumentV2 {
                     id: id.clone(),
                     slug,
                     title,
+                    seo_title: None,
+                    seo_description: None,
+                    noindex: false,
                     sections: Vec::new(),
                 });
                 let block_id =
@@ -323,6 +338,18 @@ impl DocumentV2 {
             Edit::SetThemeOverrides { overrides } => {
                 data.theme.overrides = *overrides;
                 FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetPageSeoTitle { page, value } => {
+                page_mut(&mut data, &page)?.seo_title = Some(value);
+                FocusTarget::Page(page)
+            }
+            Edit::SetPageSeoDescription { page, value } => {
+                page_mut(&mut data, &page)?.seo_description = Some(value);
+                FocusTarget::Page(page)
+            }
+            Edit::SetPageNoIndex { page, noindex } => {
+                page_mut(&mut data, &page)?.noindex = noindex;
+                FocusTarget::Page(page)
             }
             Edit::AddSection {
                 page,
