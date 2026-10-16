@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 
+pub mod document_v2;
+
 pub const RENDERER_VERSION: &str = "renderer-v2";
 const LEGACY_RENDERER_VERSION: &str = "renderer-v1";
 const MAX_BLOCKS_PER_SECTION: usize = 50;
