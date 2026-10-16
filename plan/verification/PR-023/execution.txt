@@ -58,5 +58,13 @@ Follow-up review of bounded admission and finite tombstone cleanup
 - `cargo xtask ci` passed, including Rust tests, dashboard asset generation, Worker WASM build, local Worker/D1 smokes, and `cargo audit` over 355 dependencies against 1,329 advisories with no vulnerability gate failure.
 - All Cloudflare integration used local Wrangler/D1 only. No remote binding, production account, R2 bucket, Cron schedule, or deployment was exercised; PR-024 still owns those integration and storage-safety gates.
 
+Follow-up exact-head sweep fairness correction
+- Sol's review of exact head `495eabd95ffffa17b980fd28655b28e292ac4897` found that a cursor-only R2 sweep could miss a late object inserted behind its saved cursor indefinitely if newer keys prevented the listing from reaching EOF.
+- D22 now assigns each attempt a monotonic installation sequence in its unique R2 key and fixes a high-water sequence at the start of every sweep pass. Later admissions cannot extend that pass; each completed pass starts again at the prefix beginning, so late objects behind a cursor remain eligible. The D1 restore rule requires preserving the sequence counter or registering a fresh R2 namespace.
+- The lifecycle prototype now pages two keys at a time and asserts a sequence-2 late insertion behind cursor 3, continued admissions at sequences 7 and 8, completion at the fixed sequence-6 boundary, age-gating at 24 hours, and deletion of the late object on a later pass. This remains a deterministic Node model, not an R2/Cron integration test.
+- Timestamp: 2026-10-16T02:41Z.
+- `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed. Full `cargo xtask ci` passed, including Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
+- All Worker/D1 validation used local bindings. No remote Cloudflare account, R2 bucket, Cron schedule, or deployment was exercised. Updated-head Sol/@codex reviews and hosted checks remain required.
+
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
