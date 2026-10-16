@@ -185,7 +185,9 @@ explicitly below. The normative field and graph rules are:
   `select` has exactly
   `{id, name, label, help?, kind:"select", required, options}`. `name` matches
   `[a-z][a-z0-9_]{0,63}` and is unique within that form; field IDs are globally
-  unique. Labels are 1–1,024 UTF-8 bytes. Present `help` is non-empty plain
+  unique. The generic `name` values `request_consent` and `marketing_opt_in`
+  are reserved for their built-in consent controls and are rejected on generic
+  fields. Labels are 1–1,024 UTF-8 bytes. Present `help` is non-empty plain
   text, at most 1,024 UTF-8 bytes. `required` is a JSON boolean. `select` has
   1–50 unique, non-empty plain-text options, each at most 1,024 UTF-8 bytes.
   Option uniqueness is byte-for-byte and case-sensitive, with no Unicode
@@ -414,8 +416,14 @@ Rust/JavaScript parity fixtures before V2 writes are enabled.
   asset digests fail. PR-024 rejects image-bearing saves until PR-025 enables
   them with immutable metadata.
 - Forms reject unknown fields, invalid purpose/copy versions, broken result
-  targets, invalid help/option bounds, invalid per-kind validation, and
-  duplicate field names or IDs. Public form rendering stays disabled until
+  targets, invalid help/option bounds, invalid per-kind validation, duplicate
+  field names or IDs, and generic fields named `request_consent` or
+  `marketing_opt_in`. Negative fixtures include a text field
+  `{"id":"field-request-consent","name":"request_consent","label":"Message","kind":"text","required":false}`
+  and a checkbox field
+  `{"id":"field-marketing-opt-in","name":"marketing_opt_in","label":"Updates","kind":"checkbox","required":false}`;
+  each is otherwise valid but rejected for using a built-in role key. Public
+  form rendering stays disabled until
   PR-030 and the PR-029 restore-surviving deletion gate pass; PR-028 preview is
   inert and has no network effects.
 - PR-028 preview renders the built-in request and optional marketing controls

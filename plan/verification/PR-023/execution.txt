@@ -91,5 +91,12 @@ Follow-up adversarial closure for D1 restore state
 - `cargo xtask ci` passed: Rust tests, dashboard assets, Worker WASM, local Wrangler/D1 funnel and MCP smokes, and `cargo audit` over 355 dependencies with 1,329 advisories loaded.
 - CI and lifecycle validation used only local bindings and in-memory deterministic models. No remote D1 restore, R2 bucket, Cron schedule, account credential, or deployment was used. PR-024 retains the real Worker/R2 CAS, D1 restore, writer timing, and Cron/sweep integration gates.
 
+Follow-up C-05 reserved consent role keys
+- The open PR review identified that a generic field could use `request_consent` or `marketing_opt_in`, colliding with the form's built-in consent roles.
+- C-05 now reserves both names and its acceptance criteria require rejection of otherwise-valid generic text/checkbox field fixtures using those names. The ledger includes the focused contract commit; runtime enforcement remains a PR-024/PR-030 implementation gate.
+- This is contract and acceptance evidence only; no runtime implementation or UI behavior changed. The existing benchmark and lifecycle model are unaffected.
+- Timestamp: 2026-10-16T03:25Z. `cargo xtask check` passed with the pinned Rust 1.85.0 toolchain; `node --check scripts/test-pr023-stage-lifecycle.mjs`, `node scripts/test-pr023-stage-lifecycle.mjs`, and `git diff --check` passed.
+- No Cloudflare remote account, D1 restore, R2 bucket, Cron schedule, credential, or deployment was used.
+
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
