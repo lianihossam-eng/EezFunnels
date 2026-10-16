@@ -29,10 +29,16 @@ The dashboard, HTTP API, CLI, and MCP endpoint use the same funnel command sessi
 | `PUT /api/funnels/:funnel_id/stages-v2` | Upload staged document bytes with the returned bearer capability |
 | `POST /api/funnels/:funnel_id/revisions-v2` | Validate and save a staged typed revision; requires an `Idempotency-Key` header |
 | `GET /api/v2/stage-capacity` | Read the configured staged-save capacity |
+| `GET /api/media` | List active or archived media in pages of 50 |
+| `POST /api/media` | Upload bounded raw JPEG/PNG image bytes |
+| `POST /api/media/:asset_id/archive` | Archive or restore an image without deleting it |
+| `GET /api/media/:asset_id/content` | Read image bytes for owner previews |
+| `GET /api/media/capacity` | Read the configured media R2 allowance |
+| `GET /media/:asset_id` | Read an image referenced by a currently published revision |
 | `GET /f/:slug` | Render the published entry page (`funnel.public.read`) |
 | `GET /f/:slug/:page_slug` | Render a published V2 page (`funnel.public.read`) |
 
-JSON mutation requests use JSON bodies. The `PUT` staged upload uses `application/octet-stream` and a short-lived bearer capability. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks; [Deploy](deploy.md) describes the required staged-save capacity settings.
+JSON mutation requests use JSON bodies. The `PUT` staged upload and `POST /api/media` image upload use `application/octet-stream`; staged uploads also require a short-lived bearer capability. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks; [Deploy](deploy.md) describes the staged-save and media capacity settings.
 
 ## MCP commands
 

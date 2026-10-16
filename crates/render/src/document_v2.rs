@@ -1,13 +1,14 @@
 use std::fmt::{Display, Formatter};
 
 use eez_domain::document_v2::{
-    ActionV2, BlockV2, DocumentV2, FormField, FormResult, FormV2, PageId, SectionKind,
+    ActionV2, BlockV2, DocumentV2, FormField, FormResult, FormV2, ImageAlt, PageId, SectionKind,
 };
+use eez_domain::media::{MediaAssetDescriptor, ResolvedV2Assets};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v5";
-const LEGACY_RENDERER_VERSION_V2: &str = "renderer-v4";
+pub const RENDERER_VERSION_V2: &str = "renderer-v6";
+const LEGACY_RENDERER_VERSIONS_V2: [&str; 2] = ["renderer-v4", "renderer-v5"];
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -23,6 +24,7 @@ pub enum V2RenderError {
     DigestMismatch,
     PageMissing,
     ImagesNotEnabled,
+    AssetsMissing,
     SerializationFailed,
 }
 
@@ -35,6 +37,7 @@ impl Display for V2RenderError {
             Self::DigestMismatch => "validation/v2_digest_mismatch",
             Self::PageMissing => "not_found/page",
             Self::ImagesNotEnabled => "validation/v2_images_not_enabled",
+            Self::AssetsMissing => "validation/v2_assets_missing",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -57,6 +60,8 @@ pub struct RenderManifestV2 {
     theme_tokens_sha256: String,
     document_sha256: String,
     assets_manifest_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    assets: Vec<MediaAssetDescriptor>,
 }
 
 impl RenderManifestV2 {
@@ -91,16 +96,16 @@ pub struct PreparedV2Revision {
 pub fn prepare_revision(
     document: &DocumentV2,
     revision_id: &str,
+    assets: &ResolvedV2Assets,
 ) -> Result<PreparedV2Revision, V2RenderError> {
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
+    let assets = checked_assets(document, assets.iter().cloned().collect())?;
     let revision_id = eez_domain::document_v2::RevisionIdV2::parse(revision_id.to_owned())
         .map_err(|_| V2RenderError::IdentityMismatch)?;
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let document_bytes = document.canonical_bytes();
-    let assets_bytes = serde_json_canonicalizer::to_vec(&Vec::<AssetDigestRecord>::new())
+    let asset_records = assets.iter().cloned().collect::<Vec<_>>();
+    let assets_bytes = serde_json_canonicalizer::to_vec(&asset_records)
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let manifest = RenderManifestV2 {
         manifest_type: "eezfunnel.render-manifest".to_owned(),
@@ -114,6 +119,7 @@ pub fn prepare_revision(
         theme_tokens_sha256: prefixed_sha256(THEME_DIGEST_DOMAIN, &theme_bytes),
         document_sha256: sha256(document_bytes),
         assets_manifest_sha256: prefixed_sha256(ASSETS_DIGEST_DOMAIN, &assets_bytes),
+        assets: asset_records,
     };
     let manifest_bytes = serde_json_canonicalizer::to_vec(&manifest)
         .map_err(|_| V2RenderError::SerializationFailed)?;
@@ -134,8 +140,10 @@ pub fn prepare_revision(
 pub fn render_owner_preview(
     document: &DocumentV2,
     page_id: &PageId,
+    assets: &ResolvedV2Assets,
 ) -> Result<String, V2RenderError> {
-    render_page(document, page_id, LinkMode::Inert)
+    let assets = checked_assets(document, assets.iter().cloned().collect())?;
+    render_page(document, page_id, LinkMode::Inert, &assets)
 }
 
 pub fn render_published(
@@ -185,16 +193,14 @@ fn render_published_route_with_slug(
     public_funnel_slug: Option<&str>,
     page_slug: Option<&str>,
 ) -> Result<String, V2RenderError> {
-    let document = validate_revision_v2(
+    let (document, manifest) = validate_revision_with_manifest(
         row_schema_version,
         row_funnel_id,
         row_revision_id,
         data_json,
         render_manifest_json,
     )?;
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
+    let assets = checked_assets(&document, manifest.assets)?;
     let page = match page_slug {
         Some(slug) => document
             .pages()
@@ -211,6 +217,7 @@ fn render_published_route_with_slug(
         LinkMode::Published {
             funnel_slug: public_funnel_slug,
         },
+        &assets,
     )
 }
 
@@ -221,6 +228,45 @@ pub fn validate_revision_v2(
     data_json: &str,
     render_manifest_json: &str,
 ) -> Result<DocumentV2, V2RenderError> {
+    validate_revision_with_manifest(
+        row_schema_version,
+        row_funnel_id,
+        row_revision_id,
+        data_json,
+        render_manifest_json,
+    )
+    .map(|(document, _)| document)
+}
+
+pub fn validate_revision_v2_with_assets(
+    row_schema_version: i64,
+    row_funnel_id: &str,
+    row_revision_id: &str,
+    data_json: &str,
+    render_manifest_json: &str,
+    resolved_assets: &ResolvedV2Assets,
+) -> Result<DocumentV2, V2RenderError> {
+    let (document, manifest) = validate_revision_with_manifest(
+        row_schema_version,
+        row_funnel_id,
+        row_revision_id,
+        data_json,
+        render_manifest_json,
+    )?;
+    let manifest_assets = checked_assets(&document, manifest.assets)?;
+    if &manifest_assets != resolved_assets {
+        return Err(V2RenderError::AssetsMissing);
+    }
+    Ok(document)
+}
+
+fn validate_revision_with_manifest(
+    row_schema_version: i64,
+    row_funnel_id: &str,
+    row_revision_id: &str,
+    data_json: &str,
+    render_manifest_json: &str,
+) -> Result<(DocumentV2, RenderManifestV2), V2RenderError> {
     if row_schema_version != 2
         || eez_domain::document_v2::RevisionIdV2::parse(row_revision_id.to_owned()).is_err()
     {
@@ -239,7 +285,7 @@ pub fn validate_revision_v2(
         return Err(V2RenderError::InvalidManifest);
     }
     validate_manifest(&document, &manifest, row_funnel_id, row_revision_id)?;
-    Ok(document)
+    Ok((document, manifest))
 }
 
 fn validate_manifest(
@@ -256,10 +302,9 @@ fn validate_manifest(
     {
         return Err(V2RenderError::IdentityMismatch);
     }
-    if !matches!(
-        manifest.renderer_version.as_str(),
-        RENDERER_VERSION_V2 | LEGACY_RENDERER_VERSION_V2
-    ) || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
+    if (manifest.renderer_version != RENDERER_VERSION_V2
+        && !LEGACY_RENDERER_VERSIONS_V2.contains(&manifest.renderer_version.as_str()))
+        || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
         || manifest.canonicalizer_profile != CANONICALIZER_PROFILE_V2
         || manifest.theme_profile_version != THEME_PROFILE_VERSION_V2
     {
@@ -267,7 +312,12 @@ fn validate_manifest(
     }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
-    let assets_bytes = serde_json_canonicalizer::to_vec(&Vec::<AssetDigestRecord>::new())
+    let assets = checked_assets(document, manifest.assets.clone())?;
+    if manifest.renderer_version != RENDERER_VERSION_V2 && !assets.is_empty() {
+        return Err(V2RenderError::ImagesNotEnabled);
+    }
+    let asset_records = assets.iter().cloned().collect::<Vec<_>>();
+    let assets_bytes = serde_json_canonicalizer::to_vec(&asset_records)
         .map_err(|_| V2RenderError::SerializationFailed)?;
     if manifest.document_sha256 != sha256(document.canonical_bytes())
         || manifest.theme_tokens_sha256 != prefixed_sha256(THEME_DIGEST_DOMAIN, &theme_bytes)
@@ -278,10 +328,17 @@ fn validate_manifest(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct AssetDigestRecord {
-    asset_id: String,
-    sha256: String,
+fn checked_assets(
+    document: &DocumentV2,
+    descriptors: Vec<MediaAssetDescriptor>,
+) -> Result<ResolvedV2Assets, V2RenderError> {
+    ResolvedV2Assets::for_document(document, descriptors).map_err(|error| {
+        if error.to_string() == "validation/v2_assets_missing" {
+            V2RenderError::AssetsMissing
+        } else {
+            V2RenderError::InvalidManifest
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -294,10 +351,9 @@ fn render_page(
     document: &DocumentV2,
     page_id: &PageId,
     link_mode: LinkMode<'_>,
+    assets: &ResolvedV2Assets,
 ) -> Result<String, V2RenderError> {
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
+    let _ = checked_assets(document, assets.iter().cloned().collect())?;
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
     let profile = document.resolved_theme_profile();
     let mut html = String::with_capacity(document.canonical_bytes().len() * 2);
@@ -408,7 +464,24 @@ fn render_page(
                         html.push_str("</span>");
                     }
                 },
-                BlockV2::Image { .. } => return Err(V2RenderError::ImagesNotEnabled),
+                BlockV2::Image { asset_id, alt, .. } => {
+                    let descriptor = assets.get(asset_id).ok_or(V2RenderError::AssetsMissing)?;
+                    html.push_str("<img class=\"v2-image\" src=\"");
+                    let src = match link_mode {
+                        LinkMode::Inert => format!("/api/media/{}/content", asset_id.as_str()),
+                        LinkMode::Published { .. } => format!("/media/{}", asset_id.as_str()),
+                    };
+                    html.push_str(&crate::escape_html_attribute(&src));
+                    html.push_str("\" alt=\"");
+                    if let ImageAlt::Text { value } = alt {
+                        html.push_str(&crate::escape_html_attribute(value));
+                    }
+                    html.push_str("\" width=\"");
+                    html.push_str(&descriptor.width().to_string());
+                    html.push_str("\" height=\"");
+                    html.push_str(&descriptor.height().to_string());
+                    html.push_str("\" loading=\"lazy\" decoding=\"async\" style=\"display:block;max-width:100%;height:auto;margin-inline:auto\">");
+                }
                 BlockV2::Form { form_id, .. } => match link_mode {
                     LinkMode::Published {
                         funnel_slug: Some(funnel_slug),

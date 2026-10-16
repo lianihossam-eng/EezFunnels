@@ -98,7 +98,8 @@ fn conversion_preserves_content_order_and_supported_theme_overrides() {
         .any(|warning| warning.code == "conversion/feature_structure_flattened"));
     assert!(render_v2::render_owner_preview(
         &converted.document,
-        converted.document.entry_page_id()
+        converted.document.entry_page_id(),
+        &eez_domain::media::ResolvedV2Assets::empty(),
     )
     .expect("converted owner preview renders")
     .contains("A clear starting point"));

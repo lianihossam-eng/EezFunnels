@@ -7,6 +7,7 @@ use repository::{
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
+pub mod media;
 pub mod repository;
 pub mod stage;
 
@@ -28,6 +29,7 @@ pub struct Bindings {
     bucket: worker::Bucket,
     cache: worker::kv::KvStore,
     stage_capacity: Option<stage::StageCapacity>,
+    media_capacity: Option<media::MediaCapacity>,
 }
 
 impl Bindings {
@@ -37,6 +39,7 @@ impl Bindings {
             bucket: env.bucket("R2")?,
             cache: env.kv("KV")?,
             stage_capacity: stage::StageCapacity::from_env(env),
+            media_capacity: media::MediaCapacity::from_env(env),
         })
     }
 
@@ -56,6 +59,10 @@ impl Bindings {
 
     pub fn document_stage_repository(&self) -> stage::DocumentStageRepository<'_> {
         stage::DocumentStageRepository::new(&self.database, &self.bucket, self.stage_capacity)
+    }
+
+    pub fn media_repository(&self) -> media::MediaRepository<'_> {
+        media::MediaRepository::new(&self.database, &self.bucket, self.media_capacity)
     }
 
     pub async fn verify_product_repository_round_trip(

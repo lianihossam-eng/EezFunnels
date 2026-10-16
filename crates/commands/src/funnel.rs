@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{BlueprintId, DocumentV2, Edit, IdKind, IdSource},
+    media::ResolvedV2Assets,
     DomainError, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section,
     ThemePreset,
 };
@@ -11,6 +12,7 @@ use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
     SectionContent, Testimonial, ThemeTokens, RENDERER_VERSION,
 };
+use eez_storage::media::MediaRepository;
 use eez_storage::repository::{
     EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation,
     Repository, RepositoryError, RevisionRecord,
@@ -178,8 +180,9 @@ impl FunnelCreateCommandV2 {
             ThemePreset::Minimal,
         )
         .map_err(|_| FunnelCommandError::InvalidParameters)?;
-        let prepared = render_v2::prepare_revision(&document, &revision_id)
-            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let prepared =
+            render_v2::prepare_revision(&document, &revision_id, &ResolvedV2Assets::empty())
+                .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let revision = NewRevision {
             id: revision_id.clone(),
             funnel_id: funnel_id.clone(),
@@ -1004,6 +1007,7 @@ struct FunnelDeleteResult<'a> {
 pub struct Session<'repo, 'database> {
     repository: &'repo Repository<'database>,
     document_stages: Option<&'repo DocumentStageRepository<'database>>,
+    media: Option<&'repo MediaRepository<'database>>,
 }
 
 impl<'repo, 'database> Session<'repo, 'database> {
@@ -1011,6 +1015,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         Self {
             repository,
             document_stages: None,
+            media: None,
         }
     }
 
@@ -1021,7 +1026,40 @@ impl<'repo, 'database> Session<'repo, 'database> {
         Self {
             repository,
             document_stages: Some(document_stages),
+            media: None,
         }
+    }
+
+    pub fn with_document_stages_and_media(
+        repository: &'repo Repository<'database>,
+        document_stages: &'repo DocumentStageRepository<'database>,
+        media: &'repo MediaRepository<'database>,
+    ) -> Self {
+        Self {
+            repository,
+            document_stages: Some(document_stages),
+            media: Some(media),
+        }
+    }
+
+    async fn resolve_assets(
+        &self,
+        document: &DocumentV2,
+    ) -> Result<ResolvedV2Assets, FunnelCommandError> {
+        if document.referenced_asset_ids().is_empty() {
+            return Ok(ResolvedV2Assets::empty());
+        }
+        let media = self.media.ok_or(FunnelCommandError::Internal)?;
+        media
+            .resolve_document(document)
+            .await
+            .map_err(|error| match error {
+                eez_storage::media::MediaError::AssetMissing
+                | eez_storage::media::MediaError::AssetNotReady => {
+                    FunnelCommandError::InvalidParameters
+                }
+                _ => FunnelCommandError::Internal,
+            })
     }
 
     pub async fn execute(
@@ -1187,6 +1225,33 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.revision_id)
             .await?
             .ok_or(FunnelCommandError::RevisionNotFound)?;
+        if record.schema_version == 2 {
+            let document = render_v2::validate_revision_v2(
+                record.schema_version,
+                &record.funnel_id,
+                &record.id,
+                &record.data_json,
+                &record.render_manifest_json,
+            )
+            .map_err(|_| FunnelCommandError::Internal)?;
+            let assets = self.resolve_assets(&document).await?;
+            if !assets.is_empty() {
+                self.media
+                    .ok_or(FunnelCommandError::Internal)?
+                    .verify_assets(&assets)
+                    .await
+                    .map_err(|_| FunnelCommandError::Internal)?;
+            }
+            render_v2::validate_revision_v2_with_assets(
+                record.schema_version,
+                &record.funnel_id,
+                &record.id,
+                &record.data_json,
+                &record.render_manifest_json,
+                &assets,
+            )
+            .map_err(|_| FunnelCommandError::Internal)?;
+        }
         render_published_revision(&record, &command.funnel_id, &funnel.slug, None)?;
         let result_json = serde_json::to_string(&serde_json::json!({
             "command_id": FunnelPublishCommand::ID,
@@ -1395,6 +1460,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let preview_html = render_v2::render_owner_preview(
             &conversion.document,
             conversion.document.entry_page_id(),
+            &ResolvedV2Assets::empty(),
         )
         .map_err(|_| FunnelCommandError::InvalidParameters)?;
         Ok(serde_json::json!({
@@ -1459,8 +1525,12 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let conversion = convert_v1_to_v2(&validated, &command.funnel_id)
             .map_err(|_| FunnelCommandError::V2ConversionBlocked)?;
         let revision_id = uuid::Uuid::new_v4().to_string();
-        let prepared = render_v2::prepare_revision(&conversion.document, &revision_id)
-            .map_err(|_| FunnelCommandError::V2ConversionBlocked)?;
+        let prepared = render_v2::prepare_revision(
+            &conversion.document,
+            &revision_id,
+            &ResolvedV2Assets::empty(),
+        )
+        .map_err(|_| FunnelCommandError::V2ConversionBlocked)?;
         let revision = NewRevision {
             id: revision_id.clone(),
             funnel_id: command.funnel_id.clone(),
@@ -1602,7 +1672,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let outcome = document
             .apply(command.edit, &mut ids)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
-        let preview_html = render_v2::render_owner_preview(&outcome.document, &page_id)
+        let assets = self.resolve_assets(&outcome.document).await?;
+        let preview_html = render_v2::render_owner_preview(&outcome.document, &page_id, &assets)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let document_json = std::str::from_utf8(outcome.document.canonical_bytes())
             .map_err(|_| FunnelCommandError::Internal)?;
@@ -1645,7 +1716,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let page_id = eez_domain::document_v2::PageId::parse(command.page_id)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
-        let preview_html = render_v2::render_owner_preview(&document, &page_id)
+        let assets = self.resolve_assets(&document).await?;
+        let preview_html = render_v2::render_owner_preview(&document, &page_id, &assets)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         Ok(serde_json::json!({
             "command_id": command_ids::FUNNEL_DOCUMENT_PREVIEW_V2,
@@ -1756,7 +1828,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let document = DocumentV2::decode(&document_bytes, &command.funnel_id)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let revision_id = uuid::Uuid::new_v4().to_string();
-        let prepared = render_v2::prepare_revision(&document, &revision_id)
+        let assets = self.resolve_assets(&document).await?;
+        let prepared = render_v2::prepare_revision(&document, &revision_id, &assets)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let revision = NewRevision {
             id: revision_id.clone(),

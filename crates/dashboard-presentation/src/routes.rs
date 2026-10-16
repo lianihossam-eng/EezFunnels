@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 mod editor;
 use editor::FunnelDetail;
-use eez_domain::FunnelBlueprint;
+use eez_domain::{media::MediaAssetDescriptor, FunnelBlueprint};
 use serde::Deserialize;
 #[cfg(any(feature = "browser", test))]
 use serde_json::Value;
@@ -80,6 +80,10 @@ pub(crate) enum RouteView {
     Funnels {},
     #[end_layout]
     #[layout(DashboardShell)]
+    #[route("/media")]
+    MediaLibrary {},
+    #[end_layout]
+    #[layout(DashboardShell)]
     #[route("/funnels/:id")]
     FunnelDetail { id: String },
 }
@@ -103,6 +107,10 @@ fn DashboardShell() -> Element {
                         Link { to: RouteView::Funnels {}, class: "nav-link",
                             span { class: "nav-icon", "▤" }
                             span { "Funnels" }
+                        }
+                        Link { to: RouteView::MediaLibrary {}, class: "nav-link",
+                            span { class: "nav-icon", "▧" }
+                            span { "Media library" }
                         }
                     }
                 }
@@ -154,6 +162,372 @@ fn Dashboard() -> Element {
         section { class: "empty-state", "aria-label": "Workspace summary",
             "Workspace activity will appear here when its data is available."
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct DashboardMediaItem {
+    descriptor: MediaAssetDescriptor,
+    display_name: String,
+    archived: bool,
+    created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct DashboardMediaPage {
+    items: Vec<DashboardMediaItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+struct DashboardMediaCapacity {
+    enabled: bool,
+    byte_budget: u64,
+    bytes_spent: u64,
+    byte_remaining: u64,
+    key_budget: u64,
+    keys_spent: u64,
+    key_remaining: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+struct DashboardMediaCapacityResponse {
+    capacity: DashboardMediaCapacity,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MediaLibraryState {
+    items: Vec<DashboardMediaItem>,
+    capacity: Option<DashboardMediaCapacity>,
+    archived: bool,
+    next_cursor: Option<String>,
+    loading: bool,
+    load_error: bool,
+    pending: bool,
+    status: Option<String>,
+    latest_request: u64,
+}
+
+impl MediaLibraryState {
+    #[cfg(any(feature = "browser", test))]
+    fn begin_load(&mut self, archived: bool, append: bool) -> (u64, Option<String>) {
+        self.latest_request = self.latest_request.wrapping_add(1);
+        self.archived = archived;
+        self.loading = true;
+        self.load_error = false;
+        let cursor = append.then(|| self.next_cursor.clone()).flatten();
+        if !append {
+            self.items.clear();
+            self.next_cursor = None;
+        }
+        (self.latest_request, cursor)
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_load(
+        &mut self,
+        request: u64,
+        response: Result<DashboardMediaPage, ()>,
+        append: bool,
+    ) {
+        if request != self.latest_request {
+            return;
+        }
+        self.loading = false;
+        match response {
+            Ok(page) => {
+                if append {
+                    self.items.extend(page.items);
+                } else {
+                    self.items = page.items;
+                }
+                self.next_cursor = page.next_cursor;
+                self.load_error = false;
+            }
+            Err(()) => self.load_error = true,
+        }
+    }
+}
+
+#[component]
+fn MediaLibrary() -> Element {
+    let state = use_signal(MediaLibraryState::default);
+
+    #[cfg(feature = "browser")]
+    {
+        let initial_state = state;
+        use_effect(move || {
+            spawn(async move { refresh_media_library(initial_state, false, false).await });
+        });
+    }
+
+    let view = state();
+    rsx! {
+        section { class: "page-heading",
+            p { class: "eyebrow", "Workspace" }
+            h1 { "Media library" }
+            p { class: "page-description", "Manage the images used by your funnel pages." }
+        }
+        section { class: "media-library-toolbar", "aria-label": "Upload and filter media",
+            label { class: "media-filter-control", r#for: "media-archive-filter",
+                "Show"
+                select {
+                    id: "media-archive-filter",
+                    value: if view.archived { "archived" } else { "active" },
+                    disabled: view.loading || view.pending,
+                    onchange: move |_event| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let archived = _event.value() == "archived";
+                            spawn(async move { refresh_media_library(state, archived, false).await });
+                        }
+                    },
+                    option { value: "active", "Available images" }
+                    option { value: "archived", "Archived images" }
+                }
+            }
+            label { class: "media-upload-control", r#for: "media-upload",
+                "Choose a JPEG or PNG image"
+                input {
+                    id: "media-upload",
+                    r#type: "file",
+                    accept: "image/jpeg,image/png",
+                    disabled: view.pending,
+                }
+            }
+            button {
+                class: "primary-button",
+                r#type: "button",
+                disabled: view.pending,
+                onclick: move |_| {
+                    #[cfg(feature = "browser")]
+                    spawn(async move { upload_selected_media(state).await });
+                },
+                if view.pending { "Uploading…" } else { "Upload image" }
+            }
+        }
+        p { class: "media-library-help", "Images are normalized to remove embedded metadata. SVG and animated images are not accepted." }
+        if let Some(status) = view.status.as_ref() {
+            p { class: "success-message", role: "status", "{status}" }
+        }
+        if view.load_error {
+            p { class: "error-message", role: "alert", "The media library could not be loaded. Try again." }
+        }
+        if let Some(capacity) = view.capacity {
+            if capacity.enabled {
+                section { class: "media-capacity", "aria-label": "Media storage capacity",
+                    div {
+                        strong { "Media storage" }
+                        span { "{media_size_label(capacity.bytes_spent)} used of {media_size_label(capacity.byte_budget)}" }
+                    }
+                    progress {
+                        value: "{capacity.bytes_spent}",
+                        max: "{capacity.byte_budget}",
+                        "aria-label": "Media storage used"
+                    }
+                    p { "{capacity.keys_spent} of {capacity.key_budget} image slots used ({capacity.key_remaining} remain); {media_size_label(capacity.byte_remaining)} remain." }
+                }
+            } else {
+                p { class: "media-library-help", role: "status", "Uploads are disabled until positive media R2 budgets are configured." }
+            }
+        }
+        if view.loading && view.items.is_empty() {
+            p { class: "media-library-empty", role: "status", "Loading images…" }
+        } else if view.items.is_empty() && !view.load_error {
+            p { class: "media-library-empty", "No images here yet. Upload a JPEG or PNG to use it in a funnel." }
+        } else {
+            section { class: "media-library-grid", "aria-label": "Media assets",
+                for item in view.items.iter() {
+                    {
+                        let asset_id = item.descriptor.asset_id().as_str().to_owned();
+                        let archived = item.archived;
+                        let display_name = item.display_name.clone();
+                        let width = item.descriptor.width();
+                        let height = item.descriptor.height();
+                        let byte_length = item.descriptor.byte_length();
+                        let format = item.descriptor.format().mime_type().to_owned();
+                        let image_url = format!("/api/media/{asset_id}/content");
+                        #[cfg(feature = "browser")]
+                        let operation_id = asset_id.clone();
+                        rsx! {
+                            article { class: "media-library-card",
+                                img { src: "{image_url}", alt: "", loading: "lazy", width: "{width}", height: "{height}" }
+                                div { class: "media-library-card-copy",
+                                    h2 { "{display_name}" }
+                                    p { "{width} × {height} · {format} · {byte_length} bytes" }
+                                    code { "{asset_id}" }
+                                }
+                                button {
+                                    class: "secondary-button",
+                                    r#type: "button",
+                                    disabled: view.pending || view.loading,
+                                    onclick: move |_| {
+                                        #[cfg(feature = "browser")]
+                                        {
+                                            let operation_id = operation_id.clone();
+                                            spawn(async move { archive_media_item(state, operation_id, !archived).await });
+                                        }
+                                    },
+                                    if archived { "Restore" } else { "Archive" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if view.next_cursor.is_some() {
+                button {
+                    class: "secondary-button media-load-more",
+                    r#type: "button",
+                    disabled: view.loading || view.pending,
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        spawn(async move {
+                            let archived = state.with(|state| state.archived);
+                            refresh_media_library(state, archived, true).await;
+                        });
+                    },
+                    if view.loading { "Loading…" } else { "Load more" }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_media_library(mut state: Signal<MediaLibraryState>, archived: bool, append: bool) {
+    let (request, cursor) = state.with_mut(|state| state.begin_load(archived, append));
+    let path = match cursor {
+        Some(cursor) => format!("/api/media?archived={archived}&cursor={cursor}"),
+        None => format!("/api/media?archived={archived}"),
+    };
+    let response = api_request("GET", &path, None, None).await;
+    let result = match response {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<DashboardMediaPage>(&response.body).map_err(|_| ())
+        }
+        _ => Err(()),
+    };
+    let capacity = api_request("GET", "/api/media/capacity", None, None)
+        .await
+        .ok()
+        .filter(|response| response.status == 200)
+        .and_then(|response| {
+            serde_json::from_str::<DashboardMediaCapacityResponse>(&response.body)
+                .ok()
+                .map(|response| response.capacity)
+        });
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            if request == state.latest_request {
+                state.capacity = capacity;
+            }
+            state.finish_load(request, result, append);
+        });
+    }
+}
+
+fn media_size_label(bytes: u64) -> String {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+#[cfg(feature = "browser")]
+const BROWSER_UPLOAD_MEDIA: &str = r#"
+const input = document.getElementById("media-upload");
+if (!(input instanceof HTMLInputElement) || !input.files || input.files.length === 0) {
+    dioxus.send({status: 0, body: ""});
+} else {
+    const file = input.files[0];
+    try {
+        const response = await fetch("/api/media", {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/octet-stream",
+                "X-File-Name": encodeURIComponent(file.name)
+            },
+            body: file
+        });
+        dioxus.send({status: response.status, body: await response.text()});
+        if (response.ok) input.value = "";
+    } catch (_) {
+        dioxus.send({status: 0, body: ""});
+    }
+}
+"#;
+
+#[cfg(feature = "browser")]
+async fn upload_selected_media(mut state: Signal<MediaLibraryState>) {
+    state.with_mut(|state| {
+        state.pending = true;
+        state.status = None;
+        state.load_error = false;
+    });
+    let mut request = document::eval(BROWSER_UPLOAD_MEDIA);
+    let result = request
+        .recv::<BrowserResponse>()
+        .await
+        .map_err(|_| ())
+        .and_then(|response| (response.status == 201).then_some(response).ok_or(()));
+    match result {
+        Ok(_) => {
+            state.with_mut(|state| {
+                state.pending = false;
+                state.status = Some("Image uploaded and ready to use.".to_owned());
+            });
+            refresh_media_library(state, false, false).await;
+        }
+        Err(()) => {
+            state.with_mut(|state| {
+                state.pending = false;
+                state.status = Some(
+                    "The upload failed. Choose a JPEG or PNG under 2 MB and try again.".to_owned(),
+                );
+            });
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn archive_media_item(
+    mut state: Signal<MediaLibraryState>,
+    asset_id: String,
+    archived: bool,
+) {
+    state.with_mut(|state| {
+        state.pending = true;
+        state.status = None;
+    });
+    let path = format!("/api/media/{asset_id}/archive");
+    let body = serde_json::json!({ "archived": archived }).to_string();
+    let result = api_request("POST", &path, Some(body), None).await;
+    match result {
+        Ok(response) if response.status == 200 => {
+            state.with_mut(|state| {
+                state.pending = false;
+                state.status = Some(if archived {
+                    "Image archived. Published pages that use it keep working.".to_owned()
+                } else {
+                    "Image restored to the available library.".to_owned()
+                });
+            });
+            let filter = state.with(|state| state.archived);
+            refresh_media_library(state, filter, false).await;
+        }
+        _ => state.with_mut(|state| {
+            state.pending = false;
+            state.status = Some(error_message(""));
+        }),
     }
 }
 
@@ -1102,5 +1476,22 @@ mod tests {
             original,
             idempotency_storage_slot("DELETE", "/api/funnels/funnel-1", None)
         );
+    }
+
+    #[test]
+    fn stale_media_list_response_cannot_replace_a_newer_archive_filter() {
+        let mut state = MediaLibraryState::default();
+        let (older_request, _) = state.begin_load(false, false);
+        let (newer_request, _) = state.begin_load(true, false);
+
+        state.finish_load(older_request, Err(()), false);
+        assert!(state.loading);
+        assert!(!state.load_error);
+        assert!(state.archived);
+
+        state.finish_load(newer_request, Err(()), false);
+        assert!(!state.loading);
+        assert!(state.load_error);
+        assert!(state.archived);
     }
 }

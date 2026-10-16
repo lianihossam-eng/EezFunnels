@@ -163,6 +163,7 @@ pub(crate) fn validate_data(
     let mut block_count = 0usize;
     let mut section_ids = BTreeSet::new();
     let mut block_ids = BTreeSet::new();
+    let mut asset_ids = BTreeSet::new();
     for (page_index, page) in data.pages.iter_mut().enumerate() {
         if page_ids.insert(page.id.clone(), page_index).is_some() {
             return Err(DocumentError::at(
@@ -226,6 +227,15 @@ pub(crate) fn validate_data(
                         "validation/block_id_duplicate",
                         "pages.sections.blocks.id",
                     ));
+                }
+                if let BlockV2::Image { asset_id, .. } = block {
+                    asset_ids.insert(asset_id.clone());
+                    if asset_ids.len() > crate::media::MAX_MEDIA_ASSETS_PER_DOCUMENT {
+                        return Err(DocumentError::at(
+                            "validation/v2_asset_limit",
+                            "pages.sections.blocks.asset_id",
+                        ));
+                    }
                 }
                 validate_block(block)?;
             }

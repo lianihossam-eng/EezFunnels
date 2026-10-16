@@ -8,6 +8,8 @@
     "dev": "wrangler dev",
     "wrangler": "wrangler",
     "test:pr010:migration": "python3 scripts/test-pr010-migration.py",
+    "test:media:migration": "python3 scripts/test-v2-media-migration.py",
+    "test:media:worker": "python3 scripts/test-v2-media-worker.py",
     "test:pr010:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr011:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr012:browser": "node scripts/test-pr010-browser.mjs",

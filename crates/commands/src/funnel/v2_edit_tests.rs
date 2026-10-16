@@ -114,6 +114,7 @@ fn form_builder_command_applies_and_renders_a_new_form_from_the_minimal_document
     assert!(!render_v2::render_owner_preview(
         &outcome.document,
         &PageId::parse("page-home").expect("page id"),
+        &eez_domain::media::ResolvedV2Assets::empty(),
     )
     .expect("form preview renders")
     .is_empty());

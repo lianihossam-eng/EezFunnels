@@ -29,7 +29,7 @@ npx wrangler r2 bucket create eezfunnel-assets
 npx wrangler kv namespace create eezfunnel-kv
 ```
 
-Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top-level `DB` and `KV` entries in `wrangler.toml`. Keep the R2 bucket name aligned with the configured `R2` binding. The Worker currently requires all three bindings; image upload is not implemented.
+Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top-level `DB` and `KV` entries in `wrangler.toml`. Keep the R2 bucket name aligned with the configured `R2` binding. The Worker requires all three bindings.
 
 Edit the top-level `[vars]` entry in `wrangler.toml` and set `ALLOWED_HOSTS` to the exact hostname that will receive requests. For the default workers.dev route, this is the Worker name and your account's workers.dev subdomain, for example `eezfunnel.<account-subdomain>.workers.dev`. The Worker rejects hosts that are not listed exactly. Multiple hosts can be comma-separated. If you use another hostname, configure its Cloudflare Worker route separately and list that exact host.
 
@@ -40,6 +40,10 @@ V2 funnel creation and staged saves require explicit production values for `V2_S
 Each R2 upload attempt permanently charges its expected byte length and one object key in the external stage-control object before the R2 PUT. Cleanup, failed or timed-out writes, and D1 restore never refund that charge. These lifetime limits bound worst-case orphan exposure even when an object is never observed or removed. The typed editor displays the configured worst-case byte/key exposure and the amount already charged; `GET /api/v2/stage-capacity` provides the same status to the dashboard.
 
 Set an initial cap appropriate for the account before creating V2 funnels. Increasing either cap is an explicit operator change and the editor displays the resulting maximum exposure; the persisted limit only increases. If configuration is lowered below the persisted cap, V2 staging fails closed. The control object is initialized on the first V2 create and lives in R2 outside D1 Time Travel restores.
+
+## Media storage capacity
+
+`MEDIA_R2_BYTE_BUDGET` and `MEDIA_R2_KEY_BUDGET` bound content-addressed media writes. Production defaults are 1 GiB and 10,000 write slots. Local development has separate 100 MiB and 1,000 slot limits. The media library displays the configured and used allowance. Each new R2 media write permanently charges its normalized bytes and one slot before the PUT. Failures, uncertain retries, and D1 restores do not refund charges. Increase capacity explicitly when the allowance is reached; the persisted R2 limit only increases. See [Media library](media.md) for upload formats, routes, and archive behavior.
 
 Do not deploy with the placeholder D1 or KV IDs. The `[env.dev]` resources are separate from the production bindings; the local development commands do not need real remote dev resources.
 
@@ -61,7 +65,7 @@ Confirm the health route and dashboard after deployment:
 curl --fail --show-error https://eezfunnel.<account-subdomain>.workers.dev/health
 ```
 
-A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor provides publish and unpublish controls for saved revisions; the entry page is available at `/f/<slug>`, and additional published V2 pages use `/f/<slug>/<page_slug>`. Review the configured V2 staging capacity before enabling V2 creation.
+A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor provides publish and unpublish controls for saved revisions; the entry page is available at `/f/<slug>`, and additional published V2 pages use `/f/<slug>/<page_slug>`. Review the configured V2 staging and media capacities before enabling those features.
 
 ## Optional MCP secret
 

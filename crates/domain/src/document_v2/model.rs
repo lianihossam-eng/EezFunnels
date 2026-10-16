@@ -679,6 +679,20 @@ impl DocumentV2 {
         })
     }
 
+    pub fn referenced_asset_ids(&self) -> Vec<AssetId> {
+        let mut asset_ids = std::collections::BTreeSet::new();
+        for page in &self.data.pages {
+            for section in &page.sections {
+                for block in &section.blocks {
+                    if let BlockV2::Image { asset_id, .. } = block {
+                        asset_ids.insert(asset_id.clone());
+                    }
+                }
+            }
+        }
+        asset_ids.into_iter().collect()
+    }
+
     pub fn has_forms(&self) -> bool {
         !self.data.forms.is_empty()
     }

@@ -31,10 +31,12 @@ jobs:
       - run: bash scripts/install-wasm-bindgen.sh
       - run: npm ci --no-audit --no-fund
       - run: cargo xtask ci
+      - run: npm run test:media:worker
       - run: npx playwright install --with-deps chromium
       - name: Public form browser smoke
         run: PR033_BROWSER=1 bash scripts/smoke-pr033-public-forms.sh
       - run: npm run test:pr010:migration
+      - run: npm run test:media:migration
       - run: npm run test:pr010:browser
       - run: npm run test:pr019:fuzz
       - run: npm run test:pr022:browser

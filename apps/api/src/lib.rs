@@ -12,7 +12,7 @@ use eez_domain::document_v2::{
 };
 use eez_render::document_v2::validate_revision_v2;
 use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tower_service::Service;
@@ -104,6 +104,16 @@ pub async fn fetch(
         mcp::handle(&env, request, &correlation_id).await
     } else if request_path == "/api/v2/stage-capacity" {
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
+    } else if request_path == "/api/media/capacity" {
+        media_capacity_response(&env, request, correlation_id.clone()).await
+    } else if request_path == "/api/media" {
+        media_collection_response(&env, request, correlation_id.clone()).await
+    } else if let Some(asset_id) = media_archive_route(&request_path) {
+        media_archive_response(&env, request, asset_id, correlation_id.clone()).await
+    } else if let Some(asset_id) = media_owner_content_route(&request_path) {
+        media_content_response(&env, request, asset_id, true, correlation_id.clone()).await
+    } else if let Some(asset_id) = public_media_route(&request_path) {
+        media_content_response(&env, request, asset_id, false, correlation_id.clone()).await
     } else if request_path == "/api/funnels" {
         funnel_collection_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/funnels/v2" {
@@ -211,6 +221,310 @@ async fn asset_response(
     let response = env.assets("ASSETS")?.fetch_request(request).await?;
     let (parts, body) = response.into_parts();
     Ok(Response::from_parts(parts, axum::body::Body::new(body)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MediaArchiveRequest {
+    archived: bool,
+}
+
+fn media_archive_route(path: &str) -> Option<&str> {
+    let asset_id = path.strip_prefix("/api/media/")?.strip_suffix("/archive")?;
+    (is_media_asset_id(asset_id) && !asset_id.contains('/')).then_some(asset_id)
+}
+
+fn media_owner_content_route(path: &str) -> Option<&str> {
+    let asset_id = path.strip_prefix("/api/media/")?.strip_suffix("/content")?;
+    (is_media_asset_id(asset_id) && !asset_id.contains('/')).then_some(asset_id)
+}
+
+fn public_media_route(path: &str) -> Option<&str> {
+    let asset_id = path.strip_prefix("/media/")?;
+    (is_media_asset_id(asset_id) && !asset_id.contains('/')).then_some(asset_id)
+}
+
+fn is_media_asset_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+async fn media_collection_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return editor_payload_error_response(&correlation_id, "external/unavailable"),
+    };
+    if request.method() == Method::GET {
+        let (archived, cursor) = match media_list_query(request.uri().query()) {
+            Some(query) => query,
+            None => {
+                return editor_payload_error_response(&correlation_id, "validation/invalid_json")
+            }
+        };
+        match bindings
+            .media_repository()
+            .list(archived, cursor.as_deref())
+            .await
+        {
+            Ok(page) => json_success_response(
+                serde_json::json!({
+                    "items": page.items,
+                    "next_cursor": page.next_cursor,
+                }),
+                StatusCode::OK,
+                &correlation_id,
+                None,
+            ),
+            Err(error) => media_error_response(error, &correlation_id),
+        }
+    } else if request.method() == Method::POST {
+        let content_types = request.headers().get_all("content-type");
+        if content_types.iter().count() != 1
+            || content_types
+                .iter()
+                .next()
+                .and_then(|value| value.to_str().ok())
+                != Some("application/octet-stream")
+        {
+            return editor_payload_error_response(&correlation_id, "validation/invalid_json");
+        }
+        let filename = match media_filename_header(request.headers()) {
+            Some(filename) => filename,
+            None => {
+                return editor_payload_error_response(&correlation_id, "validation/invalid_json")
+            }
+        };
+        let bytes = match to_bytes(
+            axum::body::Body::new(request.into_body()),
+            eez_storage::media::MAX_MEDIA_UPLOAD_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            _ => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
+        };
+        let media = bindings.media_repository();
+        if let Err(error) = media.initialize_capacity_control().await {
+            return media_error_response(error, &correlation_id);
+        }
+        match media.upload(&bytes, &filename).await {
+            Ok(item) => json_success_response(
+                serde_json::json!({"item": item}),
+                StatusCode::CREATED,
+                &correlation_id,
+                None,
+            ),
+            Err(error) => media_error_response(error, &correlation_id),
+        }
+    } else {
+        method_not_allowed_for(&correlation_id, "GET, POST")
+    }
+}
+
+async fn media_capacity_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return editor_payload_error_response(&correlation_id, "external/unavailable"),
+    };
+    match bindings.media_repository().capacity_snapshot().await {
+        Ok(capacity) => json_success_response(
+            serde_json::json!({"capacity": capacity}),
+            StatusCode::OK,
+            &correlation_id,
+            None,
+        ),
+        Err(error) => media_error_response(error, &correlation_id),
+    }
+}
+
+fn media_list_query(query: Option<&str>) -> Option<(bool, Option<String>)> {
+    let mut archived = false;
+    let mut has_archived = false;
+    let mut cursor = None;
+    if let Some(query) = query {
+        for (key, value) in query
+            .split('&')
+            .map(|pair| pair.split_once('=').unwrap_or((pair, "")))
+        {
+            match key {
+                "archived" if !has_archived && matches!(value, "true" | "false") => {
+                    archived = value == "true";
+                    has_archived = true;
+                }
+                "cursor" if cursor.is_none() && is_media_asset_id(value) => {
+                    cursor = Some(value.to_owned());
+                }
+                _ => return None,
+            }
+        }
+    }
+    Some((archived, cursor))
+}
+
+fn media_filename_header(headers: &HeaderMap<HeaderValue>) -> Option<String> {
+    let values = headers.get_all("x-file-name");
+    if values.iter().count() > 1 {
+        return None;
+    }
+    let Some(value) = values.iter().next() else {
+        return Some("image".to_owned());
+    };
+    let encoded = value.to_str().ok()?;
+    if encoded.len() > 360 {
+        return None;
+    }
+    let bytes = decode_uri_component(encoded)?;
+    String::from_utf8(bytes).ok()
+}
+
+fn decode_uri_component(encoded: &str) -> Option<Vec<u8>> {
+    let input = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' {
+            let pair = input.get(index + 1..index + 3)?;
+            decoded.push((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?);
+            index += 3;
+        } else {
+            decoded.push(input[index]);
+            index += 1;
+        }
+    }
+    Some(decoded)
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+async fn media_archive_response(
+    env: &Env,
+    request: HttpRequest,
+    asset_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::POST {
+        return method_not_allowed_for(&correlation_id, "POST");
+    }
+    let bytes = match to_bytes(axum::body::Body::new(request.into_body()), 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
+    };
+    let Ok(body) = std::str::from_utf8(&bytes) else {
+        return editor_payload_error_response(&correlation_id, "validation/invalid_json");
+    };
+    if validate_unique_json(body).is_err() {
+        return editor_payload_error_response(&correlation_id, "validation/invalid_json");
+    }
+    let body = match serde_json::from_str::<MediaArchiveRequest>(body) {
+        Ok(body) => body,
+        Err(_) => return editor_payload_error_response(&correlation_id, "validation/invalid_json"),
+    };
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return editor_payload_error_response(&correlation_id, "external/unavailable"),
+    };
+    match bindings
+        .media_repository()
+        .set_archived(asset_id, body.archived)
+        .await
+    {
+        Ok(()) => json_success_response(
+            serde_json::json!({"asset_id": asset_id, "archived": body.archived}),
+            StatusCode::OK,
+            &correlation_id,
+            None,
+        ),
+        Err(error) => media_error_response(error, &correlation_id),
+    }
+}
+
+async fn media_content_response(
+    env: &Env,
+    request: HttpRequest,
+    asset_id: &str,
+    owner: bool,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
+    }
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => {
+            let error = ApiError::from_code("external/unavailable");
+            log_api_error(&error, &correlation_id, "media_bindings_unavailable");
+            return error_response(&error, correlation_id);
+        }
+    };
+    let access = if owner {
+        eez_storage::media::MediaAccess::Owner
+    } else {
+        eez_storage::media::MediaAccess::Published
+    };
+    match bindings.media_repository().read(asset_id, access).await {
+        Ok(object) => {
+            let mut response = Response::new(if request.method() == Method::HEAD {
+                axum::body::Body::empty()
+            } else {
+                axum::body::Body::from(object.bytes)
+            });
+            *response.status_mut() = StatusCode::OK;
+            let content_type = HeaderValue::from_static(object.descriptor.format().mime_type());
+            response.headers_mut().insert("content-type", content_type);
+            response.headers_mut().insert(
+                "content-length",
+                HeaderValue::from_str(&object.descriptor.byte_length().to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+            response.headers_mut().insert(
+                "cache-control",
+                HeaderValue::from_static(if owner {
+                    "no-store"
+                } else {
+                    "public, max-age=31536000, immutable"
+                }),
+            );
+            response.headers_mut().insert(
+                "x-content-type-options",
+                HeaderValue::from_static("nosniff"),
+            );
+            if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+                response.headers_mut().insert("x-correlation-id", value);
+            }
+            response
+        }
+        Err(error) => media_error_response(error, &correlation_id),
+    }
+}
+
+fn media_error_response(
+    error: eez_storage::media::MediaError,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    let kind = error.safe_kind();
+    let api_error = ApiError::from_code(error.code());
+    log_api_error(&api_error, correlation_id, kind);
+    error_response(&api_error, correlation_id.to_owned())
 }
 
 fn dashboard_response(document: String) -> Response<axum::body::Body> {
@@ -1938,12 +2252,13 @@ async fn execute_funnel_command(
         .map_err(|_| ApiError::from_code("external/unavailable"))?;
     let repository = bindings.repository();
     let document_stages = bindings.document_stage_repository();
+    let media = bindings.media_repository();
     if command_id == command_ids::FUNNEL_CREATE_V2
         && document_stages.ensure_sequence_control().await.is_err()
     {
         return Err(ApiError::from_code("external/unavailable"));
     }
-    Session::with_document_stages(&repository, &document_stages)
+    Session::with_document_stages_and_media(&repository, &document_stages, &media)
         .execute(actor, command_id, parameters, idempotency_key)
         .await
         .map_err(|error| ApiError::from_code(error.code()))
@@ -2512,16 +2827,68 @@ pub async fn scheduled(
 #[cfg(test)]
 mod tests {
     use super::{
-        correlation_id, editor_command_parameters, funnel_subroute, normalize_correlation_id,
-        parse_public_form_body, public_form_submission_key, public_form_submission_route_from_path,
-        public_form_success_location, public_html_etag, public_route_from_path,
-        publication_command_parameters, request_if_none_match, stage_upload_token,
-        v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
-        v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
-        valid_public_slug, EditorCommandParametersError,
+        correlation_id, editor_command_parameters, funnel_subroute, media_archive_route,
+        media_filename_header, media_list_query, media_owner_content_route,
+        normalize_correlation_id, parse_public_form_body, public_form_submission_key,
+        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
+        public_media_route, public_route_from_path, publication_command_parameters,
+        request_if_none_match, stage_upload_token, v1_conversion_command_parameters,
+        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
+        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
+        EditorCommandParametersError,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
+
+    #[test]
+    fn media_routes_require_one_lowercase_content_digest() {
+        let asset_id = "a".repeat(64);
+        assert_eq!(
+            public_media_route(&format!("/media/{asset_id}")),
+            Some(asset_id.as_str())
+        );
+        assert_eq!(
+            media_owner_content_route(&format!("/api/media/{asset_id}/content")),
+            Some(asset_id.as_str())
+        );
+        assert_eq!(
+            media_archive_route(&format!("/api/media/{asset_id}/archive")),
+            Some(asset_id.as_str())
+        );
+        assert!(public_media_route(&format!("/media/{}/content", asset_id)).is_none());
+        assert!(
+            media_archive_route(&format!("/api/media/{}/archive/extra", "a".repeat(64))).is_none()
+        );
+        assert!(public_media_route(&format!("/media/{}", "A".repeat(64))).is_none());
+    }
+
+    #[test]
+    fn media_list_query_rejects_duplicates_unknowns_and_unbounded_cursor_syntax() {
+        assert_eq!(media_list_query(None), Some((false, None)));
+        assert_eq!(media_list_query(Some("archived=true")), Some((true, None)));
+        assert_eq!(
+            media_list_query(Some(&format!("cursor={}", "b".repeat(64)))),
+            Some((false, Some("b".repeat(64))))
+        );
+        assert!(media_list_query(Some("archived=true&archived=false")).is_none());
+        assert!(media_list_query(Some("cursor=short")).is_none());
+        assert!(media_list_query(Some("limit=100000")).is_none());
+    }
+
+    #[test]
+    fn media_filename_header_decodes_utf8_and_rejects_malformed_percent_sequences() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-file-name",
+            HeaderValue::from_static("caf%C3%A9%20photo.png"),
+        );
+        assert_eq!(
+            media_filename_header(&headers).as_deref(),
+            Some("café photo.png")
+        );
+        headers.insert("x-file-name", HeaderValue::from_static("bad%2"));
+        assert!(media_filename_header(&headers).is_none());
+    }
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {

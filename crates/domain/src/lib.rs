@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 pub mod document_v2;
+pub mod media;
 
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 

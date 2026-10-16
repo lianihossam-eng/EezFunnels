@@ -4,7 +4,8 @@ use eez_domain::document_v2::{
 };
 #[cfg(feature = "browser")]
 use eez_domain::document_v2::{
-    BlockId, FormField, FormResult, FormV2, NewFormField, PageId, SectionId, ValidationRange,
+    AssetId, BlockId, FormField, FormResult, FormV2, ImageAlt, NewFormField, PageId, SectionId,
+    ValidationRange,
 };
 #[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
@@ -16,7 +17,7 @@ use uuid::Uuid;
 #[cfg(feature = "browser")]
 use super::super::{
     api_request, clear_idempotency_storage, error_message, prepare_idempotency_key,
-    PreparedIdempotencyKey,
+    DashboardMediaItem, DashboardMediaPage, PreparedIdempotencyKey,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -452,14 +453,13 @@ impl V2EditorState {
     }
 
     fn can_save(&self) -> bool {
-        self.document.as_ref().is_some_and(|document| {
+        self.document.is_some() && {
             !self.loading
                 && !self.pending
                 && !self.saving
                 && !self.stale
-                && !document.has_images()
                 && (self.save_retryable || self.has_unsaved_changes())
-        })
+        }
     }
 
     fn can_publish(&self) -> bool {
@@ -1505,7 +1505,7 @@ fn block_text(block: &BlockV2) -> String {
         BlockV2::Heading { text, .. } | BlockV2::Text { text, .. } => text.clone(),
         BlockV2::List { items, .. } => items.join("\n"),
         BlockV2::Button { label, .. } => label.clone(),
-        BlockV2::Image { .. } => "Image assets are added in the media library phase.".to_owned(),
+        BlockV2::Image { asset_id, .. } => format!("Image asset {}", asset_id.as_str()),
         BlockV2::Form { .. } => "Form editing is added in the forms phase.".to_owned(),
     }
 }
@@ -2415,6 +2415,9 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                         },
                                         "Add block"
                                     }
+                                    if let Some((section_id, after)) = add_block_location.clone() {
+                                        V2ImageBlockPicker { state, section: section_id, after, locked }
+                                    }
                                     button {
                                         class: "secondary-button",
                                         r#type: "button",
@@ -2971,6 +2974,236 @@ fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: bool) -> Ele
 
 #[cfg(feature = "browser")]
 #[component]
+fn V2ImageBlockPicker(
+    state: Signal<V2EditorState>,
+    section: SectionId,
+    after: Option<BlockId>,
+    locked: bool,
+) -> Element {
+    let media_items = use_signal(Vec::<DashboardMediaItem>::new);
+    let loading = use_signal(|| true);
+    let mut selected_asset = use_signal(String::new);
+    let mut alt_text = use_signal(String::new);
+    let mut decorative = use_signal(|| false);
+    let mut message = use_signal(|| None::<String>);
+
+    {
+        let mut media_items = media_items;
+        let mut loading = loading;
+        let mut message = message;
+        use_effect(move || {
+            spawn(async move {
+                let result = api_request("GET", "/api/media", None, None).await;
+                match result {
+                    Ok(response) if response.status == 200 => {
+                        match serde_json::from_str::<DashboardMediaPage>(&response.body) {
+                            Ok(page) => {
+                                let first = page
+                                    .items
+                                    .first()
+                                    .map(|item| item.descriptor.asset_id().as_str().to_owned());
+                                media_items.set(page.items);
+                                if let Some(first) = first {
+                                    selected_asset.set(first);
+                                }
+                            }
+                            Err(_) => {
+                                message.set(Some("The media list could not be read.".to_owned()))
+                            }
+                        }
+                    }
+                    _ => message.set(Some(
+                        "The media library is unavailable right now.".to_owned(),
+                    )),
+                }
+                loading.set(false);
+            });
+        });
+    }
+
+    let assets = media_items();
+    let selected = selected_asset();
+    let selected_item = assets
+        .iter()
+        .find(|item| item.descriptor.asset_id().as_str() == selected)
+        .cloned();
+    let alt = alt_text();
+    let decorative_value = decorative();
+    let section_for_add = section.clone();
+    let after_for_add = after.clone();
+    rsx! {
+        div { class: "media-image-picker",
+            h3 { "Add an image block" }
+            if loading() {
+                p { role: "status", "Loading available images…" }
+            } else if assets.is_empty() {
+                p { "Upload an image before adding it to this page." }
+                Link { to: super::super::RouteView::MediaLibrary {}, class: "secondary-button", "Open media library" }
+            } else {
+                label { class: "editor-setting-control", r#for: "v2-image-asset-select",
+                    "Image"
+                    select {
+                        id: "v2-image-asset-select",
+                        value: "{selected}",
+                        disabled: locked,
+                        onchange: move |event| selected_asset.set(event.value()),
+                        option { value: "", "Choose an image" }
+                        for item in assets.iter() {
+                            option { value: "{item.descriptor.asset_id().as_str()}", "{item.display_name}" }
+                        }
+                    }
+                }
+                if let Some(item) = selected_item.as_ref() {
+                    div { class: "media-image-choice",
+                        img {
+                            src: "/api/media/{item.descriptor.asset_id().as_str()}/content",
+                            alt: "",
+                            width: "{item.descriptor.width()}",
+                            height: "{item.descriptor.height()}"
+                        }
+                        span { "{item.display_name} · {item.descriptor.width()} × {item.descriptor.height()}" }
+                    }
+                }
+                label { class: "editor-setting-control", r#for: "v2-new-image-alt",
+                    "Text alternative"
+                    textarea {
+                        id: "v2-new-image-alt",
+                        rows: "2",
+                        value: "{alt}",
+                        disabled: locked,
+                        oninput: move |event| {
+                            let value = event.value();
+                            if !value.trim().is_empty() {
+                                decorative.set(false);
+                            }
+                            alt_text.set(value);
+                        },
+                    }
+                }
+                label { class: "media-decorative-control",
+                    input {
+                        r#type: "checkbox",
+                        checked: decorative_value,
+                        disabled: locked,
+                        onchange: move |event| decorative.set(event.checked()),
+                    }
+                    span { "This image is decorative" }
+                }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    disabled: locked || selected.is_empty() || (!decorative_value && alt.trim().is_empty()),
+                    onclick: move |_| {
+                        let Ok(asset_id) = AssetId::parse(selected.clone()) else {
+                            message.set(Some("Choose an available image first.".to_owned()));
+                            return;
+                        };
+                        let alt = if decorative_value && alt.trim().is_empty() {
+                            ImageAlt::Decorative
+                        } else {
+                            ImageAlt::Text { value: alt.clone() }
+                        };
+                        let block = NewBlock::Image { asset_id, alt };
+                        dispatch_v2_edit(state, Edit::AddBlock {
+                            section: section_for_add.clone(),
+                            after: after_for_add.clone(),
+                            block,
+                        });
+                        message.set(Some("Image block added. Review its alternative text before publishing.".to_owned()));
+                    },
+                    "Add image block"
+                }
+            }
+            if let Some(message) = message() {
+                p { class: "media-picker-message", role: "status", "{message}" }
+            }
+            Link { to: super::super::RouteView::MediaLibrary {}, class: "media-library-inline-link", "Manage images" }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2ImageBlockSettings(state: Signal<V2EditorState>, block: BlockV2, locked: bool) -> Element {
+    let BlockV2::Image { id, asset_id, alt } = block else {
+        return rsx! {};
+    };
+    let alt_text = match &alt {
+        ImageAlt::Text { value } => value.clone(),
+        ImageAlt::Decorative => String::new(),
+    };
+    let decorative = matches!(alt, ImageAlt::Decorative);
+    let image_url = format!("/api/media/{}/content", asset_id.as_str());
+    let block_id = id.clone();
+    let asset_for_text = asset_id.clone();
+    let text_for_toggle = alt_text.clone();
+    let mut message = use_signal(|| None::<String>);
+    rsx! {
+        div { class: "media-image-settings",
+            img { src: "{image_url}", alt: "", loading: "lazy", class: "media-image-settings-preview" }
+            label { class: "editor-setting-control", r#for: "v2-image-alt-{id.as_str()}",
+                "Text alternative"
+                textarea {
+                    id: "v2-image-alt-{id.as_str()}",
+                    rows: "2",
+                    value: "{alt_text}",
+                    disabled: locked,
+                    onchange: move |event| {
+                        let value = event.value();
+                        if value.trim().is_empty() {
+                            message.set(Some("Add a text alternative or mark the image decorative.".to_owned()));
+                        } else {
+                            dispatch_v2_edit(state, Edit::SetBlock {
+                                block: block_id.clone(),
+                                value: NewBlock::Image {
+                                    asset_id: asset_for_text.clone(),
+                                    alt: ImageAlt::Text { value },
+                                },
+                            });
+                            message.set(None);
+                        }
+                    },
+                }
+            }
+            label { class: "media-decorative-control",
+                input {
+                    r#type: "checkbox",
+                    checked: decorative,
+                    disabled: locked,
+                    onchange: move |event| {
+                        if event.checked() {
+                            dispatch_v2_edit(state, Edit::SetBlock {
+                                block: id.clone(),
+                                value: NewBlock::Image {
+                                    asset_id: asset_id.clone(),
+                                    alt: ImageAlt::Decorative,
+                                },
+                            });
+                            message.set(None);
+                        } else if !text_for_toggle.trim().is_empty() {
+                            dispatch_v2_edit(state, Edit::SetBlock {
+                                block: id.clone(),
+                                value: NewBlock::Image {
+                                    asset_id: asset_id.clone(),
+                                    alt: ImageAlt::Text { value: text_for_toggle.clone() },
+                                },
+                            });
+                        } else {
+                            message.set(Some("Add a text alternative before turning off decorative.".to_owned()));
+                        }
+                    },
+                }
+                span { "This image is decorative" }
+            }
+            if let Some(message) = message() {
+                p { class: "media-picker-message", role: "status", "{message}" }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     section_id: SectionId,
@@ -3011,7 +3244,7 @@ fn V2BlockEditor(
                 code { "{block.id().as_str()}" }
             }
             if matches!(block, BlockV2::Image { .. }) {
-                p { class: "editor-keyboard-help", "{text}" }
+                V2ImageBlockSettings { state, block: block.clone(), locked }
             } else if let Some(form) = form {
                 V2FormEditor { state, form, locked }
             } else {
@@ -3294,6 +3527,37 @@ mod tests {
             capture.document_json
         );
         assert_ne!(capture.base_document_json, capture.document_json);
+    }
+
+    #[test]
+    fn image_blocks_can_be_saved_after_the_media_reference_is_added() {
+        let original = document();
+        let section = original.pages()[0].sections()[0].id().clone();
+        let mut ids = TestIds(0);
+        let edited = original
+            .apply(
+                Edit::AddBlock {
+                    section,
+                    after: None,
+                    block: NewBlock::Image {
+                        asset_id: eez_domain::document_v2::AssetId::parse("a".repeat(64))
+                            .expect("valid fixture asset id"),
+                        alt: eez_domain::document_v2::ImageAlt::Text {
+                            value: "A sample image".to_owned(),
+                        },
+                    },
+                },
+                &mut ids,
+            )
+            .expect("valid image block");
+        assert!(edited.document.has_images());
+
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.saved_document_json = original.canonical_json();
+        state.document = Some(edited.document);
+
+        assert!(state.can_save());
     }
 
     #[test]

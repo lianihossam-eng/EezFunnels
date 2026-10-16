@@ -1,4 +1,5 @@
-use eez_domain::document_v2::{BlueprintId, DocumentV2};
+use eez_domain::document_v2::{AssetId, BlueprintId, DocumentV2};
+use eez_domain::media::{MediaAssetDescriptor, RasterFormat, ResolvedV2Assets};
 use eez_render::document_v2::{
     prepare_revision, render_owner_preview, render_published, validate_revision_v2, V2RenderError,
 };
@@ -13,11 +14,13 @@ fn document() -> DocumentV2 {
 }
 
 #[test]
-fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
+fn renderer_v6_manifest_binds_row_document_theme_and_assets() {
     let document = document();
-    let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
+    let prepared = prepare_revision(&document, "revision-v2-01", &ResolvedV2Assets::empty())
+        .expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v5");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v6");
+    assert!(!prepared.render_manifest_json.contains("\"assets\":"));
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -42,7 +45,8 @@ fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
 #[test]
 fn owner_read_validates_the_stored_v2_row_and_manifest_without_public_render_gates() {
     let document = document();
-    let prepared = prepare_revision(&document, "revision-owner-read").expect("manifest");
+    let prepared = prepare_revision(&document, "revision-owner-read", &ResolvedV2Assets::empty())
+        .expect("manifest");
     let decoded = validate_revision_v2(
         2,
         "funnel-01",
@@ -68,7 +72,8 @@ fn owner_read_validates_the_stored_v2_row_and_manifest_without_public_render_gat
 #[test]
 fn version_identity_digest_and_noncanonical_rows_fail_closed() {
     let document = document();
-    let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
+    let prepared = prepare_revision(&document, "revision-v2-01", &ResolvedV2Assets::empty())
+        .expect("revision preparation");
     assert!(matches!(
         render_published(
             1,
@@ -118,7 +123,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v5", "renderer-v5-next");
+        .replace("renderer-v6", "renderer-v5-next");
     assert!(matches!(
         render_published(
             2,
@@ -129,6 +134,33 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
         ),
         Err(V2RenderError::UnsupportedRenderer)
     ));
+}
+
+#[test]
+fn legacy_image_free_manifests_remain_canonical_and_renderable() {
+    let document = document();
+    let prepared = prepare_revision(
+        &document,
+        "revision-legacy-compatible",
+        &ResolvedV2Assets::empty(),
+    )
+    .expect("image-free revision");
+
+    for renderer in ["renderer-v4", "renderer-v5"] {
+        let legacy_manifest = prepared
+            .render_manifest_json
+            .replace("renderer-v6", renderer);
+        let html = render_published(
+            2,
+            "funnel-01",
+            "revision-legacy-compatible",
+            &prepared.data_json,
+            &legacy_manifest,
+        )
+        .expect("legacy image-free manifest remains supported");
+        assert!(html.contains("Welcome to your new funnel"));
+        assert!(!legacy_manifest.contains("\"assets\":"));
+    }
 }
 
 #[test]
@@ -147,13 +179,67 @@ fn owner_preview_escapes_text_and_never_follows_external_links() {
             &mut TestIds(0),
         )
         .expect("heading edit");
-    let html = render_owner_preview(&edited.document, &page_id).expect("owner preview");
+    let html = render_owner_preview(&edited.document, &page_id, &ResolvedV2Assets::empty())
+        .expect("owner preview");
     assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
     assert!(!html.contains("<img src=x"));
 }
 
 #[test]
-fn v2_images_remain_blocked_and_form_previews_are_inert_until_published() {
+fn resolved_images_render_with_safe_urls_dimensions_and_alt_semantics() {
+    let asset_id = "a".repeat(64);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("starter document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {
+            "id": "image-block",
+            "kind": "image",
+            "asset_id": asset_id,
+            "alt": {"kind": "text", "value": "<Product & launch>"}
+        }
+    ]);
+    let image_document = DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("image document JSON"),
+        "funnel-01",
+    )
+    .expect("valid image document");
+    let descriptor = MediaAssetDescriptor::new(
+        AssetId::parse(asset_id.clone()).expect("content digest asset ID"),
+        asset_id,
+        RasterFormat::Png,
+        640,
+        640,
+        480,
+    )
+    .expect("validated asset metadata");
+    let assets = ResolvedV2Assets::for_document(&image_document, vec![descriptor])
+        .expect("exact document asset set");
+
+    let preview = render_owner_preview(&image_document, image_document.entry_page_id(), &assets)
+        .expect("image owner preview");
+    assert!(preview.contains("src=\"/api/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content\""));
+    assert!(preview.contains("alt=\"&lt;Product &amp; launch&gt;\""));
+    assert!(preview.contains("width=\"640\" height=\"480\""));
+
+    let prepared = prepare_revision(&image_document, "revision-image-ready", &assets)
+        .expect("image revision manifest");
+    assert!(prepared.render_manifest_json.contains("\"assets\":["));
+    let published = render_published(
+        2,
+        "funnel-01",
+        "revision-image-ready",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("published image renders");
+    assert!(published.contains(
+        "src=\"/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    ));
+    assert!(published.contains("alt=\"&lt;Product &amp; launch&gt;\""));
+}
+
+#[test]
+fn v2_images_require_asset_bindings_and_form_previews_are_inert_until_published() {
     let mut image_value: serde_json::Value = serde_json::from_str(
         std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
     )
@@ -163,10 +249,13 @@ fn v2_images_remain_blocked_and_form_previews_are_inert_until_published() {
     ]);
     let image_json = serde_json::to_vec(&image_value).expect("document serialization");
     let image_document = DocumentV2::decode(&image_json, "funnel-01").expect("image node schema");
-    assert!(matches!(
-        prepare_revision(&image_document, "revision-image"),
-        Err(V2RenderError::ImagesNotEnabled)
-    ));
+    let error = prepare_revision(
+        &image_document,
+        "revision-image",
+        &ResolvedV2Assets::empty(),
+    )
+    .expect_err("an image with no resolved asset must not be saved");
+    assert_eq!(error.to_string(), "validation/v2_assets_missing");
 
     let mut form_value: serde_json::Value = serde_json::from_str(
         std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
@@ -184,8 +273,12 @@ fn v2_images_remain_blocked_and_form_previews_are_inert_until_published() {
     }]);
     let form_json = serde_json::to_vec(&form_value).expect("document serialization");
     let form_document = DocumentV2::decode(&form_json, "funnel-01").expect("form node schema");
-    let preview = render_owner_preview(&form_document, form_document.entry_page_id())
-        .expect("owner preview renders a form without a live submission target");
+    let preview = render_owner_preview(
+        &form_document,
+        form_document.entry_page_id(),
+        &ResolvedV2Assets::empty(),
+    )
+    .expect("owner preview renders a form without a live submission target");
     assert!(preview.contains("data-preview=\"true\""));
     assert!(preview.contains("type=\"button\" aria-disabled=\"true\""));
     assert!(!preview.contains("/submissions?key="));
@@ -215,7 +308,8 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
     }]);
     let form_json = serde_json::to_vec(&form_value).expect("document serialization");
     let form_document = DocumentV2::decode(&form_json, "funnel-01").expect("form node schema");
-    let prepared = prepare_revision(&form_document, "revision-form").expect("form revision");
+    let prepared = prepare_revision(&form_document, "revision-form", &ResolvedV2Assets::empty())
+        .expect("form revision");
 
     let html = render_published_route(
         2,
@@ -275,7 +369,8 @@ fn v2_public_pages_render_and_internal_edges_use_canonical_routes() {
         }));
     let data_json = serde_json::to_vec(&value).expect("document serialization");
     let multipage = DocumentV2::decode(&data_json, "funnel-01").expect("valid page graph");
-    let prepared = prepare_revision(&multipage, "revision-multipage").expect("manifest");
+    let prepared = prepare_revision(&multipage, "revision-multipage", &ResolvedV2Assets::empty())
+        .expect("manifest");
 
     let entry = render_published_route(
         2,

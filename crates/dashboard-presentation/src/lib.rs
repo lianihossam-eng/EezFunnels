@@ -106,6 +106,16 @@ mod tests {
     }
 
     #[test]
+    fn media_library_route_renders_upload_filter_and_navigation() {
+        let html = render_document("/media").expect("media library route");
+
+        assert!(html.contains("Media library"));
+        assert!(html.contains("Choose a JPEG or PNG image"));
+        assert!(html.contains("media-archive-filter"));
+        assert!(html.contains("Images are normalized to remove embedded metadata."));
+    }
+
+    #[test]
     fn create_dialog_has_a_native_backdrop_for_modal_interaction() {
         let html = render_document("/funnels").expect("funnel list route");
         let dialog_start = html.find("<dialog").expect("create dialog");
