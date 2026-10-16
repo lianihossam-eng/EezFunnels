@@ -1,0 +1,147 @@
+{
+  "task": "PR-022",
+  "evidence_refreshed_at_utc": "2026-10-16T00:14:12Z",
+  "branch": "feat/pr-022-dashboard-publish",
+  "base_commit": "5ddb6ac1580d155a24ce13671b677dbfdf184489",
+  "implementation_commit": "8598a62c819d6fd025b060e822ff3a737b22035e",
+  "source_fingerprint_algorithm": "SHA-256 of sorted path and file-hash lines for changed source files in source_sha256; plan/STATUS.md and plan/verification/** are excluded.",
+  "source_fingerprint_sha256": "a390386a6daff06b91d36b3b2d1392b18f6ef8e851b375d8a01941b5b6c6c264",
+  "source_file_count": 9,
+  "source_sha256": {
+    ".github/workflows/ci.yml": "02db357e8951e165f36a7db2ed6b360d96be129d948390cd9d41060eee656bc7",
+    "crates/commands/src/funnel.rs": "713b0b5b76dacbf3fe65bfa5e28fd64e820265274ae9dce17c16c610d902a3ff",
+    "crates/dashboard-presentation/assets/dashboard.css": "3b5570e5e02c2e02a01ff543d4d82d78165e2b9c38fee4da489bfd2490ee37fb",
+    "crates/dashboard-presentation/src/routes/editor.rs": "179e7dcbf6cd22590f09b9cd01ce333c0613feade36f1df5d0f9e4101239d75a",
+    "crates/dashboard-presentation/src/routes/editor/inspector.rs": "98d0d8b3f56d8bfdf9af47b81e6ffd075931fcfa8ad9f026c1259e8e9b9779c4",
+    "crates/storage/src/repository.rs": "f76c1b12d086673270856e12e77e150aa8fd81049f8c7a6e0b7198d59f1a566a",
+    "package.json": "553a5ee033b270b89d1ffc6c2ae7ec5c33b88d263cf4373db3646793a030ca81",
+    "scripts/test-pr010-browser.mjs": "b7f141f22ceeb7675c202caaa976a5dbaf8860eca45a401be17f87777ee8e25f",
+    "scripts/test-pr022-browser.mjs": "2ed3020406caf8a742414d3fa0663c91c4c1def6ed74e2684540f045e2859d58"
+  },
+  "implementation": {
+    "published_revision_id_in_editor_snapshot": true,
+    "publication_state_separate_from_editor_document": true,
+    "conflict_refresh_preserves_unsaved_editor_state": true,
+    "ambiguous_retry_reuses_exact_action_key_and_body": true,
+    "ambiguous_retry_after_pending_edit_and_keyboard_drag": true,
+    "explicit_unpublish_confirmation": true,
+    "new_owner_command": false,
+    "schema_migration": false,
+    "application_dependency_added": false,
+    "immediate_cdn_purge_claimed": false,
+    "successful_publication_receipt_followed_by_pointer_refresh": true,
+    "pointer_refresh_preserves_local_editor_document": true
+  },
+  "validation": {
+    "cargo_xtask_check": {
+      "command": "source .project-tools/env.sh && cargo xtask check",
+      "exit_code": 0,
+      "runs_before_each_planned_commit": true,
+      "log": "plan/verification/PR-022/logs/cargo-xtask-check.log.gz"
+    },
+    "cargo_xtask_ci": {
+      "command": "source .project-tools/env.sh && cargo xtask ci",
+      "exit_code": 0,
+      "outcome": "PASS: workspace checks and tests, dashboard WASM/assets, local Worker/D1 and MCP smokes, and RustSec audit.",
+      "locked_dependencies_scanned": 355,
+      "advisories_loaded": 1329,
+      "findings": 0,
+      "remote_cloudflare_operations": false,
+      "log": "plan/verification/PR-022/logs/cargo-xtask-ci.log.gz"
+    },
+    "pr022_browser": {
+      "command": "npm run test:pr022:browser",
+      "exit_code": 0,
+      "result": {
+        "workflow": "create -> edit -> save -> stale publish conflict -> preserve draft -> save -> publish -> lose response while editing -> exact retry -> save preserved draft -> public read -> confirm unpublish -> 404",
+        "funnelId": "cabb9211-2c04-429e-88ac-6721d10dd359",
+        "slug": "pr-022-publication-journey-cabb9211-2c04-429e-88ac-6721d10dd359",
+        "initialRevisionId": "b495351b-6193-4e1f-8811-25b10402fe9b",
+        "firstSavedRevisionId": "b12d90f0-9cb3-4c08-82b0-07db1da400d5",
+        "finalRevisionId": "b574f2f2-593a-4c4f-9c11-9286459c3101",
+        "recoveredDraftRevisionId": "27bfc844-134f-4de7-9c13-af39910e3ec0",
+        "dashboardKeyboardOnly": true,
+        "keyboardScope": "dashboard create/edit/save/publish/conflict recovery/unpublish",
+        "keyboardActionCount": 196,
+        "publicationMethod": "dashboard UI",
+        "staleRequests": 2,
+        "lostResponseDraftPreserved": true,
+        "lostResponseRetrySameRequest": true,
+        "pointerCancelEvents": 2,
+        "finalPointerEvents": 0,
+        "axeCritical": {
+          "dashboard": 0,
+          "editor": 0,
+          "publishedFunnel": 0
+        }
+      },
+      "axe_serious_or_critical_findings": {
+        "dashboard_home": 0,
+        "funnel_dashboard": 0,
+        "editor": 0,
+        "published_funnel": 0
+      },
+      "log": "plan/verification/PR-022/logs/browser.log.gz"
+    },
+    "static_checks": {
+      "commands": [
+        "cargo fmt --all -- --check (via cargo xtask check)",
+        "node --check scripts/test-pr010-browser.mjs",
+        "node --check scripts/test-pr022-browser.mjs",
+        "git diff --check"
+      ],
+      "exit_code": 0
+    },
+    "tdd_red_phase": {
+      "test": "PR-022 browser retry after competing unpublish; unit state test replayed_publication_receipt_refreshes_the_current_live_pointer",
+      "outcome": "Browser regression failed before the fix while waiting for Unpublished after replay, confirming the UI kept the receipt\u2019s stale live pointer. The focused state test and browser regression pass after the fix."
+    },
+    "pr010_browser": {
+      "command": "npm run test:pr010:browser",
+      "exit_code": 0,
+      "result": "Navigation, keyboard, responsive preview, inspector, live preview, duplicate-key rejection, V2 save/reload, sandbox/network, replay, stale CAS, and route-race checks passed; critical Axe findings=0.",
+      "log": "plan/verification/PR-022/logs/pr010-browser.log.gz"
+    },
+    "hosted_intermediate_failure": {
+      "run": "https://github.com/lianihossam-eng/EezFunnels/actions/runs/38826976225",
+      "head": "8144cdc199de25c1f0498333bbd756d82b26fa22",
+      "step": "npm run test:pr010:browser",
+      "cause": "The existing browser selector expected Move CTA up while the accessible name is Move up CTA so the visible label is included as required by Axe.",
+      "resolution": "Updated the test selector to Move up CTA; the exact local PR-010 browser flow and PR-022 Axe/browser flow both pass. A fresh hosted run is pending for the updated head."
+    }
+  },
+  "review": {
+    "no_comments": "Final diff audit: no added or changed comments or lint suppressions.",
+    "codex_exact_head_840a5fd": "Found that a successful receipt replay can report a stale publication pointer after another session changes it; follow-up keeps status unknown and refreshes the current pointer before re-enabling publication.",
+    "sol_follow_up_review": "No findings. Route/funnel guards, draft preservation, refreshed CAS baseline, and deterministic competing-unpublish browser coverage verified.",
+    "interrogate_follow_up": "No findings in the follow-up diff.",
+    "codex_exact_head_8144cdc": "No findings. This review predates only the PR-010 browser selector correction; request another exact-head review after the follow-up commit.",
+    "sol_exact_head_8144cdc": "No findings on the full diff; the previous Codex thread was answered and resolved. Request another exact-head review after the follow-up commit."
+  },
+  "external_proof": {
+    "cloudflare_production": "NOT_RUN; this task uses local Worker/D1 only and does not require production credentials.",
+    "deployment": "NOT_RUN."
+  },
+  "logs": {
+    "plan/verification/PR-022/logs/cargo-xtask-check.log.gz": {
+      "sha256": "3c66e11485ea4713db65ad52a7cdd207e804900b71f8b768badc8385b64f2083",
+      "raw_sha256": "45c25e44cd2cd4b691938595602d85a331273fab1a7f74706c9c2379a94e7f78",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-022/logs/cargo-xtask-ci.log.gz": {
+      "sha256": "ce3a8c7a385f895b7a0eb627bddafcbd7c30cdedc726794720892aff39130136",
+      "raw_sha256": "1c020716886541930e5624909b2ff5308096388c1597a925dc835334002fb401",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-022/logs/browser.log.gz": {
+      "sha256": "478dd59624c1955ad470822a4d0ab657f47e66ed069eb736106f08d8254a034b",
+      "raw_sha256": "6729a0e2dec98a30918a4c41b138ca187f8d33bafb72dcc349e7af6285f51788",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    },
+    "plan/verification/PR-022/logs/pr010-browser.log.gz": {
+      "sha256": "46ec3d2f39c5f8e62ce435d922e5966f487d91e559edcf9853eaa8ff60c9d0ae",
+      "raw_sha256": "2864ee88c797c1bef70f99961b98d6b656d79818517bd7b6b64cccd380c8a250",
+      "compression": "gzip -n; gzip -cd restores captured output"
+    }
+  }
+}

@@ -605,6 +605,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 "updated_at": record.updated_at,
             },
             "base_revision_id": record.head_revision_id,
+            "published_revision_id": record.published_revision_id,
             "sections": sections,
             "settings_schema": settings_schema,
             "settings_values": settings_values,

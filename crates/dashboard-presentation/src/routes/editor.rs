@@ -37,10 +37,105 @@ struct EditorFunnel {
 struct EditorReadResponse {
     funnel: EditorFunnel,
     base_revision_id: String,
+    published_revision_id: Option<String>,
     sections: Vec<EditorSection>,
     settings_schema: EditorSettingsSchema,
     settings_values: BTreeMap<String, EditorSettingValue>,
     preview_html: String,
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PublicationAction {
+    Publish {
+        revision_id: String,
+        expected_published_revision_id: Option<String>,
+    },
+    Unpublish {
+        expected_published_revision_id: String,
+    },
+}
+
+#[cfg(any(feature = "browser", test))]
+impl PublicationAction {
+    fn path(&self, funnel_id: &str) -> String {
+        let action = match self {
+            Self::Publish { .. } => "publish",
+            Self::Unpublish { .. } => "unpublish",
+        };
+        format!("/api/funnels/{funnel_id}/{action}")
+    }
+
+    fn body(&self) -> String {
+        let value = match self {
+            Self::Publish {
+                revision_id,
+                expected_published_revision_id,
+            } => serde_json::json!({
+                "revision_id": revision_id,
+                "expected_published_revision_id": expected_published_revision_id,
+            }),
+            Self::Unpublish {
+                expected_published_revision_id,
+            } => serde_json::json!({
+                "expected_published_revision_id": expected_published_revision_id,
+            }),
+        };
+        value.to_string()
+    }
+
+    fn resulting_revision_id(&self) -> Option<&str> {
+        match self {
+            Self::Publish { revision_id, .. } => Some(revision_id),
+            Self::Unpublish { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PublicationState {
+    known: bool,
+    live_revision_id: Option<String>,
+    pending: bool,
+    retryable: bool,
+    #[cfg(any(feature = "browser", test))]
+    attempt: Option<PublicationAction>,
+    refreshing: bool,
+    conflict: bool,
+    status: Option<String>,
+    error: Option<String>,
+}
+
+impl PublicationState {
+    fn is_publish_attempt(&self) -> bool {
+        #[cfg(any(feature = "browser", test))]
+        {
+            matches!(self.attempt, Some(PublicationAction::Publish { .. }))
+        }
+        #[cfg(not(any(feature = "browser", test)))]
+        {
+            false
+        }
+    }
+
+    fn is_unpublish_attempt(&self) -> bool {
+        #[cfg(any(feature = "browser", test))]
+        {
+            matches!(self.attempt, Some(PublicationAction::Unpublish { .. }))
+        }
+        #[cfg(not(any(feature = "browser", test)))]
+        {
+            false
+        }
+    }
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublicationCapture {
+    route_epoch: u64,
+    funnel_id: String,
+    action: PublicationAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +304,7 @@ struct EditorState {
     loading: bool,
     load_error: bool,
     document: Option<EditorDocument>,
+    publication: PublicationState,
     generation: u64,
     preview_error: bool,
     keyboard_section: Option<String>,
@@ -255,6 +351,11 @@ impl EditorState {
         self.reset_history();
         match response {
             Ok(response) if response.funnel.id == funnel_id => {
+                self.publication = PublicationState {
+                    known: true,
+                    live_revision_id: response.published_revision_id.clone(),
+                    ..PublicationState::default()
+                };
                 let order = response
                     .sections
                     .iter()
@@ -280,8 +381,225 @@ impl EditorState {
         }
     }
 
+    fn has_unsaved_changes(&self) -> bool {
+        self.document.as_ref().is_some_and(|document| {
+            document.order != document.saved_order || !document.settings_changes.is_empty()
+        })
+    }
+
+    fn can_publish(&self) -> bool {
+        if self.publication.pending || self.publication.refreshing || self.saving {
+            return false;
+        }
+        if self.publication.retryable {
+            #[cfg(any(feature = "browser", test))]
+            {
+                return self.document.as_ref().is_some_and(|document| {
+                    matches!(
+                        self.publication.attempt,
+                        Some(PublicationAction::Publish { ref revision_id, .. })
+                            if revision_id == &document.base_revision_id
+                    )
+                });
+            }
+            #[cfg(not(any(feature = "browser", test)))]
+            return false;
+        }
+        if !self.publication.known
+            || self.retryable
+            || self.stale
+            || self.has_unsaved_changes()
+            || self.keyboard_section.is_some()
+            || self.keyboard_original_order.is_some()
+        {
+            return false;
+        }
+        let Some(document) = self.document.as_ref() else {
+            return false;
+        };
+        self.publication.live_revision_id.as_deref() != Some(&document.base_revision_id)
+    }
+
+    fn can_unpublish(&self) -> bool {
+        if !self.publication.known || self.publication.pending || self.publication.refreshing {
+            return false;
+        }
+        if self.publication.retryable {
+            #[cfg(any(feature = "browser", test))]
+            return matches!(
+                self.publication.attempt,
+                Some(PublicationAction::Unpublish { .. })
+            );
+            #[cfg(not(any(feature = "browser", test)))]
+            return false;
+        }
+        self.publication.live_revision_id.is_some()
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_publish(&mut self) -> Option<PublicationCapture> {
+        if !self.can_publish() {
+            return None;
+        }
+        let action = match self.publication.attempt.clone() {
+            Some(action @ PublicationAction::Publish { .. }) if self.publication.retryable => {
+                action
+            }
+            _ => {
+                let document = self.document.as_ref()?;
+                PublicationAction::Publish {
+                    revision_id: document.base_revision_id.clone(),
+                    expected_published_revision_id: self.publication.live_revision_id.clone(),
+                }
+            }
+        };
+        Some(self.begin_publication(action))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_unpublish(&mut self) -> Option<PublicationCapture> {
+        if !self.can_unpublish() {
+            return None;
+        }
+        let action = match self.publication.attempt.clone() {
+            Some(action @ PublicationAction::Unpublish { .. }) if self.publication.retryable => {
+                action
+            }
+            _ => PublicationAction::Unpublish {
+                expected_published_revision_id: self.publication.live_revision_id.clone()?,
+            },
+        };
+        Some(self.begin_publication(action))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_publication(&mut self, action: PublicationAction) -> PublicationCapture {
+        self.publication.pending = true;
+        self.publication.retryable = false;
+        self.publication.attempt = Some(action.clone());
+        self.publication.conflict = false;
+        self.publication.error = None;
+        self.publication.status = Some(match &action {
+            PublicationAction::Publish { revision_id, .. } => {
+                format!("Publishing revision {revision_id}…")
+            }
+            PublicationAction::Unpublish { .. } => "Unpublishing the live revision…".to_owned(),
+        });
+        PublicationCapture {
+            route_epoch: self.route_epoch,
+            funnel_id: self.funnel_id.clone(),
+            action,
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn is_current_publication(&self, capture: &PublicationCapture) -> bool {
+        self.route_epoch == capture.route_epoch
+            && self.funnel_id == capture.funnel_id
+            && self.publication.pending
+            && self.publication.attempt.as_ref() == Some(&capture.action)
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_publication(
+        &mut self,
+        capture: &PublicationCapture,
+        published_revision_id: Option<String>,
+    ) -> Option<(u64, String)> {
+        if !self.is_current_publication(capture)
+            || published_revision_id.as_deref() != capture.action.resulting_revision_id()
+        {
+            return None;
+        }
+        self.publication.known = false;
+        self.publication.pending = false;
+        self.publication.retryable = false;
+        self.publication.attempt = None;
+        self.publication.refreshing = true;
+        self.publication.conflict = false;
+        self.publication.error = None;
+        self.publication.status =
+            Some("Publication request confirmed; checking the current live revision…".to_owned());
+        Some((self.route_epoch, self.funnel_id.clone()))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn fail_publication(
+        &mut self,
+        capture: &PublicationCapture,
+        message: String,
+        retryable: bool,
+        conflict: bool,
+    ) -> bool {
+        if !self.is_current_publication(capture) {
+            return false;
+        }
+        self.publication.pending = false;
+        self.publication.retryable = retryable;
+        if !retryable {
+            self.publication.attempt = None;
+        }
+        self.publication.conflict = conflict;
+        self.publication.error = Some(message);
+        self.publication.status = None;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_publication_refresh(&mut self) -> Option<(u64, String, bool)> {
+        if self.publication.refreshing || self.publication.pending {
+            return None;
+        }
+        self.publication.refreshing = true;
+        Some((
+            self.route_epoch,
+            self.funnel_id.clone(),
+            self.publication.conflict,
+        ))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_publication_refresh(
+        &mut self,
+        route_epoch: u64,
+        funnel_id: &str,
+        response: Result<EditorReadResponse, ()>,
+        conflict: bool,
+    ) {
+        if self.route_epoch != route_epoch || self.funnel_id != funnel_id {
+            return;
+        }
+        self.publication.refreshing = false;
+        self.publication.conflict = conflict;
+        match response {
+            Ok(response) if response.funnel.id == funnel_id => {
+                self.publication.known = true;
+                self.publication.live_revision_id = response.published_revision_id;
+                self.publication.error = conflict.then(|| {
+                    "Publication changed in another session. Review the refreshed live revision before publishing again."
+                        .to_owned()
+                });
+                self.publication.status =
+                    (!conflict).then(|| match self.publication.live_revision_id.as_deref() {
+                        Some(revision_id) => format!("Published revision {revision_id}."),
+                        None => {
+                            "Unpublished. The public route now has no live revision.".to_owned()
+                        }
+                    });
+            }
+            _ => {
+                self.publication.known = false;
+                self.publication.error = Some(
+                    "The live revision status could not be refreshed. Try again before publishing or unpublishing."
+                        .to_owned(),
+                );
+                self.publication.status = None;
+            }
+        }
+    }
+
     fn move_section(&mut self, from: usize, to: usize) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale {
+        if self.saving || self.retryable || self.stale || self.publication.retryable {
             return None;
         }
         let before = if self.keyboard_section.is_some() || self.keyboard_original_order.is_some() {
@@ -390,6 +708,7 @@ impl EditorState {
             || !document.order.iter().any(|id| id == section_id)
             || self.saving
             || self.retryable
+            || self.publication.retryable
             || self.stale
         {
             return false;
@@ -435,7 +754,7 @@ impl EditorState {
     }
 
     fn cancel_keyboard_drag(&mut self) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale {
+        if self.saving || self.retryable || self.stale || self.publication.retryable {
             return None;
         }
         let original = self.keyboard_original_order.take()?;
@@ -458,6 +777,8 @@ impl EditorState {
 
     fn can_save(&self) -> bool {
         !self.saving
+            && !self.publication.pending
+            && !self.publication.retryable
             && !self.stale
             && self.keyboard_section.is_none()
             && self.keyboard_original_order.is_none()
@@ -619,6 +940,7 @@ impl EditorState {
         self.loading
             || self.saving
             || self.retryable
+            || self.publication.retryable
             || self.stale
             || self.keyboard_section.is_some()
             || self.keyboard_original_order.is_some()
@@ -739,6 +1061,12 @@ struct EditorSaveResponse {
 
 #[cfg(feature = "browser")]
 #[derive(Deserialize)]
+struct PublicationResponse {
+    published_revision_id: Option<String>,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Deserialize)]
 struct ApiErrorBody {
     code: String,
 }
@@ -751,6 +1079,173 @@ async fn load_editor(funnel_id: &str) -> Result<EditorReadResponse, ()> {
         return Err(());
     }
     serde_json::from_str::<EditorReadResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_publication_status(mut state: Signal<EditorState>) {
+    let Some((route_epoch, funnel_id, conflict)) =
+        state.with_mut(EditorState::begin_publication_refresh)
+    else {
+        return;
+    };
+    refresh_publication_status_from(state, route_epoch, funnel_id, conflict).await;
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_publication_status_from(
+    mut state: Signal<EditorState>,
+    route_epoch: u64,
+    funnel_id: String,
+    conflict: bool,
+) {
+    let response = load_editor(&funnel_id).await;
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            state.finish_publication_refresh(route_epoch, &funnel_id, response, conflict)
+        });
+    }
+}
+
+#[cfg(feature = "browser")]
+fn clear_publication_attempt_if_current(
+    state: Signal<EditorState>,
+    publication_key: &mut Signal<Option<PreparedIdempotencyKey>>,
+    publication_body: &mut Signal<Option<String>>,
+    capture: &PublicationCapture,
+    prepared_key: &PreparedIdempotencyKey,
+) {
+    let current = state.with(|state| state.is_current_publication(capture));
+    let signal_matches = publication_key().as_ref() == Some(prepared_key);
+    let _ = clear_idempotency_storage(prepared_key);
+    if current && signal_matches {
+        publication_key.set(None);
+        publication_body.set(None);
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn change_publication(
+    mut state: Signal<EditorState>,
+    mut publication_key: Signal<Option<PreparedIdempotencyKey>>,
+    mut publication_body: Signal<Option<String>>,
+    publish: bool,
+) {
+    let capture = state.with_mut(|state| {
+        if publish {
+            state.begin_publish()
+        } else {
+            state.begin_unpublish()
+        }
+    });
+    let Some(capture) = capture else {
+        return;
+    };
+    let body = capture.action.body();
+    let path = capture.action.path(&capture.funnel_id);
+    let body = if publication_body().as_deref() == Some(body.as_str()) {
+        body
+    } else {
+        if let Some(key) = publication_key() {
+            let _ = clear_idempotency_storage(&key);
+        }
+        publication_key.set(None);
+        publication_body.set(None);
+        body
+    };
+    let prepared_key = match prepare_idempotency_key("POST", &path, Some(&body), publication_key())
+    {
+        Ok(key) => key,
+        Err(()) => {
+            state.with_mut(|state| {
+                state.fail_publication(
+                    &capture,
+                    "A retry-safe publication request could not be prepared.".to_owned(),
+                    true,
+                    false,
+                )
+            });
+            return;
+        }
+    };
+    publication_key.set(Some(prepared_key.clone()));
+    publication_body.set(Some(body.clone()));
+    let response = api_request("POST", &path, Some(body), Some(prepared_key.clone())).await;
+    match response {
+        Ok(response) if response.status == 200 => {
+            let result = serde_json::from_str::<PublicationResponse>(&response.body);
+            match result {
+                Ok(result)
+                    if result.published_revision_id.as_deref()
+                        == capture.action.resulting_revision_id() =>
+                {
+                    clear_publication_attempt_if_current(
+                        state,
+                        &mut publication_key,
+                        &mut publication_body,
+                        &capture,
+                        &prepared_key,
+                    );
+                    let refresh = state.with_mut(|state| {
+                        state.finish_publication(&capture, result.published_revision_id)
+                    });
+                    if let Some((route_epoch, funnel_id)) = refresh {
+                        refresh_publication_status_from(state, route_epoch, funnel_id, false).await;
+                    }
+                }
+                _ => {
+                    state.with_mut(|state| {
+                        state.fail_publication(
+                            &capture,
+                            "The publication result is uncertain. Retry the same request to confirm it."
+                                .to_owned(),
+                            true,
+                            false,
+                        )
+                    });
+                }
+            }
+        }
+        Ok(response) => {
+            let error_code = serde_json::from_str::<ApiErrorBody>(&response.body)
+                .map(|error| error.code)
+                .unwrap_or_default();
+            let conflict = error_code == "conflict/publish_stale_revision";
+            let retryable = response.status == 0 || response.status >= 500;
+            if !retryable {
+                clear_publication_attempt_if_current(
+                    state,
+                    &mut publication_key,
+                    &mut publication_body,
+                    &capture,
+                    &prepared_key,
+                );
+            }
+            let message = if conflict {
+                "Another session changed the live revision. Refreshing publication status; your draft is unchanged."
+                    .to_owned()
+            } else if retryable {
+                "The publication result is uncertain. Retry the same request to confirm it."
+                    .to_owned()
+            } else {
+                error_message(&response.body)
+            };
+            state.with_mut(|state| state.fail_publication(&capture, message, retryable, conflict));
+            if conflict {
+                refresh_publication_status(state).await;
+            }
+        }
+        Err(()) => {
+            state.with_mut(|state| {
+                state.fail_publication(
+                    &capture,
+                    "The publication result is uncertain. Retry the same request to confirm it."
+                        .to_owned(),
+                    true,
+                    false,
+                )
+            });
+        }
+    }
 }
 
 #[cfg(feature = "browser")]
@@ -906,6 +1401,11 @@ pub(super) fn FunnelDetail(id: String) -> Element {
     let mut save_key = use_signal(|| None::<PreparedIdempotencyKey>);
     #[cfg(feature = "browser")]
     let mut save_body = use_signal(|| None::<String>);
+    #[cfg(feature = "browser")]
+    let mut publication_key = use_signal(|| None::<PreparedIdempotencyKey>);
+    #[cfg(feature = "browser")]
+    let mut publication_body = use_signal(|| None::<String>);
+    let mut unpublish_confirmation = use_signal(|| false);
 
     #[cfg(feature = "browser")]
     use_effect(use_reactive!(|(id)| {
@@ -913,8 +1413,14 @@ pub(super) fn FunnelDetail(id: String) -> Element {
         if let Some(key) = save_key.peek().as_ref() {
             let _ = clear_idempotency_storage(key);
         }
+        if let Some(key) = publication_key.peek().as_ref() {
+            let _ = clear_idempotency_storage(key);
+        }
         save_key.set(None);
         save_body.set(None);
+        publication_key.set(None);
+        publication_body.set(None);
+        unpublish_confirmation.set(false);
         let route_epoch = state.with_mut(|state| state.begin_route(requested_id.clone()));
         spawn(async move { load_editor_state(state, requested_id, route_epoch).await });
     }));
@@ -1050,6 +1556,172 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                     "Preview could not be refreshed. Showing the last successful preview."
                 }
             }
+            section {
+                class: "editor-publication-panel",
+                role: "region",
+                "aria-label": "Publication",
+                div { class: "section-heading",
+                    h2 { "Publication" }
+                    span { "Draft and live status" }
+                }
+                div { class: "editor-publication-facts",
+                    p {
+                        strong { "Draft revision " }
+                        code { "{document.base_revision_id}" }
+                    }
+                    p {
+                        strong { "Live revision " }
+                        if !view.publication.known {
+                            span { "Status unavailable" }
+                        } else if let Some(live_revision_id) = view.publication.live_revision_id.as_ref() {
+                            code { "{live_revision_id}" }
+                        } else {
+                            span { "Not published" }
+                        }
+                    }
+                    if view.publication.known && view.publication.live_revision_id.is_some() {
+                        a {
+                            class: "editor-live-link",
+                            href: "/f/{document.funnel.slug}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Open live funnel"
+                        }
+                    } else {
+                        p { class: "editor-publication-url",
+                            "Live URL: /f/{document.funnel.slug}"
+                        }
+                    }
+                }
+                if let Some(status) = view.publication.status.as_ref() {
+                    p {
+                        class: "editor-publication-status",
+                        role: "status",
+                        "aria-live": "polite",
+                        "aria-atomic": "true",
+                        "{status}"
+                    }
+                }
+                if let Some(error) = view.publication.error.as_ref() {
+                    p { class: "error-message editor-publication-error", role: "alert", "{error}" }
+                }
+                if view.has_unsaved_changes() {
+                    p { class: "editor-publication-help", "Save draft changes before publishing." }
+                } else if !view.publication.known {
+                    p { class: "editor-publication-help", "Refresh live status before changing publication." }
+                } else if view.publication.live_revision_id.as_deref() == Some(&document.base_revision_id) {
+                    p { class: "editor-publication-help", "The saved draft is already live." }
+                }
+                div { class: "editor-publication-actions",
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        disabled: view.publication.pending || view.publication.refreshing,
+                        onclick: move |_| {
+                            #[cfg(feature = "browser")]
+                            spawn(async move { refresh_publication_status(state).await; });
+                        },
+                        if view.publication.refreshing { "Refreshing…" } else { "Refresh live status" }
+                    }
+                    button {
+                        class: "primary-button",
+                        r#type: "button",
+                        disabled: !view.can_publish(),
+                        onclick: move |_| {
+                            #[cfg(feature = "browser")]
+                            spawn(async move {
+                                change_publication(state, publication_key, publication_body, true).await;
+                            });
+                        },
+                        if view.publication.pending && view.publication.is_publish_attempt() {
+                            "Publishing…"
+                        } else if view.publication.retryable && view.publication.is_publish_attempt() {
+                            "Retry publish"
+                        } else {
+                            "Publish revision"
+                        }
+                    }
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        disabled: !view.can_unpublish(),
+                        onclick: move |_| {
+                            if view.publication.retryable && view.publication.is_unpublish_attempt() {
+                                #[cfg(feature = "browser")]
+                                spawn(async move {
+                                    change_publication(state, publication_key, publication_body, false).await;
+                                });
+                            } else {
+                                unpublish_confirmation.set(true);
+                                #[cfg(feature = "browser")]
+                                spawn(async move {
+                                    super::set_modal_dialog("unpublish-funnel-dialog", true).await;
+                                });
+                            }
+                        },
+                        if view.publication.pending && view.publication.is_unpublish_attempt() {
+                            "Unpublishing…"
+                        } else if view.publication.retryable && view.publication.is_unpublish_attempt() {
+                            "Retry unpublish"
+                        } else {
+                            "Unpublish"
+                        }
+                    }
+                }
+            }
+            if unpublish_confirmation() {
+                dialog {
+                    id: "unpublish-funnel-dialog",
+                    class: "funnel-dialog confirmation-dialog",
+                    "aria-modal": "true",
+                    "aria-labelledby": "unpublish-funnel-title",
+                    "aria-describedby": "unpublish-funnel-description",
+                    oncancel: move |event| {
+                        if view.publication.pending {
+                            event.prevent_default();
+                        } else {
+                            unpublish_confirmation.set(false);
+                        }
+                    },
+                    h2 { id: "unpublish-funnel-title", "Unpublish this funnel?" }
+                    p { id: "unpublish-funnel-description",
+                        "This removes the live revision pointer. Already viewed copies may remain available in browsers or intermediary caches."
+                    }
+                    if let Some(error) = view.publication.error.as_ref() {
+                        p { class: "error-message", role: "alert", "{error}" }
+                    }
+                    div { class: "dialog-actions",
+                        button {
+                            class: "secondary-button",
+                            r#type: "button",
+                            disabled: view.publication.pending,
+                            autofocus: true,
+                            onclick: move |_| {
+                                unpublish_confirmation.set(false);
+                                #[cfg(feature = "browser")]
+                                spawn(async move {
+                                    super::set_modal_dialog("unpublish-funnel-dialog", false).await;
+                                });
+                            },
+                            "Cancel"
+                        }
+                        button {
+                            class: "primary-button danger-button",
+                            r#type: "button",
+                            disabled: view.publication.pending,
+                            onclick: move |_| {
+                                unpublish_confirmation.set(false);
+                                #[cfg(feature = "browser")]
+                                spawn(async move {
+                                    super::set_modal_dialog("unpublish-funnel-dialog", false).await;
+                                    change_publication(state, publication_key, publication_body, false).await;
+                                });
+                            },
+                            "Confirm unpublish"
+                        }
+                    }
+                }
+            }
             section { class: "editor-workspace", "aria-label": "Visual editor",
                 div { class: "editor-outline-panel",
                     div { class: "section-heading",
@@ -1090,7 +1762,7 @@ fn EditorSortableList(state: Signal<EditorState>) -> Element {
     let Some(document) = view.document else {
         return rsx! { div {} };
     };
-    let rows_locked = view.saving || view.retryable || view.stale;
+    let rows_locked = view.saving || view.retryable || view.stale || view.publication.retryable;
     let sections = document.sections;
     let order = document.order;
     let mut editor_state = state;
@@ -1228,7 +1900,7 @@ fn EditorSectionRow(
                 button {
                     class: "editor-move-button",
                     r#type: "button",
-                    "aria-label": "Move {title} up",
+                    "aria-label": "Move up {title}",
                     onkeydown: move |event: KeyboardEvent| {
                         let key = event.key();
                         let modifiers = event.modifiers();
@@ -1258,7 +1930,7 @@ fn EditorSectionRow(
                 button {
                     class: "editor-move-button",
                     r#type: "button",
-                    "aria-label": "Move {title} down",
+                    "aria-label": "Move down {title}",
                     onkeydown: move |event: KeyboardEvent| {
                         let key = event.key();
                         let modifiers = event.modifiers();
@@ -1565,6 +2237,7 @@ mod tests {
                     updated_at: "now".to_owned(),
                 },
                 base_revision_id: "revision-1".to_owned(),
+                published_revision_id: None,
                 sections: vec![
                     EditorSection {
                         id: "hero".to_owned(),
@@ -1585,6 +2258,274 @@ mod tests {
             }),
         );
         state
+    }
+
+    fn editor_response(
+        funnel_id: &str,
+        base_revision_id: &str,
+        published_revision_id: Option<&str>,
+    ) -> EditorReadResponse {
+        let (settings_schema, settings_values) = fixture_settings();
+        EditorReadResponse {
+            funnel: EditorFunnel {
+                id: funnel_id.to_owned(),
+                name: "Offer".to_owned(),
+                slug: "offer".to_owned(),
+                updated_at: "now".to_owned(),
+            },
+            base_revision_id: base_revision_id.to_owned(),
+            published_revision_id: published_revision_id.map(str::to_owned),
+            sections: vec![
+                EditorSection {
+                    id: "hero".to_owned(),
+                    section_type: "hero".to_owned(),
+                },
+                EditorSection {
+                    id: "features".to_owned(),
+                    section_type: "features".to_owned(),
+                },
+                EditorSection {
+                    id: "cta".to_owned(),
+                    section_type: "cta".to_owned(),
+                },
+            ],
+            settings_schema,
+            settings_values,
+            preview_html: "preview".to_owned(),
+        }
+    }
+
+    #[test]
+    fn publication_requires_a_saved_draft_and_uses_the_live_pointer_as_its_cas_base() {
+        let mut state = loaded_editor_state();
+        assert!(state.can_publish());
+        assert!(!state.can_unpublish());
+
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Unsaved heading"),
+                    effective_value: None,
+                },
+            )
+            .expect("the editor accepts a local change");
+        assert!(!state.can_publish());
+
+        state = loaded_editor_state();
+        state.publication.live_revision_id = Some("revision-live".to_owned());
+        state.publication.known = true;
+        assert!(state.can_publish());
+        assert!(state.can_unpublish());
+        let capture = state.begin_publish().expect("saved draft can be published");
+        assert_eq!(
+            capture.action.path("funnel-1"),
+            "/api/funnels/funnel-1/publish"
+        );
+        assert_eq!(
+            capture.action.body(),
+            r#"{"expected_published_revision_id":"revision-live","revision_id":"revision-1"}"#
+        );
+    }
+
+    #[test]
+    fn publication_conflict_refresh_preserves_unsaved_editor_changes() {
+        let mut state = loaded_editor_state();
+        state
+            .move_section(0, 1)
+            .expect("the draft can be reordered");
+        let save = state.begin_save().expect("the changed draft can be saved");
+        let (_, settings_values) = fixture_settings();
+        state
+            .finish_save(&save, "revision-2".to_owned(), settings_values)
+            .expect("the editor records the saved revision");
+
+        let publish = state
+            .begin_publish()
+            .expect("saved revision can be published");
+        assert_eq!(
+            publish.action,
+            PublicationAction::Publish {
+                revision_id: "revision-2".to_owned(),
+                expected_published_revision_id: None,
+            }
+        );
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Unsaved during publication"),
+                    effective_value: None,
+                },
+            )
+            .expect("the local editor remains available during publication");
+        let local_draft = state.document.clone().expect("loaded editor document");
+        assert!(state.fail_publication(&publish, "stale live pointer".to_owned(), false, true,));
+
+        let (route_epoch, funnel_id, conflict) = state
+            .begin_publication_refresh()
+            .expect("publication status can be refreshed");
+        let response = editor_response(&funnel_id, "revision-external", Some("revision-live"));
+        state.finish_publication_refresh(route_epoch, &funnel_id, Ok(response), conflict);
+
+        assert_eq!(
+            state.publication.live_revision_id.as_deref(),
+            Some("revision-live")
+        );
+        assert!(state.publication.conflict);
+        assert_eq!(state.document, Some(local_draft));
+        assert!(
+            !state.can_publish(),
+            "the unsaved local edit must remain unsaved"
+        );
+    }
+
+    #[test]
+    fn ambiguous_publication_retry_reuses_the_exact_action_and_unpublish_cas_target() {
+        let mut state = loaded_editor_state();
+        let first = state.begin_publish().expect("saved draft can be published");
+        let first_body = first.action.body();
+        assert!(state.fail_publication(&first, "request outcome unknown".to_owned(), true, false,));
+        let retry = state
+            .begin_publish()
+            .expect("ambiguous publish can be retried");
+        assert_eq!(retry.action, first.action);
+        assert_eq!(retry.action.body(), first_body);
+        assert_eq!(retry.action.resulting_revision_id(), Some("revision-1"));
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the retry response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-1"),
+            )),
+            false,
+        );
+        assert!(!state.can_publish(), "the saved revision is now live");
+
+        let unpublish = state
+            .begin_unpublish()
+            .expect("a published funnel can be unpublished");
+        assert_eq!(
+            unpublish.action.path("funnel-1"),
+            "/api/funnels/funnel-1/unpublish"
+        );
+        assert_eq!(
+            unpublish.action.body(),
+            r#"{"expected_published_revision_id":"revision-1"}"#
+        );
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&unpublish, None)
+            .expect("unpublish response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(&funnel_id, "revision-1", None)),
+            false,
+        );
+        assert!(state.publication.known);
+        assert_eq!(state.publication.live_revision_id, None);
+        assert!(!state.can_unpublish());
+    }
+
+    #[test]
+    fn replayed_publication_receipt_refreshes_the_current_live_pointer() {
+        let mut state = loaded_editor_state();
+        let first = state.begin_publish().expect("saved draft can be published");
+        assert!(state.fail_publication(&first, "request outcome unknown".to_owned(), true, false));
+        let retry = state
+            .begin_publish()
+            .expect("ambiguous publish can be retried");
+
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the successful replay starts a current-pointer refresh");
+        assert!(state.publication.refreshing);
+        assert!(
+            !state.publication.known,
+            "the stored replay response is not treated as the current live pointer"
+        );
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-external"),
+            )),
+            false,
+        );
+
+        assert_eq!(
+            state.publication.live_revision_id.as_deref(),
+            Some("revision-external")
+        );
+        assert!(state.can_publish());
+        let next = state
+            .begin_publish()
+            .expect("the draft can publish against the refreshed current pointer");
+        assert_eq!(
+            next.action,
+            PublicationAction::Publish {
+                revision_id: "revision-1".to_owned(),
+                expected_published_revision_id: Some("revision-external".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn ambiguous_publish_retry_stays_available_after_an_edit_during_the_request() {
+        let mut state = loaded_editor_state();
+        let first = state.begin_publish().expect("saved draft can be published");
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Unsaved during publication"),
+                    effective_value: None,
+                },
+            )
+            .expect("local editing remains available while publication is pending");
+        assert!(state.start_keyboard_drag("hero"));
+        let local_draft = state.document.clone();
+
+        assert!(state.fail_publication(&first, "request outcome unknown".to_owned(), true, false));
+        assert!(
+            state.can_publish(),
+            "an ambiguous publish must remain retryable even with an unsaved local edit"
+        );
+        let retry = state
+            .begin_publish()
+            .expect("the exact publish action remains retryable");
+        assert_eq!(retry.action, first.action);
+        assert_eq!(retry.action.body(), first.action.body());
+        assert_eq!(state.document, local_draft);
+        let (route_epoch, funnel_id) = state
+            .finish_publication(&retry, Some("revision-1".to_owned()))
+            .expect("the retry response starts a current-pointer refresh");
+        state.finish_publication_refresh(
+            route_epoch,
+            &funnel_id,
+            Ok(editor_response(
+                &funnel_id,
+                "revision-1",
+                Some("revision-1"),
+            )),
+            false,
+        );
+        assert_eq!(state.keyboard_section.as_deref(), Some("hero"));
+        assert!(state.cancel_keyboard_drag().is_none());
+        assert!(
+            state.can_save(),
+            "the local draft is saveable after retry resolves"
+        );
     }
 
     #[test]
@@ -2318,6 +3259,7 @@ mod tests {
                     updated_at: "now".to_owned(),
                 },
                 base_revision_id: "revision-20".to_owned(),
+                published_revision_id: Some("revision-19".to_owned()),
                 sections: vec![EditorSection {
                     id: "hero-2".to_owned(),
                     section_type: "hero".to_owned(),

@@ -1,0 +1,32 @@
+PR-022 dashboard publication controls verification
+Evidence refreshed: 2026-10-16T00:14:12Z
+Branch: feat/pr-022-dashboard-publish
+Base: 5ddb6ac1580d155a24ce13671b677dbfdf184489
+Feature implementation commit: 8598a62c819d6fd025b060e822ff3a737b22035e
+Source fingerprint: a390386a6daff06b91d36b3b2d1392b18f6ef8e851b375d8a01941b5b6c6c264 (9 changed source files)
+
+Behavior verified:
+- The editor's initial snapshot includes the saved draft head and published pointer from one storage read; publication state remains separate from the editable document.
+- Publish uses the saved draft and current published pointer as its CAS baseline. Conflict refresh updates publication state only and retains unsaved editor state.
+- A successful idempotent receipt replay triggers a guarded current-pointer read before publication actions are enabled; the refreshed pointer does not replace the local draft.
+- The browser race commits and loses a publish response, performs a competing unpublish, retries the exact same key and body, observes the current unpublished state, saves the recovered draft, republishes, reads the public route, then confirms unpublish and observes 404.
+- Accessible reorder names begin with the visible labels. The PR-010 browser selector was updated to match `Move up CTA`, preserving the Axe label-content-name requirement.
+- No new owner command, schema migration, dependency, remote Cloudflare operation, or immediate CDN purge claim was added.
+
+Validation:
+- `source .project-tools/env.sh && cargo xtask check` passed on the follow-up diff.
+- `source .project-tools/env.sh && cargo xtask ci` passed: workspace checks/tests, dashboard WASM/assets, local Worker/D1 and MCP smokes, and RustSec audit (355 locked dependencies; 1,329 advisories; zero findings).
+- `npm run test:pr010:browser` passed after rebuilding dashboard assets; all navigation, keyboard, inspector, save, replay, stale-CAS, and route-race checks passed with zero critical Axe findings.
+- `npm run test:pr022:browser` passed: 196 keyboard actions; exact key/body retry; preserved and saved local draft; competing unpublish and republish; zero serious or critical Axe findings on dashboard home, funnel list, editor, and public funnel.
+- `node --check` for both browser scripts and `git diff --check` passed.
+- Hosted CI run 38826976225 on pre-selector-fix head 8144cdc failed at the old PR-010 selector (`Move CTA up`). The selector now matches the accessible name (`Move up CTA`); both local browser suites pass. Fresh hosted checks and exact-head reviews are pending for the follow-up commit.
+
+Review:
+- The initial exact-head Codex review found the stale receipt-pointer case. The pointer refresh fix passed the focused state and browser regressions.
+- Sol and Codex found no further issues at 8144cdc; the old Codex thread was answered with evidence and resolved. Both reviews will be requested again on the updated head.
+- No-comments audit found no added or changed comments or lint suppressions.
+
+External proof:
+- Cloudflare production verification and deployment were not run; this task requires local Worker/D1 only.
+
+Compressed verification logs and their compressed/raw SHA-256 hashes are listed in `results.json`.

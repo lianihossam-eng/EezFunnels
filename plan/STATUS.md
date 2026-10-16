@@ -1,7 +1,7 @@
 # Eez Funnel - Status
 
-Current phase: PR-053 Project-local skills and workflow (four commits complete; local checks and installer regression fixtures recorded; exact-head review and hosted checks pending; PR-022 remains gated)
-Last updated: 2026-10-15
+Current phase: PR-022 Dashboard publication controls (implementation and local CI/browser checks complete; updated-head hosted checks and reviews pending)
+Last updated: 2026-10-16
 
 ## Phases
 
@@ -27,7 +27,8 @@ Last updated: 2026-10-15
 - [x] PR-019 Tests E2E + quality (merged as PR #20 at `f85cf8fe030024066149a0c4e9264bd277d7e9fa`)
 - [x] PR-020 Release v0.1.0 (PR #21 merged; GitHub release published)
 - [x] PR-021 Shared product boundary and roadmap (merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`; no feature implementation)
-- [ ] PR-053 Project-local skills and workflow (cross-cutting setup before PR-022; no product behavior)
+- [x] PR-053 Project-local skills and workflow (merged as PR #24 at `5ddb6ac1580d155a24ce13671b677dbfdf184489`)
+- [ ] PR-022 Dashboard publication controls (receipt-replay pointer refresh and accessible reorder selector regression fixed; local CI/browser verification passes; updated-head review and hosted checks pending)
 
 ## Verified locally
 
@@ -48,6 +49,9 @@ PR-019 adds a local-only Playwright create → edit → publish → visit workfl
 PR-020 prepared v0.1.0 release notes and Linux x86_64, macOS Apple Silicon, and Windows x86_64 CLI assets. PR #21 merged at 2026-10-15 03:35:40Z as `3d46ecaf4fc6dd0411ae047841b1001f1ab1f8e6`. Its hosted check run `38676533684` and native release matrix run `38676533683` passed. The `v0.1.0` tag workflow run `38677096705` passed on the merge commit. The GitHub Release was published at 03:38:27Z with `eez-v0.1.0-linux-x86_64`, `eez-v0.1.0-macos-aarch64`, `eez-v0.1.0-windows-x86_64.exe`, and `SHA256SUMS`. Fingerprinted local verification is in `plan/verification/PR-020/`. This release confirms published CLI artifacts only. It does not verify Cloudflare production bindings, deployment, or `PRODUCTION_READY` status.
 
 PR-021 records the user-confirmed shared-product boundary, current release baseline, eight phases, 28 phase pairs, six combined journeys, version register, and canonical Task-ID ledger (`PR-021`–`PR-052`): this documentation task plus 31 future product tasks. The ledger specifies branches, conventional commit subjects, dependencies, UI/API/CLI/MCP surfaces, migrations/compatibility, tests, and evidence gates. Four independent first-pass reviews, four cross-reviews, and four exact-candidate pass-3 reports were integrated. Pass 3 returned `CORRECTIONS_REQUIRED`; the merged candidate added restore-surviving deletion gates, fail-closed domain routing and transfer, explicit path-alias behavior, source/projection/UTM policy, payment/email provider separation, job-detail recovery UX, concrete cost fixtures, immutable frozen-contract handling, and an external private overlay pinned to the public core. Closure: the revised plan passed exact-head PR review and merged as GitHub PR #22 at `f747afb6fd0f1f19ef6054dd107e584c3226297f`. PR-053 records follow-up journey and consent clarifications before feature work begins. Review provenance, P3 submission-versus-Lead arbitration, prototype outputs, report hashes, and limits remain in `plan/verification/PR-021/review-ledger.md`. The DeepSeek share redirected to sign-in; zero prompts were sent, and the user chose local review.
+PR-053 installs the pinned Matt Pocock and Cursor pstack skills for this project, maps them to roadmap tasks, and documents the Impeccable pilot gate. Its installer regression fixtures and local checks are fingerprinted in `plan/verification/PR-053/`. PR #24 merged at `5ddb6ac1580d155a24ce13671b677dbfdf184489`; no product behavior or Cloudflare production configuration changed.
+
+PR-022 adds revision-aware publish/unpublish controls in the editor using existing commands and the editor's same-snapshot draft/live pointer read. The UI shows draft and live revisions, the public URL, publication status, stale-pointer conflicts, exact-request retry, and explicit unpublish confirmation. Conflict and post-success refreshes update publication state only, preserving unsaved edits. Exact-head review found that a successful idempotent receipt can return an obsolete publication pointer after another session changes it. The follow-up refreshes the current pointer before enabling another publication action; the browser regression commits and loses a publish response, performs a competing unpublish, retries the exact same key/body, confirms the current state, then saves and republishes the preserved draft. A hosted run exposed that the older PR-010 browser selector no longer matched the accessible reorder name; the selector now tracks `Move up CTA`, retaining the visible-text-in-name Axe requirement. Both local browser suites, `cargo xtask check`, and `cargo xtask ci` pass; Axe reports no serious or critical findings on dashboard home, funnel list, editor, or public funnel. No command, schema migration, dependency, or remote Cloudflare operation was added. Fingerprinted evidence is in `plan/verification/PR-022/`; updated-head exact reviews and hosted checks are pending.
 
 PR-010's keyboard announcement and RustSec lockfile fixes were reviewed and merged in PR #11 at
 `883ee7b98f0203d38654f15d2633010da9e420ee`. PR-011 implements the closed `settings_schema`
@@ -317,4 +321,4 @@ migration, or deployment was used for these local checks.
 
 ## Next action
 
-Push the completed PR-053 branch, open `[PR-053] Add project-local skill workflow`, tag `@codex`, and request Sol's exact-head review. Resolve all review threads and require hosted checks before merge. PR-022 is the next product task after PR-053 merges. Keep Cloudflare production checks separate until the required credentials, resource IDs, and scope are available.
+Push the PR-022 follow-up on `feat/pr-022-dashboard-publish`, tag `@codex`, and request Sol's exact-head review. Resolve review threads and require hosted checks before merge; keep Cloudflare production verification separate until the roadmap reaches a task that needs credentials or resource IDs.

@@ -1000,7 +1000,7 @@ try {
   await page.getByRole("heading", { name: "Your funnels" }).waitFor();
   await clickWithPointer(page, page.getByRole("link", { name: "PR-010 route race" }));
   await page.getByRole("heading", { name: "PR-010 route race" }).waitFor();
-  await page.getByRole("button", { name: "Move CTA up" }).click();
+  await page.getByRole("button", { name: "Move up CTA" }).click();
   await waitForOrder(page, ["hero", "cta", "features"]);
 
   let release;

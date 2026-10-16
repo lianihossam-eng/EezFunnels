@@ -92,6 +92,7 @@ pub struct EditorRevisionRecord {
     pub slug: String,
     pub updated_at: String,
     pub head_revision_id: String,
+    pub published_revision_id: Option<String>,
     pub revision: RevisionRecord,
 }
 
@@ -102,6 +103,7 @@ struct EditorRevisionJoin {
     slug: String,
     updated_at: String,
     head_revision_id: String,
+    published_revision_id: Option<String>,
     revision_id: String,
     revision_funnel_id: String,
     schema_version: i64,
@@ -635,7 +637,7 @@ impl<'a> Repository<'a> {
         let row = self
             .database
             .prepare(
-                "SELECT funnels.id AS funnel_id, funnels.name, funnels.slug, funnels.updated_at, funnel_editor_heads.revision_id AS head_revision_id, revisions.id AS revision_id, revisions.funnel_id AS revision_funnel_id, revisions.schema_version, revisions.data_json, revisions.render_manifest_json, revisions.created_at AS revision_created_at FROM funnels JOIN funnel_editor_heads ON funnel_editor_heads.funnel_id = funnels.id JOIN revisions ON revisions.id = funnel_editor_heads.revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ?",
+                "SELECT funnels.id AS funnel_id, funnels.name, funnels.slug, funnels.updated_at, funnel_editor_heads.revision_id AS head_revision_id, funnels.published_revision_id, revisions.id AS revision_id, revisions.funnel_id AS revision_funnel_id, revisions.schema_version, revisions.data_json, revisions.render_manifest_json, revisions.created_at AS revision_created_at FROM funnels JOIN funnel_editor_heads ON funnel_editor_heads.funnel_id = funnels.id JOIN revisions ON revisions.id = funnel_editor_heads.revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ?",
             )
             .bind_refs([&funnel_id])?
             .first::<EditorRevisionJoin>(None)
@@ -648,6 +650,7 @@ impl<'a> Repository<'a> {
                 slug: row.slug,
                 updated_at: row.updated_at,
                 head_revision_id: row.head_revision_id,
+                published_revision_id: row.published_revision_id,
                 revision: RevisionRecord {
                     id: row.revision_id,
                     funnel_id: row.revision_funnel_id,
