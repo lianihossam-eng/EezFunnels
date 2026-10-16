@@ -34,9 +34,20 @@ pub fn render_document(path: &str) -> Option<String> {
 fn is_dashboard_path(path: &str) -> bool {
     match path {
         "/" | "/funnels" | "/media" => true,
-        _ => path
-            .strip_prefix("/funnels/")
-            .is_some_and(is_valid_funnel_id),
+        _ => {
+            let Some(path) = path.strip_prefix("/funnels/") else {
+                return false;
+            };
+            let segments = path.split('/').collect::<Vec<_>>();
+            match segments.as_slice() {
+                [funnel_id] => is_valid_funnel_id(funnel_id),
+                [funnel_id, "leads"] => is_valid_funnel_id(funnel_id),
+                [funnel_id, "leads", submission_id] => {
+                    is_valid_funnel_id(funnel_id) && is_valid_submission_id(submission_id)
+                }
+                _ => false,
+            }
+        }
     }
 }
 
@@ -46,6 +57,11 @@ fn is_valid_funnel_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn is_valid_submission_id(id: &str) -> bool {
+    uuid::Uuid::parse_str(id)
+        .is_ok_and(|submission_id| submission_id.hyphenated().to_string() == id)
 }
 
 fn hydration_payload(hydration: &dioxus_fullstack_core::SerializedHydrationData) -> Value {

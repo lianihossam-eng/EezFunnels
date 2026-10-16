@@ -4,7 +4,6 @@ mod editor;
 use editor::FunnelDetail;
 use eez_domain::{media::MediaAssetDescriptor, FunnelBlueprint};
 use serde::Deserialize;
-#[cfg(any(feature = "browser", test))]
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
 use sha2::{Digest, Sha256};
@@ -20,6 +19,7 @@ type IdempotencyKeyState = String;
 
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const FUNNEL_NAME_LIMIT_MESSAGE: &str = "Funnel name must be 120 UTF-8 bytes or fewer.";
+const DELETE_FUNNEL_DESCRIPTION: &str = "This removes the funnel, its saved revisions, and all saved form submissions and consent evidence. This cannot be undone.";
 
 #[cfg(any(feature = "browser", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,6 +86,10 @@ pub(crate) enum RouteView {
     #[layout(DashboardShell)]
     #[route("/funnels/:id")]
     FunnelDetail { id: String },
+    #[route("/funnels/:id/leads")]
+    LeadInbox { id: String },
+    #[route("/funnels/:id/leads/:submission_id")]
+    LeadDetail { id: String, submission_id: String },
 }
 
 #[component]
@@ -652,6 +656,11 @@ fn Funnels() -> Element {
                                     }
                                 }
                                 p { class: "funnel-slug", "/{item.slug}" }
+                                Link {
+                                    to: RouteView::LeadInbox { id: item.id.clone() },
+                                    class: "funnel-leads-link",
+                                    "View leads"
+                                }
                             }
                             div { class: "funnel-card-meta",
                                 span { class: if item.published_revision_id.is_some() { "status-badge published" } else { "status-badge draft" },
@@ -814,7 +823,7 @@ fn Funnels() -> Element {
                         }
                     },
                     h2 { id: "delete-funnel-title", "Delete {target.name}?" }
-                    p { id: "delete-funnel-description", "This removes the funnel and its saved revisions." }
+                    p { id: "delete-funnel-description", "{DELETE_FUNNEL_DESCRIPTION}" }
                     if let Some(message) = delete_error() {
                         p { class: "error-message", role: "alert", "{message}" }
                     }
@@ -912,6 +921,638 @@ struct FunnelCard {
 #[derive(Deserialize)]
 struct FunnelListResponse {
     items: Vec<FunnelCard>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadSummary {
+    submission_id: String,
+    submitted_at: i64,
+    expires_at: i64,
+    page_title: String,
+    form_purpose: String,
+    marketing_opt_in: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadPage {
+    leads: Vec<LeadSummary>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadAnswer {
+    name: String,
+    label: String,
+    kind: String,
+    value: Option<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadConsentEvidence {
+    acknowledged: bool,
+    copy_version: String,
+    copy: String,
+    recorded_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadMarketingConsentEvidence {
+    copy_version: String,
+    copy: String,
+    recorded_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct LeadDetailRecord {
+    submission_id: String,
+    submitted_at: i64,
+    expires_at: i64,
+    page_title: String,
+    form_purpose: String,
+    answers: Vec<LeadAnswer>,
+    request_consent: LeadConsentEvidence,
+    marketing_opt_in: bool,
+    marketing_consent: Option<LeadMarketingConsentEvidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LeadInboxState {
+    funnel_id: String,
+    funnel_name: Option<String>,
+    leads: Vec<LeadSummary>,
+    next_cursor: Option<String>,
+    loading: bool,
+    load_error: bool,
+    latest_route: u64,
+    latest_request: u64,
+    announcement: String,
+}
+
+impl Default for LeadInboxState {
+    fn default() -> Self {
+        Self {
+            funnel_id: String::new(),
+            funnel_name: None,
+            leads: Vec::new(),
+            next_cursor: None,
+            loading: true,
+            load_error: false,
+            latest_route: 0,
+            latest_request: 0,
+            announcement: String::new(),
+        }
+    }
+}
+
+impl LeadInboxState {
+    #[cfg(any(feature = "browser", test))]
+    fn begin_route(&mut self, funnel_id: String) -> u64 {
+        self.funnel_id = funnel_id;
+        self.funnel_name = None;
+        self.leads.clear();
+        self.next_cursor = None;
+        self.loading = true;
+        self.load_error = false;
+        self.announcement.clear();
+        self.latest_route = self.latest_route.wrapping_add(1);
+        self.latest_request = self.latest_request.wrapping_add(1);
+        self.latest_route
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_page(&mut self, append: bool) -> Option<(u64, Option<String>)> {
+        if append && self.next_cursor.is_none() {
+            return None;
+        }
+        self.latest_request = self.latest_request.wrapping_add(1);
+        self.loading = true;
+        self.load_error = false;
+        if !append {
+            self.leads.clear();
+            self.next_cursor = None;
+        }
+        Some((
+            self.latest_request,
+            append.then(|| self.next_cursor.clone()).flatten(),
+        ))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_page(&mut self, request: u64, result: Result<LeadPage, ()>, append: bool) {
+        if request != self.latest_request {
+            return;
+        }
+        self.loading = false;
+        match result {
+            Ok(page) => {
+                let count = page.leads.len();
+                if append {
+                    self.leads.extend(page.leads);
+                    self.announcement = format!("Loaded {count} more leads.");
+                } else {
+                    self.leads = page.leads;
+                    self.announcement = format!("Loaded {count} leads.");
+                }
+                self.next_cursor = page.next_cursor;
+                self.load_error = false;
+            }
+            Err(()) => self.load_error = true,
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_funnel_name(&mut self, route: u64, funnel_name: Option<String>) {
+        if route == self.latest_route {
+            self.funnel_name = funnel_name;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LeadDetailState {
+    funnel_id: String,
+    submission_id: String,
+    detail: Option<LeadDetailRecord>,
+    loading: bool,
+    load_error: bool,
+    latest_request: u64,
+}
+
+impl Default for LeadDetailState {
+    fn default() -> Self {
+        Self {
+            funnel_id: String::new(),
+            submission_id: String::new(),
+            detail: None,
+            loading: true,
+            load_error: false,
+            latest_request: 0,
+        }
+    }
+}
+
+impl LeadDetailState {
+    #[cfg(any(feature = "browser", test))]
+    fn begin_request(&mut self, funnel_id: String, submission_id: String) -> u64 {
+        self.funnel_id = funnel_id;
+        self.submission_id = submission_id;
+        self.detail = None;
+        self.loading = true;
+        self.load_error = false;
+        self.latest_request = self.latest_request.wrapping_add(1);
+        self.latest_request
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_request(&mut self, request: u64, result: Result<LeadDetailRecord, ()>) {
+        if request != self.latest_request {
+            return;
+        }
+        self.loading = false;
+        match result {
+            Ok(detail) => {
+                self.detail = Some(detail);
+                self.load_error = false;
+            }
+            Err(()) => self.load_error = true,
+        }
+    }
+}
+
+#[component]
+fn LeadInbox(id: String) -> Element {
+    #[allow(unused_mut)]
+    let mut state = use_signal(LeadInboxState::default);
+
+    #[cfg(feature = "browser")]
+    use_effect(use_reactive!(|(id)| {
+        let requested_id = id.clone();
+        let title_id = requested_id.clone();
+        let route = state.with_mut(|state| state.begin_route(requested_id.clone()));
+        spawn(async move { refresh_lead_inbox(state, requested_id, false, false).await });
+        spawn(async move { refresh_lead_funnel_name(state, title_id, route).await });
+    }));
+
+    let view = state();
+    let title = view
+        .funnel_name
+        .as_ref()
+        .map(|name| format!("{name} leads"))
+        .unwrap_or_else(|| "Funnel leads".to_owned());
+    #[cfg(feature = "browser")]
+    let retry_append = !view.leads.is_empty() && view.next_cursor.is_some();
+
+    rsx! {
+        section { class: "page-heading lead-page-heading",
+            p { class: "eyebrow", "Funnels / Leads" }
+            h1 { "{title}" }
+            p { class: "page-description", "Review submissions collected through this funnel’s published forms." }
+            div { class: "lead-page-actions",
+                Link {
+                    to: RouteView::FunnelDetail { id: id.clone() },
+                    class: "lead-navigation-link",
+                    "Back to funnel editor"
+                }
+            }
+        }
+        p { id: "lead-live-status", class: "lead-live-status", role: "status", "aria-live": "polite", tabindex: -1, "{view.announcement}" }
+        if view.loading && view.leads.is_empty() {
+            section { class: "empty-state", role: "status", "aria-label": "Lead submissions",
+                "Loading leads…"
+            }
+        } else if view.load_error && view.leads.is_empty() {
+            section { class: "empty-state lead-load-error", role: "alert", "aria-label": "Lead submissions error",
+                p { "The leads for this funnel could not be loaded." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let funnel_id = id.clone();
+                            spawn(async move {
+                                refresh_lead_inbox(state, funnel_id, false, false).await
+                            });
+                        }
+                    },
+                    "Try again"
+                }
+            }
+        } else if view.leads.is_empty() {
+            section { class: "empty-state", "aria-label": "Lead submissions",
+                h2 { "No leads yet" }
+                p { "Submissions will appear here after a visitor completes a form on a published funnel page." }
+            }
+        } else {
+            if view.load_error {
+                p { class: "error-message", role: "alert", "The next page could not be loaded. You can retry without losing this list." }
+            }
+            div { class: "lead-table-wrap",
+                table { class: "lead-table",
+                    caption { "Recent form submissions" }
+                    thead {
+                        tr {
+                            th { scope: "col", "Submitted" }
+                            th { scope: "col", "Page" }
+                            th { scope: "col", "Form purpose" }
+                            th { scope: "col", "Marketing" }
+                            th { scope: "col", "Retained until" }
+                        }
+                    }
+                    tbody {
+                        for lead in view.leads {
+                            tr { key: "{lead.submission_id}",
+                                td {
+                                    Link {
+                                        to: RouteView::LeadDetail {
+                                            id: id.clone(),
+                                            submission_id: lead.submission_id.clone(),
+                                        },
+                                        class: "lead-row-link",
+                                        "aria-label": lead_submission_label(lead.submitted_at),
+                                        LeadTime { timestamp: lead.submitted_at }
+                                    }
+                                }
+                                td { "{lead.page_title}" }
+                                td { "{lead.form_purpose}" }
+                                td {
+                                    span { class: if lead.marketing_opt_in { "lead-consent-badge opted-in" } else { "lead-consent-badge" },
+                                        if lead.marketing_opt_in { "Opted in" } else { "No opt-in" }
+                                    }
+                                }
+                                td { LeadTime { timestamp: lead.expires_at } }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "lead-load-more",
+                button {
+                    id: "lead-load-more-button",
+                    class: "secondary-button",
+                    r#type: "button",
+                    disabled: view.loading || (!view.load_error && view.next_cursor.is_none()),
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let funnel_id = id.clone();
+                            spawn(async move {
+                                let restore_focus = retry_append && lead_load_more_has_focus().await;
+                                refresh_lead_inbox(
+                                    state,
+                                    funnel_id,
+                                    retry_append,
+                                    restore_focus,
+                                )
+                                .await
+                            });
+                        }
+                    },
+                    if view.loading { "Loading more leads…" }
+                    else if view.load_error { "Retry loading leads" }
+                    else if view.next_cursor.is_some() { "Load more leads" }
+                    else { "All recent leads loaded" }
+                }
+            }
+            if view.next_cursor.is_none() && !view.loading {
+                p { id: "lead-end-status", class: "lead-end-status", role: "status", tabindex: -1,
+                    "You’ve reached the end of recent leads."
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn LeadDetail(id: String, submission_id: String) -> Element {
+    #[allow(unused_mut)]
+    let mut state = use_signal(LeadDetailState::default);
+
+    #[cfg(feature = "browser")]
+    use_effect(use_reactive!(|id, submission_id| {
+        let funnel_id = id.clone();
+        let requested_submission_id = submission_id.clone();
+        let request = state.with_mut(|state| {
+            state.begin_request(funnel_id.clone(), requested_submission_id.clone())
+        });
+        spawn(async move {
+            refresh_lead_detail(state, funnel_id, requested_submission_id, request).await;
+        });
+    }));
+
+    let view = state();
+    let editor_id = id.clone();
+    let inbox_id = id.clone();
+
+    rsx! {
+        section { class: "page-heading lead-page-heading",
+            p { class: "eyebrow", "Funnels / Leads / Submission" }
+            h1 { "Submission details" }
+            div { class: "lead-page-actions",
+                Link {
+                    to: RouteView::LeadInbox { id: inbox_id },
+                    class: "lead-navigation-link",
+                    "Back to leads"
+                }
+                Link {
+                    to: RouteView::FunnelDetail { id: editor_id },
+                    class: "lead-navigation-link",
+                    "Back to funnel editor"
+                }
+            }
+        }
+        if view.loading {
+            section { class: "empty-state", role: "status", "aria-label": "Lead details",
+                "Loading submission details…"
+            }
+        } else if view.load_error {
+            section { class: "empty-state lead-load-error", role: "alert", "aria-label": "Lead details error",
+                p { "This submission could not be loaded. It may have expired or may no longer be available." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                            let funnel_id = id.clone();
+                            let submission_id = submission_id.clone();
+                            let request = state.with_mut(|state| {
+                                state.begin_request(funnel_id.clone(), submission_id.clone())
+                            });
+                            spawn(async move {
+                                refresh_lead_detail(state, funnel_id, submission_id, request).await;
+                            });
+                        }
+                    },
+                    "Try again"
+                }
+            }
+        } else if let Some(detail) = view.detail {
+            section { class: "lead-detail-panel", "aria-label": "Lead submission details",
+                div { class: "lead-detail-context",
+                    p { class: "eyebrow", "{detail.form_purpose}" }
+                    h2 { "{detail.page_title}" }
+                }
+                dl { class: "lead-detail-meta",
+                    div {
+                        dt { "Submitted" }
+                        dd { LeadTime { timestamp: detail.submitted_at } }
+                    }
+                    div {
+                        dt { "Retained until" }
+                        dd { LeadTime { timestamp: detail.expires_at } }
+                    }
+                }
+                section { class: "lead-answer-section", "aria-labelledby": "lead-answers-heading",
+                    h3 { id: "lead-answers-heading", "Answers" }
+                    dl { class: "lead-answer-list",
+                        for answer in detail.answers {
+                            div { key: "{answer.name}", class: "lead-answer-row",
+                                dt { "{answer.label}" }
+                                dd { LeadAnswerText { answer: answer.clone() } }
+                            }
+                        }
+                    }
+                }
+                section { class: "lead-answer-section", "aria-labelledby": "lead-consent-heading",
+                    h3 { id: "lead-consent-heading", "Consent evidence" }
+                    dl { class: "lead-answer-list",
+                        div { class: "lead-answer-row",
+                            dt { "Request consent" }
+                            dd { if detail.request_consent.acknowledged { "Acknowledged" } else { "Not acknowledged" } }
+                        }
+                        div { class: "lead-answer-row",
+                            dt { "Request consent copy" }
+                            dd { "{detail.request_consent.copy}" }
+                        }
+                        div { class: "lead-answer-row",
+                            dt { "Request consent version" }
+                            dd { "{detail.request_consent.copy_version}" }
+                        }
+                        div { class: "lead-answer-row",
+                            dt { "Request consent recorded" }
+                            dd { LeadTime { timestamp: detail.request_consent.recorded_at } }
+                        }
+                        div { class: "lead-answer-row",
+                            dt { "Marketing opt-in" }
+                            dd { if detail.marketing_opt_in { "Opted in" } else { "Not opted in" } }
+                        }
+                        if let Some(consent) = detail.marketing_consent {
+                            div { class: "lead-answer-row",
+                                dt { "Marketing consent copy" }
+                                dd { "{consent.copy}" }
+                            }
+                            div { class: "lead-answer-row",
+                                dt { "Marketing consent version" }
+                                dd { "{consent.copy_version}" }
+                            }
+                            div { class: "lead-answer-row",
+                                dt { "Marketing consent recorded" }
+                                dd { LeadTime { timestamp: consent.recorded_at } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn LeadTime(timestamp: i64) -> Element {
+    match format_lead_timestamp(timestamp) {
+        Some(value) => rsx! { time { datetime: "{value}", "{value}" } },
+        None => rsx! { span { "Date unavailable" } },
+    }
+}
+
+#[component]
+fn LeadAnswerText(answer: LeadAnswer) -> Element {
+    let display = lead_answer_display(&answer);
+    rsx! { span { class: "lead-answer-value", "{display}" } }
+}
+
+fn lead_submission_label(timestamp: i64) -> String {
+    let timestamp =
+        format_lead_timestamp(timestamp).unwrap_or_else(|| "at an unknown time".to_owned());
+    format!("View submission received {timestamp}")
+}
+
+fn format_lead_timestamp(timestamp: i64) -> Option<String> {
+    if timestamp < 0 {
+        return None;
+    }
+    let days = timestamp / 86_400;
+    let seconds = timestamp % 86_400;
+    let shifted_days = days.checked_add(719_468)?;
+    let era = shifted_days / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_piece = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_piece + 2) / 5 + 1;
+    let month = month_piece + if month_piece < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    if !(1..=9_999).contains(&year) {
+        return None;
+    }
+    let hour = seconds / 3_600;
+    let minute = seconds % 3_600 / 60;
+    let second = seconds % 60;
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+fn lead_answer_display(answer: &LeadAnswer) -> String {
+    match answer.value.as_ref() {
+        None => "Not provided".to_owned(),
+        Some(Value::Bool(value)) if answer.kind == "checkbox" => {
+            (if *value { "Checked" } else { "Not checked" }).to_owned()
+        }
+        Some(Value::String(value)) if value.is_empty() => "Empty response".to_owned(),
+        Some(Value::String(value)) => value.clone(),
+        _ => "Response unavailable".to_owned(),
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_lead_inbox(
+    mut state: Signal<LeadInboxState>,
+    funnel_id: String,
+    append: bool,
+    restore_focus: bool,
+) {
+    let Some((request, cursor)) = state.with_mut(|state| state.begin_page(append)) else {
+        return;
+    };
+    let path = match cursor {
+        Some(cursor) => format!("/api/funnels/{funnel_id}/leads?cursor={cursor}"),
+        None => format!("/api/funnels/{funnel_id}/leads"),
+    };
+    let result = match api_request("GET", &path, None, None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<LeadPage>(&response.body).map_err(|_| ())
+        }
+        _ => Err(()),
+    };
+    let completed = result.is_ok();
+    state.with_mut(|state| state.finish_page(request, result, append));
+    let current_request = state.with(|state| state.latest_request == request);
+    if append && completed && current_request && restore_focus {
+        restore_lead_inbox_focus().await;
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn lead_load_more_has_focus() -> bool {
+    let mut request = document::eval(
+        r#"
+const button = document.getElementById("lead-load-more-button");
+dioxus.send(document.activeElement === button);
+"#,
+    );
+    if request.send(()).is_err() {
+        return false;
+    }
+    let result: Result<bool, _> = request.recv().await;
+    result.unwrap_or(false)
+}
+
+#[cfg(feature = "browser")]
+async fn restore_lead_inbox_focus() {
+    let mut request = document::eval(
+        r#"
+await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+const button = document.getElementById("lead-load-more-button");
+if (button && !button.disabled) button.focus();
+else document.getElementById("lead-end-status")?.focus();
+dioxus.send(true);
+"#,
+    );
+    let _ = request.send(());
+    let result: Result<bool, _> = request.recv().await;
+    let _ = result;
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_lead_funnel_name(
+    mut state: Signal<LeadInboxState>,
+    funnel_id: String,
+    route: u64,
+) {
+    let response = api_request("GET", "/api/funnels", None, None).await;
+    let funnel_name = response
+        .ok()
+        .filter(|response| response.status == 200)
+        .and_then(|response| serde_json::from_str::<FunnelListResponse>(&response.body).ok())
+        .and_then(|response| {
+            response
+                .items
+                .into_iter()
+                .find(|funnel| funnel.id == funnel_id)
+                .map(|funnel| funnel.name)
+        });
+    state.with_mut(|state| state.finish_funnel_name(route, funnel_name));
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_lead_detail(
+    mut state: Signal<LeadDetailState>,
+    funnel_id: String,
+    submission_id: String,
+    request: u64,
+) {
+    let path = format!("/api/funnels/{funnel_id}/leads/{submission_id}");
+    let result = match api_request("GET", &path, None, None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<LeadDetailRecord>(&response.body).map_err(|_| ())
+        }
+        _ => Err(()),
+    };
+    state.with_mut(|state| state.finish_request(request, result));
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -1493,5 +2134,169 @@ mod tests {
         assert!(!state.loading);
         assert!(state.load_error);
         assert!(state.archived);
+    }
+
+    #[test]
+    fn lead_inbox_paging_keeps_order_and_ignores_stale_responses() {
+        let mut state = LeadInboxState::default();
+        state.begin_route("funnel-a".to_owned());
+        let (first_request, _) = state.begin_page(false).expect("first page request");
+        state.finish_page(
+            first_request,
+            Ok(LeadPage {
+                leads: vec![lead_summary("lead-1"), lead_summary("lead-2")],
+                next_cursor: Some("cursor-2".to_owned()),
+            }),
+            false,
+        );
+
+        let (second_request, cursor) = state.begin_page(true).expect("next page request");
+        assert_eq!(cursor.as_deref(), Some("cursor-2"));
+        state.finish_page(
+            first_request,
+            Ok(LeadPage {
+                leads: vec![lead_summary("stale")],
+                next_cursor: None,
+            }),
+            true,
+        );
+        assert_eq!(state.leads.len(), 2);
+        assert!(state.loading);
+
+        state.finish_page(
+            second_request,
+            Ok(LeadPage {
+                leads: vec![lead_summary("lead-3")],
+                next_cursor: None,
+            }),
+            true,
+        );
+        assert_eq!(
+            state
+                .leads
+                .iter()
+                .map(|lead| lead.submission_id.as_str())
+                .collect::<Vec<_>>(),
+            ["lead-1", "lead-2", "lead-3"]
+        );
+        assert_eq!(state.announcement, "Loaded 1 more leads.");
+        assert_eq!(state.next_cursor, None);
+    }
+
+    #[test]
+    fn failed_load_more_keeps_existing_leads_and_retry_cursor() {
+        let mut state = LeadInboxState::default();
+        state.begin_route("funnel-a".to_owned());
+        let (first_request, _) = state.begin_page(false).expect("first page request");
+        state.finish_page(
+            first_request,
+            Ok(LeadPage {
+                leads: vec![lead_summary("lead-1")],
+                next_cursor: Some("cursor-1".to_owned()),
+            }),
+            false,
+        );
+        let (append_request, _) = state.begin_page(true).expect("next page request");
+        state.finish_page(append_request, Err(()), true);
+
+        assert_eq!(state.leads.len(), 1);
+        assert_eq!(state.next_cursor.as_deref(), Some("cursor-1"));
+        assert!(state.load_error);
+        assert!(!state.loading);
+    }
+
+    #[test]
+    fn funnel_name_response_cannot_replace_a_newer_lead_route() {
+        let mut state = LeadInboxState::default();
+        let older = state.begin_route("funnel-a".to_owned());
+        let newer = state.begin_route("funnel-b".to_owned());
+
+        state.finish_funnel_name(older, Some("Old funnel".to_owned()));
+        assert_eq!(state.funnel_name, None);
+
+        state.finish_funnel_name(newer, Some("New funnel".to_owned()));
+        assert_eq!(state.funnel_name.as_deref(), Some("New funnel"));
+    }
+
+    #[test]
+    fn lead_detail_ignores_a_response_for_an_older_route() {
+        let mut state = LeadDetailState::default();
+        let older = state.begin_request("funnel-a".to_owned(), "lead-a".to_owned());
+        let newer = state.begin_request("funnel-b".to_owned(), "lead-b".to_owned());
+
+        state.finish_request(older, Err(()));
+        assert!(state.loading);
+        assert!(!state.load_error);
+        assert_eq!(state.funnel_id, "funnel-b");
+
+        state.finish_request(newer, Err(()));
+        assert!(!state.loading);
+        assert!(state.load_error);
+    }
+
+    #[test]
+    fn lead_timestamps_are_rendered_as_utc_and_values_keep_missing_empty_and_false_distinct() {
+        assert_eq!(
+            format_lead_timestamp(1_000_000_000).as_deref(),
+            Some("2001-09-09T01:46:40Z")
+        );
+        assert!(format_lead_timestamp(i64::MAX).is_none());
+
+        let answer = |value| LeadAnswer {
+            name: "choice".to_owned(),
+            label: "Choice".to_owned(),
+            kind: "checkbox".to_owned(),
+            value,
+        };
+        assert_eq!(lead_answer_display(&answer(None)), "Not provided");
+        assert_eq!(
+            lead_answer_display(&answer(Some(Value::Bool(false)))),
+            "Not checked"
+        );
+        assert_eq!(
+            lead_answer_display(&answer(Some(Value::String(String::new())))),
+            "Empty response"
+        );
+    }
+
+    #[test]
+    fn deleting_a_funnel_warns_that_saved_leads_and_consent_evidence_are_removed() {
+        assert!(DELETE_FUNNEL_DESCRIPTION.contains("saved form submissions"));
+        assert!(DELETE_FUNNEL_DESCRIPTION.contains("consent evidence"));
+        assert!(DELETE_FUNNEL_DESCRIPTION.contains("cannot be undone"));
+    }
+
+    #[test]
+    fn lead_answer_values_render_as_escaped_text() {
+        let mut virtual_dom = VirtualDom::new_with_props(
+            LeadAnswerText,
+            LeadAnswerTextProps {
+                answer: LeadAnswer {
+                    name: "message".to_owned(),
+                    label: "Message".to_owned(),
+                    kind: "text".to_owned(),
+                    value: Some(Value::String("<img src=x onerror=alert(1)>".to_owned())),
+                },
+            },
+        );
+        virtual_dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&virtual_dom);
+
+        assert!(
+            html.contains("&#60;img src=x onerror=alert(1)&#62;"),
+            "{html}"
+        );
+        assert!(!html.contains("<img"), "{html}");
+    }
+
+    fn lead_summary(submission_id: &str) -> LeadSummary {
+        LeadSummary {
+            submission_id: submission_id.to_owned(),
+            submitted_at: 1_000_000_000,
+            expires_at: 1_000_000_100,
+            page_title: "Home".to_owned(),
+            form_purpose: "Contact request".to_owned(),
+            marketing_opt_in: false,
+        }
     }
 }

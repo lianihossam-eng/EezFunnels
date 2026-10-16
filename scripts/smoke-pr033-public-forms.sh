@@ -481,7 +481,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         seed_id = seed_result["submission_id"]
         seed_command = f"""
             WITH RECURSIVE sequence(n) AS (
-                SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < 52
+                SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < 102
             )
             INSERT INTO public_form_submissions (
                 submission_id, funnel_id, revision_id, page_id, form_id, submission_key,
@@ -555,8 +555,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert_no_store(page_two_status, page_two_headers)
         page_two = json.loads(page_two_body)
         leads_two = page_two["leads"]
-        assert len(leads_two) == 5, page_two
-        assert page_two["next_cursor"] is None, page_two
+        assert len(leads_two) == 50, page_two
+        assert page_two["next_cursor"], page_two
         assert not ({lead["submission_id"] for lead in leads_one} & {lead["submission_id"] for lead in leads_two})
         assert all(lead["submitted_at"] == leads_one[0]["submitted_at"] for lead in leads_two), page_two
 
@@ -582,6 +582,31 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert detail["marketing_consent"]["copy"] == "Send me occasional product news.", detail
         assert detail["marketing_consent"]["recorded_at"] > 0, detail
         assert "revision_id" not in detail and "submission_key" not in detail, detail
+
+        if os.environ.get("PR040_BROWSER") == "1":
+            subprocess.run(
+                [
+                    str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                    "--persist-to", str(persist), "--command",
+                    f"UPDATE public_form_submissions SET field_values_json = json_set(field_values_json, '$.name', '<img src=x onerror=alert(1)>') WHERE submission_id = '{detail_id}'",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pr040-lead-inbox-browser.mjs"),
+                    f"http://localhost:{port}/funnels/{funnel_id}/leads",
+                    detail_id,
+                ],
+                cwd=root,
+                check=True,
+                timeout=120,
+            )
 
         invalid_cursor_status, invalid_cursor_body, invalid_cursor_headers = request(
             "GET", f"{leads_path}?cursor=invalid"

@@ -35,4 +35,6 @@ The list returns at most 50 newest unexpired leads, ordered by submission time a
 
 These are owner routes without application authentication. Keep `/api/funnels/:funnel_id/leads*` behind Cloudflare Access or another external perimeter; `ALLOWED_HOSTS` only checks the request host. The API does not add user accounts, roles, dashboard state, exports, or write operations. Protect dashboard and editor routes as described in [Security](security.md).
 
+The dashboard exposes a per-funnel, read-only **Leads** inbox from the funnel list and typed editor. It shows recent submissions, historical field labels and values, and the stored consent evidence. The inbox does not add notes, statuses, assignments, exports, or automation. Deleting a funnel also deletes its saved submissions and consent evidence; the confirmation names this data loss.
+
 Run `bash scripts/smoke-pr033-public-forms.sh` to exercise the published-page form flow against local Worker and D1 bindings.

@@ -148,6 +148,35 @@ mod tests {
     }
 
     #[test]
+    fn lead_inbox_and_detail_routes_render_without_server_side_lead_data() {
+        let inbox = render_document("/funnels/demo-1/leads").expect("lead inbox route");
+        assert!(inbox.contains("Funnel leads"));
+        assert!(inbox.contains("Loading leads"));
+        assert!(inbox.contains("Back to funnel editor"));
+
+        let detail = render_document("/funnels/demo-1/leads/550e8400-e29b-41d4-a716-446655440000")
+            .expect("lead detail route");
+        assert!(detail.contains("Submission details"));
+        assert!(detail.contains("Loading submission details"));
+        assert!(detail.contains("Back to leads"));
+        assert!(!detail.contains("ada@example.test"));
+    }
+
+    #[test]
+    fn lead_routes_reject_noncanonical_submission_ids_and_extra_segments() {
+        for path in [
+            "/funnels/demo-1/leads/not-a-uuid",
+            "/funnels/demo-1/leads/550E8400-E29B-41D4-A716-446655440000",
+            "/funnels/demo-1/leads/550e8400-e29b-41d4-a716-446655440000/extra",
+            "/funnels/demo-1/leads/",
+            "/funnels/has.dot/leads",
+            "/funnels/demo-1/leads?cursor=abc",
+        ] {
+            assert!(render_document(path).is_none(), "accepted {path:?}");
+        }
+    }
+
+    #[test]
     fn funnel_detail_route_rejects_invalid_identifiers() {
         for path in [
             "/funnels/",
