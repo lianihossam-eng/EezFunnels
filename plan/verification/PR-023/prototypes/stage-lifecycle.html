@@ -72,9 +72,11 @@
         <button type="button" data-action="CHANGE_HEAD">Simulate another editor save</button>
         <button type="button" data-action="ADVANCE_5">Advance 5 minutes</button>
         <button type="button" data-action="ADVANCE_16">Advance 16 minutes</button>
+        <button type="button" data-action="ADVANCE_1440">Advance 24 hours</button>
         <button type="button" data-action="CONFIRM_WRITER_QUIESCENT">Confirm writer quiescence</button>
         <button type="button" data-action="CLEANUP">Run cleanup</button>
         <button type="button" data-action="REPLAY_SAVE">Retry save with same key</button>
+        <button type="button" data-action="REPLAY_PREVIOUS_SAVE">Retry previous save with same key</button>
         <button type="button" class="primary" data-action="RESET">Reset model</button>
       </div>
     </section>
@@ -168,6 +170,22 @@
           ],
         },
         {
+          id: "consecutive-saves",
+          title: "Save successive revisions",
+          description: "Each staged save has a stable request key. A new stage gets a different key, and the earlier receipt remains replayable after the second revision commits.",
+          steps: [
+            { label: "Mint and upload the first stage", action: { type: "MINT" } },
+            { label: "Begin the first upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the first upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Save revision 8", action: { type: "SAVE" } },
+            { label: "Mint and upload the next stage", action: { type: "MINT" } },
+            { label: "Begin the next upload", action: { type: "BEGIN_UPLOAD" } },
+            { label: "Finish the next upload", action: { type: "FINISH_UPLOAD" } },
+            { label: "Save revision 9 with a fresh key", action: { type: "SAVE" } },
+            { label: "Replay the previous save receipt", action: { type: "REPLAY_PREVIOUS_SAVE" } },
+          ],
+        },
+        {
           id: "stale-head",
           title: "Stale editor head",
           description: "Another save advances the editor head after upload. The stale stage cannot create a revision or claim a success receipt; a fresh stage binds to the new head while the earlier mint receipt remains replayable.",
@@ -250,7 +268,7 @@
           mintReceipts: [],
           retiredStages: [],
           retiredAttempts: [],
-          saveReceipt: null,
+          saveReceipts: [],
           attemptSerial: 1,
           attempt: null,
           revisionCount: 7,
@@ -422,6 +440,9 @@
           case "ADVANCE_16":
             next.minute += 16;
             return addEvent(next, "Sixteen minutes passed. The 15-minute upload stage has expired.");
+          case "ADVANCE_1440":
+            next.minute += 1440;
+            return addEvent(next, "Twenty-four hours passed. Active command receipts have expired.");
           case "CONFIRM_WRITER_QUIESCENT": {
             const attempt = trackedAttempts(next).find((item) => item.status === "abandoned" && !item.writerQuiescent);
             if (!attempt) return addEvent(next, "No abandoned writer is waiting for quiescence confirmation.");
@@ -498,12 +519,18 @@
           case "SAVE":
           case "SAVE_LOST":
           case "SAVE_CHANGED": {
-            const key = "save-key-1";
-            if (next.saveReceipt && next.saveReceipt.key === key && action.type === "SAVE_CHANGED") {
+            const key = action.type === "SAVE_CHANGED"
+              ? next.saveReceipts.at(-1)?.key
+              : next.stage ? `save-key-${next.stage.id}` : null;
+            const receipt = next.saveReceipts.find((item) => item.key === key);
+            if (action.type === "SAVE_CHANGED") {
+              if (!receipt || now >= receipt.receiptExpiresAt) {
+                return addEvent(next, "Changed-payload retry unavailable: no active prior save key exists; the stage was not read.");
+              }
               return addEvent(next, "Idempotency mismatch: the same save key was reused with a changed stage/digest payload; the stage was not read.");
             }
-            if (next.saveReceipt && next.saveReceipt.key === key && now < next.saveReceipt.receiptExpiresAt) {
-              return addEvent(next, `Receipt-first replay returned ${next.saveReceipt.revisionId} without looking up the stage.`);
+            if (receipt && now < receipt.receiptExpiresAt) {
+              return addEvent(next, `Receipt-first replay returned ${receipt.revisionId} without looking up the stage.`);
             }
             if (!next.stage || next.stage.status !== "uploaded" || next.stage.metadataRemoved || now >= next.stage.expiresAt) {
               return addEvent(next, "Save denied: no live uploaded stage is available; no receipt or revision was written.");
@@ -515,24 +542,32 @@
             next.revisionCount += 1;
             next.editorHead = revisionId;
             next.stage.status = "consumed";
-            next.saveReceipt = {
+            next.saveReceipts = next.saveReceipts.filter((item) => now < item.receiptExpiresAt);
+            next.saveReceipts.push({
               key,
               stageId: next.stage.id,
               digest: next.stage.digest,
               baseHead: next.stage.baseHead,
               revisionId,
               receiptExpiresAt: now + 1440,
-            };
+            });
             if (action.type === "SAVE_LOST") {
               return addEvent(next, `Save committed ${revisionId}, then the response was lost. The 24-hour receipt is still active.`);
             }
             return addEvent(next, `Save committed ${revisionId}; the editor head moved, while the published pointer stayed at ${next.publishedRevision}.`);
           }
           case "REPLAY_SAVE":
-            if (next.saveReceipt && now < next.saveReceipt.receiptExpiresAt) {
-              return addEvent(next, `Receipt-first replay returned ${next.saveReceipt.revisionId}; stage lookup and R2 reads were skipped.`);
+            if (next.saveReceipts.at(-1) && now < next.saveReceipts.at(-1).receiptExpiresAt) {
+              return addEvent(next, `Receipt-first replay returned ${next.saveReceipts.at(-1).revisionId}; stage lookup and R2 reads were skipped.`);
             }
             return addEvent(next, "Save replay unavailable: no active matching receipt exists.");
+          case "REPLAY_PREVIOUS_SAVE": {
+            const receipt = next.saveReceipts.at(-2);
+            if (receipt && now < receipt.receiptExpiresAt) {
+              return addEvent(next, `Receipt-first replay returned ${receipt.revisionId}; stage lookup and R2 reads were skipped.`);
+            }
+            return addEvent(next, "Previous save replay unavailable: no active matching receipt exists.");
+          }
           case "RESET":
             return initialState();
           default:
@@ -581,7 +616,9 @@
         addStateCard("Retired stages", String(state.retiredStages.length));
         const unresolvedRetiredAttempts = trackedAttempts(state).filter((attempt) => attempt.status === "abandoned" && !attempt.writerQuiescent).length;
         addStateCard("Retired upload attempts", `${state.retiredAttempts.length} · ${unresolvedRetiredAttempts} writer(s) unsettled`);
-        addStateCard("Save receipt", state.saveReceipt ? `${state.saveReceipt.key} → ${state.saveReceipt.revisionId}` : "none");
+        const saveReceipt = state.saveReceipts.at(-1);
+        addStateCard("Latest save receipt", saveReceipt ? `${saveReceipt.key} → ${saveReceipt.revisionId}` : "none");
+        addStateCard("Retained save receipts", String(state.saveReceipts.length));
         addStateCard("Stage metadata", stage?.metadataRemoved ? "removed" : "retained");
         messageElement.textContent = state.lastEvent;
         eventsElement.replaceChildren();

@@ -25,21 +25,65 @@ assert.equal(expiredMint.stage.status, "expired");
 assert.equal(expiredMint.stage.metadataRemoved, true);
 assert.match(expiredMint.lastEvent, /Upload denied/);
 
-const consumedMint = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "CLEANUP", "REPLAY_MINT", "REPLAY_SAVE"]);
+const consumedMint = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "SAVE", "CLEANUP", "REPLAY_MINT", "REPLAY_SAVE",
+]);
 assert.equal(consumedMint.revisionCount, 8);
-assert.equal(consumedMint.saveReceipt.revisionId, "rev-8");
+assert.equal(consumedMint.saveReceipts.at(-1).revisionId, "rev-8");
+assert.equal(consumedMint.saveReceipts.length, 1);
 assert.match(consumedMint.lastEvent, /Receipt-first replay/);
+
+const consecutiveSaves = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE",
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "REPLAY_PREVIOUS_SAVE",
+]);
+assert.equal(consecutiveSaves.revisionCount, 9);
+assert.equal(consecutiveSaves.editorHead, "rev-9");
+assert.equal(consecutiveSaves.stage.status, "consumed");
+assert.equal(consecutiveSaves.saveReceipts.length, 2);
+assert.notEqual(consecutiveSaves.saveReceipts[0].key, consecutiveSaves.saveReceipts[1].key);
+assert.equal(consecutiveSaves.saveReceipts[0].revisionId, "rev-8");
+assert.equal(consecutiveSaves.saveReceipts[1].revisionId, "rev-9");
+assert.match(consecutiveSaves.lastEvent, /Receipt-first replay returned rev-8/);
+
+const changedSavePayload = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE",
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE_CHANGED",
+]);
+assert.equal(changedSavePayload.revisionCount, 8);
+assert.equal(changedSavePayload.stage.status, "uploaded");
+assert.equal(changedSavePayload.saveReceipts.length, 1);
+assert.match(changedSavePayload.lastEvent, /Idempotency mismatch/);
+
+const changedSaveWithoutPriorReceipt = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE_CHANGED",
+]);
+assert.equal(changedSaveWithoutPriorReceipt.revisionCount, 7);
+assert.equal(changedSaveWithoutPriorReceipt.stage.status, "uploaded");
+assert.equal(changedSaveWithoutPriorReceipt.saveReceipts.length, 0);
+assert.match(changedSaveWithoutPriorReceipt.lastEvent, /no active prior save key/);
+
+const expiredSaveReceipt = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "ADVANCE_1440", "REPLAY_SAVE",
+]);
+assert.match(expiredSaveReceipt.lastEvent, /no active matching receipt/);
+const saveAfterReceiptExpiry = run([
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE", "ADVANCE_1440",
+  "MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "SAVE",
+]);
+assert.equal(saveAfterReceiptExpiry.revisionCount, 9);
+assert.equal(saveAfterReceiptExpiry.saveReceipts.length, 1);
 
 const staleHead = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE"]);
 assert.equal(staleHead.revisionCount, 8);
 assert.equal(staleHead.editorHead, "rev-8");
-assert.equal(staleHead.saveReceipt, null);
+assert.equal(staleHead.saveReceipts.length, 0);
 assert.match(staleHead.lastEvent, /no success receipt or revision/);
 
 const staleHeadRecovery = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "CHANGE_HEAD", "SAVE", "MINT"]);
 assert.equal(staleHeadRecovery.stage.id, "stage-demo-2");
 assert.equal(staleHeadRecovery.stage.baseHead, "rev-8");
-assert.equal(staleHeadRecovery.saveReceipt, null);
+assert.equal(staleHeadRecovery.saveReceipts.length, 0);
 assert.equal(staleHeadRecovery.retiredStages[0].stage.id, "stage-demo-1");
 assert.equal(staleHeadRecovery.retiredStages[0].stage.status, "discarded");
 assert.equal(staleHeadRecovery.retiredStages[0].stage.objectPresent, true);
@@ -138,11 +182,11 @@ assert.equal(interrupted.attempt.objectPresent, false);
 assert.equal(interrupted.attempt.writerQuiescent, true);
 assert.equal(interrupted.attempt.cleanupConfirmed, true);
 assert.equal(interrupted.revisionCount, 7);
-assert.equal(interrupted.saveReceipt, null);
+assert.equal(interrupted.saveReceipts.length, 0);
 
 const uploadRetry = run(["MINT", "BEGIN_UPLOAD", "FINISH_UPLOAD", "RETRY_SAME_UPLOAD", "UPLOAD_DIFFERENT"]);
 assert.equal(uploadRetry.stage.status, "uploaded");
 assert.equal(uploadRetry.stage.objectPresent, true);
 assert.equal(uploadRetry.revisionCount, 7);
 
-process.stdout.write("PR-023 stage lifecycle assertions passed: expiry, receipt replay, stale-head recovery, replacement cleanup, late upload tombstones, retry-before-remint cleanup, interrupted upload cleanup, and retry identity.\n");
+process.stdout.write("PR-023 stage lifecycle assertions passed: mint/save receipt replay and expiry, distinct consecutive save keys, changed-payload rejection, stale-head recovery, replacement cleanup, late upload tombstones, retry-before-remint cleanup, interrupted upload cleanup, and retry identity.\n");

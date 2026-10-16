@@ -30,7 +30,7 @@ Profiler and measurement limits
 Stage lifecycle model
 - Source artifact: `prototypes/stage-lifecycle.html`.
 - Headless assertions: `node scripts/test-pr023-stage-lifecycle.mjs`.
-- Verified expired and consumed mint replay, terminal capability rejection, receipt-first save replay after stage cleanup, stale-head rejection with no receipt/revision, fresh-key mint after stale-head conflict and expiry, preservation/replay of prior mint receipts, retired-stage cleanup after replacement save/expiry, same-byte upload retry, interrupted client request, retry with a fresh upload attempt while an earlier writer is unresolved, preservation of both attempt tombstones across remint, each late R2 completion as an orphan, writer-quiescence confirmation, and post-quiescence absence/delete checks.
+- Verified expired and consumed mint replay, terminal capability rejection, receipt-first save replay after stage cleanup, consecutive saves with a distinct stable key per stage, preservation/replay of both active save receipts, same-key changed-payload rejection, fail-closed changed-payload retry without a prior key, save-receipt expiry, stale-head rejection with no receipt/revision, fresh-key mint after stale-head conflict and expiry, preservation/replay of prior mint receipts, retired-stage cleanup after replacement save/expiry, same-byte upload retry, interrupted client request, retry with a fresh upload attempt while an earlier writer is unresolved, preservation of both attempt tombstones across remint, each late R2 completion as an orphan, writer-quiescence confirmation, and post-quiescence absence/delete checks.
 - The standalone model passed JavaScript syntax checking and its headless state assertions. It does not prove Worker, D1, or R2 runtime behavior.
 
 Final local validation for the review fix
@@ -40,6 +40,14 @@ Final local validation for the review fix
 - `git diff --check` passed.
 - After installing the repository-pinned local tools (`wasm-bindgen 0.2.129`, `cargo-audit 0.22.2`) under `/tmp`, `cargo xtask ci` passed, including Worker WASM and dashboard asset builds, local funnel/MCP smoke tests, and vulnerability scanning of 355 locked dependencies. The advisory database loaded 1,329 advisories; no vulnerability gate failed.
 - Smoke tests used local temporary D1 databases; no remote Cloudflare binding or deployment was used.
+
+Follow-up exact-head save-key correction
+- Sol's exact-head review of `1c5dcb90706c1b36e08799d89112ce799c53cfc3` found that a constant save key caused a second staged save to replay the first revision. The new regression reproduced the issue (`revisionCount` remained 8 instead of 9) before the model correction.
+- The model now assigns a stable key per staged save, preserves all unexpired save receipts, and tests same-key replay plus replay of the previous save receipt after a second revision.
+- Interrogate reviews found that the changed-payload demo action also needed to fail closed when no prior key existed. A regression reproduced the accidental commit (revision 8 instead of 7); the action now returns before changing the stage, head, revision count, or receipt list.
+- Timestamp: 2026-10-16T02:07Z.
+- `cargo xtask check`, `cargo xtask ci`, Node syntax checks, the lifecycle assertions, and `git diff --check` pass on the save-key and changed-payload corrections. The full CI run includes Worker WASM/dashboard builds, local funnel/MCP smoke tests, and the 355-dependency audit.
+- The CI smoke tests used local temporary D1 databases. No remote Cloudflare binding or deployment was used.
 
 Fingerprints
 - SHA-256 fingerprints are finalized after all evidence and status edits in `candidate-hashes.sha256`.
