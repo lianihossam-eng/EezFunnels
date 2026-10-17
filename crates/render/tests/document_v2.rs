@@ -16,15 +16,18 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
     let mut manifest: serde_json::Value =
         serde_json::from_str(manifest_json).expect("serialized manifest");
     manifest["renderer_version"] = serde_json::Value::String(version.to_owned());
-    String::from_utf8(
-        serde_json_canonicalizer::to_vec(&manifest).expect("canonical manifest"),
-    )
-    .expect("UTF-8 manifest")
+    String::from_utf8(serde_json_canonicalizer::to_vec(&manifest).expect("canonical manifest"))
+        .expect("UTF-8 manifest")
 }
 
 #[test]
 fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
-    let document = document();
+    let document = DocumentV2::starter(
+        "funnel-01",
+        BlueprintId::Launch,
+        eez_domain::ThemePreset::Minimal,
+    )
+    .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
     assert_eq!(prepared.manifest.renderer_version(), "renderer-v4");
