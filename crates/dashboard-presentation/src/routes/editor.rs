@@ -1544,13 +1544,57 @@ enum EditorSurface {
     V2,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EditorSurfaceState {
+    funnel_id: String,
+    request_epoch: u64,
+    surface: EditorSurface,
+}
+
+impl EditorSurfaceState {
+    fn for_route(funnel_id: String) -> Self {
+        Self {
+            funnel_id,
+            ..Self::default()
+        }
+    }
+
+    fn begin_route(&mut self, funnel_id: String) -> u64 {
+        self.funnel_id = funnel_id;
+        self.request_epoch = self.request_epoch.wrapping_add(1);
+        self.surface = EditorSurface::Loading;
+        self.request_epoch
+    }
+
+    fn finish_route(
+        &mut self,
+        funnel_id: &str,
+        request_epoch: u64,
+        surface: EditorSurface,
+    ) -> bool {
+        if self.funnel_id != funnel_id || self.request_epoch != request_epoch {
+            return false;
+        }
+        self.surface = surface;
+        true
+    }
+
+    fn surface_for(&self, funnel_id: &str) -> EditorSurface {
+        if self.funnel_id == funnel_id {
+            self.surface
+        } else {
+            EditorSurface::Loading
+        }
+    }
+}
+
 #[cfg(feature = "browser")]
 #[component]
 pub(super) fn FunnelDetail(id: String) -> Element {
-    let mut surface = use_signal(EditorSurface::default);
+    let mut surface_state = use_signal(|| EditorSurfaceState::for_route(id.clone()));
     use_effect(use_reactive!(|(id)| {
         let funnel_id = id.clone();
-        surface.set(EditorSurface::Loading);
+        let request_epoch = surface_state.with_mut(|state| state.begin_route(funnel_id.clone()));
         spawn(async move {
             let path = format!("/api/funnels/{funnel_id}");
             let kind = match api_request("GET", &path, None, None).await {
@@ -1566,11 +1610,13 @@ pub(super) fn FunnelDetail(id: String) -> Element {
                 }
                 _ => EditorSurface::V1,
             };
-            surface.set(kind);
+            surface_state.with_mut(|state| {
+                state.finish_route(&funnel_id, request_epoch, kind);
+            });
         });
     }));
 
-    match surface() {
+    match surface_state.with(|state| state.surface_for(&id)) {
         EditorSurface::Loading => rsx! {
             section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",
                 "Loading the current funnel revision…"
@@ -3590,6 +3636,19 @@ mod tests {
             .value
             .is_null());
         assert!(!state.can_save());
+    }
+
+    #[test]
+    fn delayed_editor_surface_lookup_cannot_override_the_current_route() {
+        let mut state = EditorSurfaceState::for_route("funnel-1".to_owned());
+        let first_request = state.begin_route("funnel-1".to_owned());
+        let second_request = state.begin_route("funnel-2".to_owned());
+
+        assert!(!state.finish_route("funnel-1", first_request, EditorSurface::V2));
+        assert_eq!(state.surface_for("funnel-2"), EditorSurface::Loading);
+        assert!(state.finish_route("funnel-2", second_request, EditorSurface::V1));
+        assert_eq!(state.surface_for("funnel-2"), EditorSurface::V1);
+        assert_eq!(state.surface_for("funnel-1"), EditorSurface::Loading);
     }
 
     #[test]
