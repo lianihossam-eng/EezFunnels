@@ -4,7 +4,6 @@ mod editor;
 use editor::FunnelDetail;
 use eez_domain::FunnelBlueprint;
 use serde::Deserialize;
-#[cfg(any(feature = "browser", test))]
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
 use sha2::{Digest, Sha256};
@@ -82,10 +81,20 @@ pub(crate) enum RouteView {
     #[layout(DashboardShell)]
     #[route("/funnels/:id")]
     FunnelDetail { id: String },
+    #[end_layout]
+    #[layout(DashboardShell)]
+    #[route("/submissions")]
+    Submissions {},
 }
 
 #[component]
 fn DashboardShell() -> Element {
+    let breadcrumb = match use_route::<RouteView>() {
+        RouteView::Dashboard {} => "Workspace / Overview",
+        RouteView::Funnels {} => "Workspace / Funnels",
+        RouteView::FunnelDetail { .. } => "Workspace / Funnel editor",
+        RouteView::Submissions {} => "Workspace / Submissions",
+    };
     rsx! {
         div { class: "app-shell",
             aside { class: "sidebar",
@@ -97,19 +106,35 @@ fn DashboardShell() -> Element {
                     p { class: "nav-label", "Workspace" }
                     nav { class: "primary-nav", "aria-label": "Main navigation",
                         Link { to: RouteView::Dashboard {}, class: "nav-link",
-                            span { class: "nav-icon", "⌂" }
+                            span { class: "nav-icon", "aria-hidden": "true",
+                                svg { view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                                    path { d: "m3 10 9-7 9 7 M5 9v11h14V9 M9 20v-6h6v6" }
+                                }
+                            }
                             span { "Dashboard" }
                         }
                         Link { to: RouteView::Funnels {}, class: "nav-link",
-                            span { class: "nav-icon", "▤" }
+                            span { class: "nav-icon", "aria-hidden": "true",
+                                svg { view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                                    path { d: "M4 4h16v16H4z M8 8h8 M8 12h8 M8 16h5" }
+                                }
+                            }
                             span { "Funnels" }
+                        }
+                        Link { to: RouteView::Submissions {}, class: "nav-link",
+                            span { class: "nav-icon", "aria-hidden": "true",
+                                svg { view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                                    path { d: "M4 5h16v14H4z M4 12h4l2 3h4l2-3h4" }
+                                }
+                            }
+                            span { "Submissions" }
                         }
                     }
                 }
             }
             div { class: "workspace",
                 header { class: "topbar",
-                    span { class: "breadcrumb", "Workspace / Overview" }
+                    span { class: "breadcrumb", "{breadcrumb}" }
                     div { class: "owner-chip",
                         span { class: "owner-avatar", "EF" }
                         span { "Funnel workspace" }
@@ -120,6 +145,259 @@ fn DashboardShell() -> Element {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct FormSubmissionListResponse {
+    items: Vec<FormSubmissionListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct FormSubmissionListItem {
+    submission_id: String,
+    funnel_name: String,
+    page_title: String,
+    form_purpose: String,
+    fields: Vec<FormSubmissionField>,
+    request_consent_acknowledged: bool,
+    request_consent_copy_version: String,
+    request_consent_copy: String,
+    request_consent_recorded_at_label: String,
+    marketing_opt_in: bool,
+    marketing_opt_in_copy_version: Option<String>,
+    marketing_opt_in_copy: Option<String>,
+    marketing_opt_in_recorded_at_label: Option<String>,
+    submitted_at_label: String,
+    submitted_at_datetime: String,
+    expires_at_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct FormSubmissionField {
+    label: String,
+    value: Value,
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SubmissionRequestVersion(u64);
+
+#[cfg(any(feature = "browser", test))]
+impl SubmissionRequestVersion {
+    fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+
+    fn is_current(self, latest: Self) -> bool {
+        self == latest
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SubmissionInboxState {
+    #[cfg(any(feature = "browser", test))]
+    latest: SubmissionRequestVersion,
+    response: Option<Result<FormSubmissionListResponse, ()>>,
+    loading_more: bool,
+    load_more_error: bool,
+}
+
+impl SubmissionInboxState {
+    #[cfg(any(feature = "browser", test))]
+    fn begin(&mut self) -> SubmissionRequestVersion {
+        let request = self.latest.next();
+        self.latest = request;
+        self.response = None;
+        self.loading_more = false;
+        self.load_more_error = false;
+        request
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn complete(
+        &mut self,
+        request: SubmissionRequestVersion,
+        response: Result<FormSubmissionListResponse, ()>,
+    ) {
+        if request.is_current(self.latest) {
+            self.response = Some(response);
+            self.loading_more = false;
+            self.load_more_error = false;
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_more(&mut self) -> Option<(SubmissionRequestVersion, String)> {
+        if self.loading_more {
+            return None;
+        }
+        let cursor = self.response.as_ref()?.as_ref().ok()?.next_cursor.clone()?;
+        let request = self.latest.next();
+        self.latest = request;
+        self.loading_more = true;
+        Some((request, cursor))
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn complete_more(
+        &mut self,
+        request: SubmissionRequestVersion,
+        response: Result<FormSubmissionListResponse, ()>,
+    ) {
+        if !request.is_current(self.latest) {
+            return;
+        }
+        self.loading_more = false;
+        match response {
+            Ok(mut next_page) => {
+                if let Some(Ok(current_page)) = self.response.as_mut() {
+                    current_page.items.append(&mut next_page.items);
+                    current_page.next_cursor = next_page.next_cursor;
+                    self.load_more_error = false;
+                }
+            }
+            Err(()) => self.load_more_error = true,
+        }
+    }
+}
+
+#[component]
+fn Submissions() -> Element {
+    let load_state = use_signal(SubmissionInboxState::default);
+
+    #[cfg(feature = "browser")]
+    {
+        let page_state = load_state;
+        use_effect(move || {
+            spawn(async move {
+                refresh_submission_list(page_state).await;
+            });
+        });
+    }
+
+    let snapshot = load_state();
+    rsx! {
+        section { class: "page-heading",
+            h1 { "Submissions" }
+            p { class: "page-description", "Review form responses alongside the consent and retention record captured at submission time." }
+        }
+        match snapshot.response {
+            None => rsx! {
+                section { class: "submission-loading", "aria-label": "Loading submissions", role: "status", "aria-busy": "true",
+                    span { class: "submission-loading-line" }
+                    span { class: "submission-loading-line" }
+                    span { class: "submission-loading-line" }
+                }
+            },
+            Some(Err(())) => rsx! {
+                section { class: "empty-state submission-empty", "aria-label": "Submissions unavailable", role: "status",
+                    h2 { "Submissions could not be loaded." }
+                    p { "Check the dashboard connection and try again." }
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        onclick: move |_| {
+                            #[cfg(feature = "browser")]
+                            spawn(async move { refresh_submission_list(load_state).await; });
+                        },
+                        "Try again"
+                    }
+                }
+            },
+            Some(Ok(response)) if response.items.is_empty() => rsx! {
+                section { class: "empty-state submission-empty", "aria-label": "No submissions yet",
+                    h2 { "No form submissions yet" }
+                    p { "Responses from published funnels will appear here while they remain within the configured retention period." }
+                    Link { to: RouteView::Funnels {}, class: "secondary-button", "View funnels" }
+                }
+            },
+            Some(Ok(response)) => rsx! {
+                section { class: "submission-list", "aria-label": "Form submissions",
+                    p { class: "submission-retention-note", "Only submissions within the configured retention period are shown." }
+                    for item in response.items.iter() {
+                        SubmissionEntry { key: "{item.submission_id}", item: item.clone() }
+                    }
+                    if snapshot.load_more_error {
+                        p { class: "editor-save-error", role: "alert", "Older submissions could not be loaded. Your current results are still available." }
+                    }
+                    if response.next_cursor.is_some() {
+                        button {
+                            class: "secondary-button submission-more-button",
+                            r#type: "button",
+                            disabled: snapshot.loading_more,
+                            onclick: move |_| {
+                                #[cfg(feature = "browser")]
+                                spawn(async move { load_more_submissions(load_state).await; });
+                            },
+                            if snapshot.loading_more { "Loading older submissions…" } else if snapshot.load_more_error { "Retry loading older submissions" } else { "Load older submissions" }
+                        }
+                    } else {
+                        p { class: "submission-list-end", "All retained submissions are shown." }
+                    }
+                }
+            },
+        }
+    }
+}
+
+#[component]
+fn SubmissionEntry(item: FormSubmissionListItem) -> Element {
+    rsx! {
+        details { class: "submission-entry",
+            summary {
+                span { class: "submission-entry-purpose", "{item.form_purpose}" }
+                span { class: "submission-entry-funnel", "{item.funnel_name}" }
+                time { class: "submission-entry-time", datetime: "{item.submitted_at_datetime}", "{item.submitted_at_label}" }
+                span { class: if item.marketing_opt_in { "submission-consent-state opted-in" } else { "submission-consent-state" },
+                    if item.marketing_opt_in { "Marketing opt-in granted" } else { "Marketing opt-in not granted" }
+                }
+            }
+            div { class: "submission-entry-content",
+                dl { class: "submission-context-list",
+                    div { dt { "Page" } dd { "{item.page_title}" } }
+                    div { dt { "Form" } dd { "{item.form_purpose}" } }
+                }
+                h2 { class: "submission-section-title", "Response" }
+                if item.fields.is_empty() {
+                    p { class: "submission-empty-fields", "This response contains no field values." }
+                } else {
+                    dl { class: "submission-field-list",
+                        for field in item.fields.iter() {
+                            div { dt { "{field.label}" } dd { "{submission_value_text(&field.value)}" } }
+                        }
+                    }
+                }
+                h2 { class: "submission-section-title", "Consent record" }
+                dl { class: "submission-consent-list",
+                    div { dt { "Request consent" } dd {
+                        if item.request_consent_acknowledged { "Acknowledged" } else { "Not acknowledged" }
+                    } }
+                    div { dt { "Copy version" } dd { "{item.request_consent_copy_version}" } }
+                    div { dt { "Recorded wording" } dd { "{item.request_consent_copy}" } }
+                    div { dt { "Recorded at" } dd { "{item.request_consent_recorded_at_label}" } }
+                    if let Some(version) = item.marketing_opt_in_copy_version.as_ref() {
+                        div { dt { "Marketing copy version" } dd { "{version}" } }
+                    }
+                    if let Some(copy) = item.marketing_opt_in_copy.as_ref() {
+                        div { dt { "Marketing wording" } dd { "{copy}" } }
+                    }
+                    if let Some(recorded_at) = item.marketing_opt_in_recorded_at_label.as_ref() {
+                        div { dt { "Marketing choice recorded at" } dd { "{recorded_at}" } }
+                    }
+                    div { dt { "Retention" } dd { "Available until {item.expires_at_label}" } }
+                }
+            }
+        }
+    }
+}
+
+fn submission_value_text(value: &Value) -> String {
+    match value {
+        Value::Bool(value) => if *value { "Yes" } else { "No" }.to_owned(),
+        Value::String(value) => value.clone(),
+        _ => String::new(),
     }
 }
 
@@ -734,6 +1012,42 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
 }
 
 #[cfg(feature = "browser")]
+async fn load_submission_page(cursor: Option<&str>) -> Result<FormSubmissionListResponse, ()> {
+    let path = match cursor {
+        Some(cursor) => format!("/api/submissions?cursor={cursor}"),
+        None => "/api/submissions".to_owned(),
+    };
+    let response = api_request("GET", &path, None, None).await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    serde_json::from_str::<FormSubmissionListResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_submission_list(mut load_state: Signal<SubmissionInboxState>) {
+    let request_version = load_state.with_mut(SubmissionInboxState::begin);
+    let result = load_submission_page(None).await;
+    if load_state.try_peek().is_err() {
+        return;
+    }
+    load_state.with_mut(|state| state.complete(request_version, result));
+}
+
+#[cfg(feature = "browser")]
+async fn load_more_submissions(mut load_state: Signal<SubmissionInboxState>) {
+    let Some((request_version, cursor)) = load_state.with_mut(SubmissionInboxState::begin_more)
+    else {
+        return;
+    };
+    let result = load_submission_page(Some(&cursor)).await;
+    if load_state.try_peek().is_err() {
+        return;
+    }
+    load_state.with_mut(|state| state.complete_more(request_version, result));
+}
+
+#[cfg(feature = "browser")]
 async fn refresh_funnel_list(mut load_state: Signal<FunnelListLoad>) {
     let request_version = load_state.with_mut(FunnelListLoad::begin);
     let result = load_funnels().await;
@@ -1101,6 +1415,94 @@ mod tests {
         assert_ne!(
             original,
             idempotency_storage_slot("DELETE", "/api/funnels/funnel-1", None)
+        );
+    }
+
+    fn submission_item(submission_id: &str) -> FormSubmissionListItem {
+        FormSubmissionListItem {
+            submission_id: submission_id.to_owned(),
+            funnel_name: "Lead capture".to_owned(),
+            page_title: "Home".to_owned(),
+            form_purpose: "Contact".to_owned(),
+            fields: Vec::new(),
+            request_consent_acknowledged: true,
+            request_consent_copy_version: "request-v1".to_owned(),
+            request_consent_copy: "I agree to be contacted.".to_owned(),
+            request_consent_recorded_at_label: "2026-10-17 12:00 UTC".to_owned(),
+            marketing_opt_in: false,
+            marketing_opt_in_copy_version: None,
+            marketing_opt_in_copy: None,
+            marketing_opt_in_recorded_at_label: None,
+            submitted_at_label: "2026-10-17 12:00 UTC".to_owned(),
+            submitted_at_datetime: "2026-10-17T12:00:00Z".to_owned(),
+            expires_at_label: "2027-01-15 12:00 UTC".to_owned(),
+        }
+    }
+
+    fn submission_page(ids: &[&str], next_cursor: Option<&str>) -> FormSubmissionListResponse {
+        FormSubmissionListResponse {
+            items: ids.iter().map(|id| submission_item(id)).collect(),
+            next_cursor: next_cursor.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn submission_pages_append_and_advance_the_cursor() {
+        let mut state = SubmissionInboxState::default();
+        let initial_load = state.begin();
+        state.complete(
+            initial_load,
+            Ok(submission_page(&["newest"], Some("cursor-one"))),
+        );
+
+        let (older_load, cursor) = state.begin_more().expect("next page can load");
+        assert_eq!(cursor, "cursor-one");
+        state.complete_more(
+            older_load,
+            Ok(submission_page(&["older"], Some("cursor-two"))),
+        );
+
+        let page = state.response.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.submission_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newest", "older"]
+        );
+        assert_eq!(page.next_cursor.as_deref(), Some("cursor-two"));
+    }
+
+    #[test]
+    fn a_failed_older_page_can_be_retried_without_dropping_current_results() {
+        let mut state = SubmissionInboxState::default();
+        let initial_load = state.begin();
+        state.complete(
+            initial_load,
+            Ok(submission_page(&["newest"], Some("cursor-one"))),
+        );
+        let (failed_load, _) = state.begin_more().expect("next page can load");
+        state.complete_more(failed_load, Err(()));
+
+        assert!(state.load_more_error);
+        assert_eq!(
+            state.response.as_ref().unwrap().as_ref().unwrap().items[0].submission_id,
+            "newest"
+        );
+        let (retry, cursor) = state.begin_more().expect("failed page can be retried");
+        assert_eq!(cursor, "cursor-one");
+        state.complete_more(retry, Ok(submission_page(&["older"], None)));
+        assert!(!state.load_more_error);
+        assert_eq!(
+            state
+                .response
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .items
+                .len(),
+            2
         );
     }
 }

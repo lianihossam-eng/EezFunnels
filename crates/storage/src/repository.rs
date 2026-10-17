@@ -11,6 +11,7 @@ const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
+pub const PUBLIC_FORM_SUBMISSION_PAGE_SIZE: usize = 25;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
 
@@ -248,6 +249,48 @@ struct PublicFormSubmissionState {
     is_duplicate: i64,
     is_key_reuse: i64,
     is_rate_limited: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicFormSubmissionCursor {
+    pub submitted_at: i64,
+    pub submission_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PublicFormSubmissionRecord {
+    pub submission_id: String,
+    pub funnel_id: String,
+    pub funnel_name: String,
+    pub funnel_slug: String,
+    pub revision_id: String,
+    pub revision_schema_version: i64,
+    pub revision_data_json: String,
+    pub page_id: String,
+    pub form_id: String,
+    pub field_values_json: String,
+    pub request_consent_acknowledged: i64,
+    pub request_consent_copy_version: String,
+    pub request_consent_copy: String,
+    pub request_consent_recorded_at: i64,
+    pub request_consent_recorded_at_label: String,
+    pub marketing_opt_in: i64,
+    pub marketing_opt_in_copy_version: Option<String>,
+    pub marketing_opt_in_copy: Option<String>,
+    pub marketing_opt_in_recorded_at: Option<i64>,
+    pub marketing_opt_in_recorded_at_label: Option<String>,
+    pub submitted_at: i64,
+    pub submitted_at_label: String,
+    pub submitted_at_datetime: String,
+    pub expires_at: i64,
+    pub expires_at_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PublicFormSubmissionPage {
+    pub items: Vec<PublicFormSubmissionRecord>,
+    pub has_more: bool,
 }
 
 pub enum MutationResult {
@@ -1351,6 +1394,54 @@ impl<'a> Repository<'a> {
             }
         }
         Ok(())
+    }
+
+    pub async fn list_public_form_submissions(
+        &self,
+        cursor: Option<&PublicFormSubmissionCursor>,
+    ) -> RepositoryResult<PublicFormSubmissionPage> {
+        if let Some(cursor) = cursor {
+            if cursor.submitted_at <= 0
+                || cursor.submitted_at > 9_007_199_254_740_991
+                || uuid::Uuid::parse_str(&cursor.submission_id)
+                    .map(|submission_id| submission_id.to_string() != cursor.submission_id)
+                    .unwrap_or(true)
+            {
+                return Err(RepositoryError::InvalidField("submission_cursor"));
+            }
+        }
+
+        let cursor_timestamp = cursor
+            .map(|cursor| D1Type::Real(cursor.submitted_at as f64))
+            .unwrap_or(D1Type::Null);
+        let cursor_timestamp_tiebreak = cursor
+            .map(|cursor| D1Type::Real(cursor.submitted_at as f64))
+            .unwrap_or(D1Type::Null);
+        let cursor_id = cursor
+            .map(|cursor| D1Type::Text(&cursor.submission_id))
+            .unwrap_or(D1Type::Null);
+        let cursor_timestamp_guard = cursor
+            .map(|cursor| D1Type::Real(cursor.submitted_at as f64))
+            .unwrap_or(D1Type::Null);
+        let limit = D1Type::Integer((PUBLIC_FORM_SUBMISSION_PAGE_SIZE + 1) as i32);
+        let mut items = self
+            .database
+            .prepare(
+                "SELECT public_form_submissions.submission_id, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, revisions.data_json AS revision_data_json, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?",
+            )
+            .bind_refs([
+                &cursor_timestamp,
+                &cursor_timestamp_tiebreak,
+                &cursor_timestamp_guard,
+                &cursor_id,
+                &limit,
+            ])?
+            .all()
+            .await?
+            .results::<PublicFormSubmissionRecord>()?;
+        let has_more = items.len() > PUBLIC_FORM_SUBMISSION_PAGE_SIZE;
+        items.truncate(PUBLIC_FORM_SUBMISSION_PAGE_SIZE);
+        Ok(PublicFormSubmissionPage { items, has_more })
     }
 
     pub async fn get_published_revision_by_slug(

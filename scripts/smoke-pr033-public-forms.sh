@@ -558,6 +558,99 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert result["unique_keys"] == 3, result
         assert result["stored_email"] == "ada@example.test", result
 
+        inbox_status, inbox_body, inbox_headers = request("GET", "/api/submissions")
+        assert inbox_status == 200, inbox_body
+        assert inbox_headers.get("cache-control") == "private, no-store", inbox_headers
+        inbox = json.loads(inbox_body)
+        assert len(inbox["items"]) == 3, inbox
+        assert inbox["next_cursor"] is None, inbox
+        assert b"submission_key" not in inbox_body and b"request_fingerprint" not in inbox_body
+        assert inbox["items"][0]["request_consent_acknowledged"] is True, inbox
+        assert inbox["items"][0]["request_consent_copy_version"] == "request-v2", inbox
+
+        invalid_inbox_status, invalid_inbox_body, invalid_inbox_headers = request(
+            "GET", "/api/submissions?limit=10"
+        )
+        assert invalid_inbox_status == 400, invalid_inbox_status
+        assert json.loads(invalid_inbox_body)["code"] == "validation/invalid_cursor", invalid_inbox_body
+        assert invalid_inbox_headers.get("cache-control") == "private, no-store", invalid_inbox_headers
+        method_status, _, method_headers = request("POST", "/api/submissions")
+        assert method_status == 405, method_status
+        assert method_headers.get("cache-control") == "private, no-store", method_headers
+
+        def sql_quote(value):
+            return "'" + value.replace("'", "''") + "'"
+
+        fixture_sql = f"""
+            WITH RECURSIVE fixtures(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM fixtures WHERE n < 26
+            )
+            INSERT INTO public_form_submissions (
+                submission_id, funnel_id, revision_id, page_id, form_id,
+                submission_key, request_fingerprint, field_values_json,
+                request_consent_acknowledged, request_consent_copy_version,
+                request_consent_copy, request_consent_recorded_at, marketing_opt_in,
+                marketing_opt_in_copy_version, marketing_opt_in_copy,
+                marketing_opt_in_recorded_at, submitted_at, expires_at
+            )
+            SELECT
+                printf('90000000-0000-4000-8000-%012x', fixtures.n), funnels.id,
+                revisions.id, 'page-home', {sql_quote(form_id)},
+                printf('a0000000-0000-4000-8000-%012x', fixtures.n),
+                lower(hex(randomblob(32))),
+                json_object('name', printf('Inbox fixture %02d', fixtures.n),
+                            'email', printf('inbox-%02d@example.test', fixtures.n)),
+                1, 'request-v2',
+                'I agree to be contacted about this updated request.',
+                unixepoch() - 100, 0, NULL, NULL, NULL,
+                unixepoch() - 100, unixepoch() + 86400
+            FROM fixtures
+            JOIN funnels ON funnels.id = {sql_quote(funnel_id)}
+            JOIN revisions ON revisions.id = {sql_quote(updated_revision_id)}
+                AND revisions.funnel_id = funnels.id
+            WHERE revisions.schema_version = 2
+        """
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", fixture_sql,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        first_page_status, first_page_body, first_page_headers = request("GET", "/api/submissions")
+        assert first_page_status == 200, first_page_body
+        assert first_page_headers.get("cache-control") == "private, no-store", first_page_headers
+        first_page = json.loads(first_page_body)
+        assert len(first_page["items"]) == 25, first_page
+        assert first_page["next_cursor"], first_page
+        second_page_status, second_page_body, second_page_headers = request(
+            "GET", "/api/submissions?cursor=" + first_page["next_cursor"]
+        )
+        assert second_page_status == 200, second_page_body
+        assert second_page_headers.get("cache-control") == "private, no-store", second_page_headers
+        second_page = json.loads(second_page_body)
+        assert len(second_page["items"]) == 4, second_page
+        assert second_page["next_cursor"] is None, second_page
+        assert second_page["items"][-1]["fields"][0]["value"] == "Inbox fixture 01", second_page
+
+        if os.environ.get("PR033_BROWSER") == "1":
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pr050-submissions-browser.mjs"),
+                    f"http://localhost:{port}/submissions",
+                ],
+                cwd=root,
+                env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
+                check=True,
+                timeout=90,
+            )
+
         subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",

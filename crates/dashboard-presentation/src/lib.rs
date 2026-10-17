@@ -138,6 +138,17 @@ mod tests {
     }
 
     #[test]
+    fn submissions_route_renders_a_hydratable_dashboard_shell() {
+        let html = render_document("/submissions").expect("submissions dashboard route");
+
+        assert!(html.contains("Submissions"));
+        assert!(html.contains("Workspace / Submissions"));
+        assert!(html.contains("Review form responses"));
+        assert!(html.contains("/assets/dashboard.css"));
+        assert_valid_hydration_data(&html);
+    }
+
+    #[test]
     fn funnel_detail_route_rejects_invalid_identifiers() {
         for path in [
             "/funnels/",

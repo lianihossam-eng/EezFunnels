@@ -361,6 +361,28 @@ impl FormV2 {
     }
 }
 
+impl FormField {
+    pub fn submission_key(&self) -> &str {
+        match self {
+            Self::Text { name, .. }
+            | Self::Email { name, .. }
+            | Self::Phone { name, .. }
+            | Self::Checkbox { name, .. }
+            | Self::Select { name, .. } => name,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Text { label, .. }
+            | Self::Email { label, .. }
+            | Self::Phone { label, .. }
+            | Self::Checkbox { label, .. }
+            | Self::Select { label, .. } => label,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConsentCopy {

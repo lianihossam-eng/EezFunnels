@@ -45,6 +45,19 @@ fn document_with_lead_form() -> DocumentV2 {
 }
 
 #[test]
+fn form_fields_expose_the_submission_key_and_owner_facing_label() {
+    let document = document_with_lead_form();
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+
+    assert_eq!(form.fields()[0].submission_key(), "name");
+    assert_eq!(form.fields()[0].label(), "Name");
+    assert_eq!(form.fields()[2].submission_key(), "secondary_email");
+    assert_eq!(form.fields()[2].label(), "Secondary email");
+}
+
+#[test]
 fn theme_override_edit_updates_resolved_tokens_and_rejects_invalid_colors() {
     let document = DocumentV2::starter("funnel-theme", BlueprintId::LeadGen, ThemePreset::Minimal)
         .expect("starter document");

@@ -4,7 +4,7 @@ The typed dashboard editor can add a form to a page section, configure its purpo
 
 Published V2 documents render these definitions as native HTML forms and accept submissions on the same Worker. The renderer uses native input types and associated labels so browser validation and keyboard interaction work without client-side JavaScript. After submission, an owner can show inline confirmation or route visitors to an existing page. Invalid or unfinished builder input stays visible with a field-level error, keeps the preview on the last valid settings, and blocks saving and publishing until corrected.
 
-There is no dashboard or public API for reading submitted leads. Treat the D1 database and its backups as sensitive because they contain submitted field values and consent evidence.
+The dashboard's **Submissions** page reads retained responses from a private, read-only API. Each entry shows the submitted field labels and values, the page and form, the captured consent wording and versions, and when the response expires. Expired rows are excluded immediately and later removed by scheduled cleanup. Results are ordered newest first and loaded 25 at a time. The read API is not exposed as an MCP tool. Treat the D1 database, dashboard, API, and their backups as sensitive because they contain submitted field values and consent evidence.
 
 ## Submission behavior
 
@@ -24,6 +24,6 @@ Request acknowledgement is required for every submission. Marketing opt-in is a 
 
 Submissions are retained for 90 days by default and removed by the scheduled cleanup. Set `PUBLIC_FORM_RETENTION_DAYS` to a value from 1 to 3650 to change this period. The Worker allows up to 100 submissions per funnel in a rolling 60-second window by default; set `PUBLIC_FORM_SUBMISSIONS_PER_MINUTE` from 1 to 100 to lower the limit for that funnel.
 
-The response route only accepts POST. Leads currently have no application read surface; use secured, operator-controlled database access until a separately authenticated lead-management feature is available. Protect dashboard and editor routes as described in [Security](security.md).
+The submission route only accepts POST. The dashboard read surface is `GET /submissions`, backed by `GET /api/submissions`; the API returns `Cache-Control: private, no-store` and accepts an opaque keyset cursor for older rows. This single-user public edition does not add application login or roles. Protect both routes with Cloudflare Access or another network perimeter as described in [Security](security.md), and keep the D1 database and backups private.
 
-Run `bash scripts/smoke-pr033-public-forms.sh` to exercise the published-page form flow against local Worker and D1 bindings.
+Run `PR033_BROWSER=1 bash scripts/smoke-pr033-public-forms.sh` to exercise the published-page form flow and the submissions inbox against local Worker and D1 bindings.
