@@ -401,6 +401,7 @@ impl V2EditorState {
     }
 
     fn can_publish(&self) -> bool {
+        let retrying_publish = self.publication_retryable && self.can_retry_publication_as(true);
         !self.loading
             && !self.pending
             && !self.saving
@@ -408,7 +409,7 @@ impl V2EditorState {
             && !self.publication_pending
             && !self.publication_refreshing
             && !self.publication_state_unknown
-            && !self.has_unsaved_changes()
+            && (retrying_publish || !self.has_unsaved_changes())
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
             && self.can_retry_publication_as(true)
@@ -2956,6 +2957,42 @@ mod tests {
 
         assert!(state.can_unpublish());
         assert!(!state.can_publish());
+    }
+
+    #[test]
+    fn uncertain_publish_retry_remains_enabled_after_editing_the_draft() {
+        let document = document();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document, Some(stage_capacity()))),
+        );
+        let capture = state
+            .begin_publication(true)
+            .expect("saved revision can be published");
+        assert!(!state.finish_publication(&capture, Err(())));
+        assert!(state.publication_retryable);
+        assert!(state.can_publish());
+
+        let saved = state.document.as_ref().expect("loaded document");
+        let mut ids = TestIds(0);
+        let changed = saved
+            .apply(
+                Edit::SetThemePreset {
+                    preset: ThemePreset::Bold,
+                },
+                &mut ids,
+            )
+            .expect("edit the draft while publication result is uncertain");
+        state.document = Some(changed.document);
+        assert!(state.has_unsaved_changes());
+        assert!(state.can_publish());
+
+        let retry = state
+            .begin_publication(true)
+            .expect("retry preserves the uncertain publication action");
+        assert_eq!(retry.action, capture.action);
     }
 
     #[test]
