@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-source .project-tools/env.sh
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/tmp/eezfunnel-xdg}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/eezfunnel-cache}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-/tmp/eezfunnel-npm-cache}"
@@ -263,11 +262,26 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert invalid_status == 400, (invalid_status, invalid_body)
         assert b"ada@example.test" not in invalid_body
 
+        cross_origin_status, cross_origin_body, _ = request(
+            "POST",
+            action_path,
+            bytes([0xFF]),
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://attacker.example",
+            },
+        )
+        assert cross_origin_status == 403, (cross_origin_status, cross_origin_body)
+        assert b"request/invalid_origin" in cross_origin_body
+
         status, body, response_headers = request(
             "POST",
             action_path,
             payload,
-            {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+            {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Origin": f"http://localhost:{port}",
+            },
         )
         assert status == 303, (status, body)
         assert response_headers.get("location") == f"/f/{slug}#form-success-form-lead", response_headers
