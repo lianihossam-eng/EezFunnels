@@ -1305,6 +1305,113 @@ try {
   await page.unroute(unpublishRoute);
   await page.unroute(funnelMetadataRoute);
 
+
+  await page.locator(".editor-section-list .text-button").first().click();
+  const addFormButton = page.getByRole("button", { name: "Add form" });
+  await addFormButton.waitFor();
+  assert.equal(await addFormButton.isEnabled(), true);
+  const createFormResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await addFormButton.click();
+  const createdForm = await createFormResponse.catch(async (error) => {
+    const alerts = await page.getByRole("alert").allTextContents();
+    throw new Error(`${error}; alerts=${alerts.join(" | ")}`);
+  });
+  assert.equal(createdForm.status(), 200, await createdForm.text());
+  await page.getByRole("group", { name: "Form settings" }).waitFor();
+  await page.getByLabel("Submission purpose").waitFor();
+  await page.getByLabel("Required request consent").waitFor();
+  const previewFrame = page.frameLocator(".editor-preview-frame");
+  const previewForm = previewFrame.locator("form[data-preview='true']");
+  await previewForm.waitFor();
+  assert.equal(await previewForm.getAttribute("action"), null);
+  assert.equal(await previewForm.getByRole("button", { name: "Send" }).getAttribute("type"), "button");
+
+  const resultDestination = page.getByLabel("After submission");
+  assert.equal(await resultDestination.inputValue(), "inline");
+  await page.waitForFunction(() => {
+    const control = [...document.querySelectorAll("select")].find((item) =>
+      item.parentElement?.textContent.includes("After submission"),
+    );
+    return control && !control.disabled;
+  });
+  const resultOptions = await resultDestination.locator("option").evaluateAll((options) =>
+    options.map((option) => ({ value: option.value, label: option.textContent })),
+  );
+  assert.deepEqual(resultOptions, [{ value: "inline", label: "Inline confirmation" }]);
+  await page.getByText("No valid success page is available yet. Add another page or remove the path back to this form page.").waitFor();
+  assert.equal(await previewFrame.locator(".v2-form-result").count(), 1);
+
+  const purposeInput = page.getByLabel("Submission purpose");
+  const purposeErrorId = await purposeInput.getAttribute("aria-describedby");
+  const purposeError = page.locator(`[id="${purposeErrorId}"]`);
+  const lastValidPurpose = await previewForm.locator("legend").textContent();
+  let invalidEditRequests = 0;
+  const countInvalidEditRequests = (request) => {
+    if (request.method() === "POST" && request.url().includes("/edit-v2")) invalidEditRequests += 1;
+  };
+  page.on("request", countInvalidEditRequests);
+  await purposeInput.fill("");
+  await purposeError.getByText("Enter a purpose between 1 and 1,024 characters.").waitFor();
+  assert.equal(await purposeInput.getAttribute("aria-invalid"), "true");
+  const saveButton = page.getByRole("button", { name: "Save revision" });
+  assert.equal(await saveButton.isDisabled(), true);
+  await page.waitForTimeout(100);
+  assert.equal(invalidEditRequests, 0);
+  page.off("request", countInvalidEditRequests);
+  assert.equal(await previewForm.locator("legend").textContent(), lastValidPurpose);
+  const purposeEditResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await purposeInput.fill("Request a product demonstration");
+  await purposeInput.press("Tab");
+  const purposeEdit = await purposeEditResponse;
+  assert.equal(purposeEdit.status(), 200, await purposeEdit.text());
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll("button")].find((item) => item.textContent.includes("Save revision"));
+    return button && !button.disabled;
+  });
+  assert.equal(await previewForm.locator("legend").textContent(), "Request a product demonstration");
+
+  const addDropdownResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await page.getByRole("button", { name: "Add dropdown field" }).click();
+  const addedDropdown = await addDropdownResponse;
+  assert.equal(addedDropdown.status(), 200, await addedDropdown.text());
+  await previewForm.getByRole("combobox").waitFor();
+  assert.equal(await previewForm.getByRole("option", { name: "Option 1" }).count(), 1);
+  const dropdownType = page.getByLabel("Field type").last();
+  await dropdownType.selectOption("text");
+  await page.getByText("Applying this change clears the saved dropdown options.").waitFor();
+  assert.equal(await saveButton.isDisabled(), true);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await dropdownType.inputValue(), "select");
+  const applyTypeResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await dropdownType.selectOption("text");
+  await page.getByRole("button", { name: "Apply type change" }).click();
+  const appliedType = await applyTypeResponse;
+  assert.equal(appliedType.status(), 200, await appliedType.text());
+  await previewForm.getByRole("combobox").waitFor({ state: "detached" });
+
+  const marketingConsentResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await page.getByLabel("Offer separate, optional marketing consent").check();
+  const marketingConsent = await marketingConsentResponse;
+  assert.equal(marketingConsent.status(), 200, await marketingConsent.text());
+  await page.getByLabel("Optional marketing consent wording").waitFor();
+  assert.equal(await previewForm.locator('input[name="_request_consent"]').count(), 1);
+  assert.equal(await previewForm.locator('input[name="_marketing_opt_in"]').count(), 1);
+
   await page.addScriptTag({ content: require("axe-core").source });
   const convertedAxe = await page.evaluate(async () => {
     const result = await window.axe.run(document, {
@@ -1316,6 +1423,7 @@ try {
 
   console.log(`PR-010/011/012/013/024/031 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, schema-probe retry, button destination editing, stage-capacity fallback, final-save receipt replay, failed publication refresh UI, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
+  console.error(`Browser diagnostics:\n${pageDiagnostics.slice(-60).join("\n")}\nWrangler log:\n${workerLog.slice(-10000)}`);
   await writeFile(
     failureLogPath,
     `Error: ${error?.stack ?? error}\n\nBrowser diagnostics:\n${pageDiagnostics.join("\n")}\n\nWrangler log:\n${workerLog}\n`,

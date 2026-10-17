@@ -2505,8 +2505,7 @@ pub(crate) fn render_published_revision(
         )
         .map_err(|error| match error {
             render_v2::V2RenderError::PageMissing => FunnelCommandError::SlugNotFound,
-            render_v2::V2RenderError::ImagesNotEnabled
-            | render_v2::V2RenderError::FormsNotEnabled => FunnelCommandError::V2PublicationBlocked,
+            render_v2::V2RenderError::ImagesNotEnabled => FunnelCommandError::V2PublicationBlocked,
             _ => FunnelCommandError::Internal,
         }),
         _ => Err(FunnelCommandError::Internal),
