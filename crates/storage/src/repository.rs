@@ -287,7 +287,7 @@ impl<'a> Repository<'a> {
         if revision.funnel_id != funnel.id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_schema_version(revision.schema_version)?;
+        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
@@ -478,7 +478,7 @@ impl<'a> Repository<'a> {
         if revision.funnel_id != funnel_id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_schema_version(revision.schema_version)?;
+        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
