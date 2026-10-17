@@ -373,11 +373,11 @@ impl DocumentV2 {
             }
             Edit::SetFormPurpose { form, purpose } => {
                 form_mut(&mut data, &form)?.purpose = purpose;
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::SetFormResult { form, result } => {
                 form_mut(&mut data, &form)?.result = result;
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::SetFormRequestConsent { form, copy } => {
                 let unchanged = form_ref(&data, &form)?.request_consent.copy == copy;
@@ -388,7 +388,7 @@ impl DocumentV2 {
                         copy,
                     };
                 }
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::SetFormMarketingOptIn { form, copy } => {
                 let current = data
@@ -413,7 +413,7 @@ impl DocumentV2 {
                     None
                 };
                 form_mut(&mut data, &form)?.marketing_opt_in = updated;
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::AddFormField { form, after, field } => {
                 let existing = form_ref(&data, &form)?.fields.len();
@@ -428,7 +428,7 @@ impl DocumentV2 {
                 let target = form_mut(&mut data, &form)?;
                 let insertion = insertion_index(&target.fields, after.as_ref(), FormField::id)?;
                 target.fields.insert(insertion, field.with_id(id));
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::SetFormField { form, field, value } => {
                 let target = form_mut(&mut data, &form)?;
@@ -440,7 +440,7 @@ impl DocumentV2 {
                         DocumentError::at("validation/form_field_missing", "field_id")
                     })?;
                 target.fields[existing] = value.with_id(field);
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::DeleteFormField { form, field } => {
                 let target = form_mut(&mut data, &form)?;
@@ -458,7 +458,7 @@ impl DocumentV2 {
                         DocumentError::at("validation/form_field_missing", "field_id")
                     })?;
                 target.fields.remove(index);
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
             Edit::ReorderFormFields { form, ordered } => {
                 let target = form_mut(&mut data, &form)?;
@@ -480,7 +480,7 @@ impl DocumentV2 {
                     reordered.push(prior.remove(index));
                 }
                 target.fields = reordered;
-                FocusTarget::Page(data.entry_page_id.clone())
+                form_focus_target(&data, &form)?
             }
         };
 
@@ -817,6 +817,21 @@ fn form_mut<'a>(data: &'a mut DocumentData, id: &FormId) -> Result<&'a mut FormV
         .ok_or_else(|| DocumentError::at("validation/form_missing", "form_id"))
 }
 
+fn form_focus_target(data: &DocumentData, id: &FormId) -> Result<FocusTarget, DocumentError> {
+    data.pages
+        .iter()
+        .flat_map(|page| &page.sections)
+        .flat_map(|section| &section.blocks)
+        .find_map(|block| match block {
+            BlockV2::Form {
+                id: block_id,
+                form_id,
+            } if form_id == id => Some(FocusTarget::Block(block_id.clone())),
+            _ => None,
+        })
+        .ok_or_else(|| DocumentError::new("internal/form_placement_missing"))
+}
+
 fn field_ids(data: &DocumentData) -> BTreeSet<String> {
     data.forms
         .iter()
@@ -951,6 +966,44 @@ mod tests {
             &mut ids,
         );
         assert!(outcome.is_ok(), "{}", outcome.err().unwrap());
+    }
+
+    #[test]
+    fn form_edits_keep_focus_on_the_form_placement() {
+        let mut ids = TestIds(0);
+        let created = starter()
+            .apply(
+                Edit::CreateForm {
+                    section: SectionId::parse("section-hero").unwrap(),
+                    after: None,
+                },
+                &mut ids,
+            )
+            .expect("form can be created");
+        let form = created.document.forms()[0].id().clone();
+        let block = created
+            .document
+            .pages()
+            .iter()
+            .flat_map(|page| page.sections())
+            .flat_map(|section| section.blocks())
+            .find(|block| matches!(block, BlockV2::Form { form_id, .. } if form_id == &form))
+            .expect("form placement exists")
+            .id()
+            .clone();
+
+        let edited = created
+            .document
+            .apply(
+                Edit::SetFormPurpose {
+                    form,
+                    purpose: "Collect a qualified request.".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("form purpose can be edited");
+
+        assert_eq!(edited.focus, FocusTarget::Block(block));
     }
 
     fn apply(document: &DocumentV2, edit: Edit, ids: &mut TestIds) -> DocumentV2 {

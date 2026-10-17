@@ -1,6 +1,7 @@
 use super::*;
 use eez_domain::document_v2::{
-    ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, IdKind, IdSource, NewBlock, SectionKind,
+    ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult, IdKind, IdSource,
+    NewBlock, SectionKind,
 };
 #[cfg(feature = "browser")]
 use eez_domain::document_v2::{BlockId, PageId, SectionId};
@@ -413,7 +414,7 @@ impl V2EditorState {
     }
 
     fn prune_form_ui_state(&mut self, document: &DocumentV2) {
-        let is_active = |key: &str| {
+        let is_active = |key: &str, allow_type_setting: bool| {
             let mut parts = key.split(':');
             if parts.next() != Some("form") {
                 return false;
@@ -432,19 +433,59 @@ impl V2EditorState {
                 return false;
             };
             match kind {
-                "setting" => true,
-                "field" => parts.next().is_some_and(|field_id| {
-                    form.fields()
+                "setting" => {
+                    let Some(setting) = parts.next() else {
+                        return false;
+                    };
+                    if parts.next().is_some() {
+                        return false;
+                    }
+                    match setting {
+                        "purpose" | "request-consent" => true,
+                        "result-message" => matches!(form.result(), FormResult::Inline { .. }),
+                        "marketing-copy" => form.marketing_opt_in().is_some(),
+                        _ => false,
+                    }
+                }
+                "field" => {
+                    let Some(field_id) = parts.next() else {
+                        return false;
+                    };
+                    let Some(setting) = parts.next() else {
+                        return false;
+                    };
+                    if parts.next().is_some() {
+                        return false;
+                    }
+                    let Some(field) = form
+                        .fields()
                         .iter()
-                        .any(|field| field.id().as_str() == field_id)
-                }),
+                        .find(|field| field.id().as_str() == field_id)
+                    else {
+                        return false;
+                    };
+                    match setting {
+                        "name" | "label" | "help" => true,
+                        "options" => matches!(field, FormField::Select { .. }),
+                        "min" | "max" => matches!(
+                            field,
+                            FormField::Text { .. }
+                                | FormField::Email { .. }
+                                | FormField::Phone { .. }
+                        ),
+                        "type" => allow_type_setting,
+                        _ => false,
+                    }
+                }
                 _ => false,
             }
         };
-        self.form_input_drafts.retain(|key, _| is_active(key));
-        self.form_input_errors.retain(|key, _| is_active(key));
+        self.form_input_drafts
+            .retain(|key, _| is_active(key, false));
+        self.form_input_errors
+            .retain(|key, _| is_active(key, false));
         self.form_pending_field_types
-            .retain(|key, _| is_active(key));
+            .retain(|key, _| is_active(key, true));
     }
 
     fn can_save(&self) -> bool {
@@ -2916,7 +2957,7 @@ async fn refresh_v2_publication_state(funnel_id: &str) -> Result<Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eez_domain::document_v2::BlueprintId;
+    use eez_domain::document_v2::{BlueprintId, SectionId};
 
     struct TestIds(u32);
 
@@ -2933,6 +2974,35 @@ mod tests {
     fn document() -> DocumentV2 {
         DocumentV2::starter("funnel-a", BlueprintId::LeadGen, ThemePreset::Minimal)
             .expect("valid V2 starter")
+    }
+
+    fn document_with_secondary_page() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document().canonical_bytes()).expect("starter document JSON");
+        value["pages"]
+            .as_array_mut()
+            .expect("pages array")
+            .push(serde_json::json!({
+                "id": "page-thanks",
+                "slug": "thanks",
+                "title": "Thanks",
+                "sections": [{
+                    "id": "section-thanks",
+                    "type": "hero",
+                    "blocks": []
+                }]
+            }));
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("entry page blocks")
+            .push(serde_json::json!({
+                "id": "block-to-thanks",
+                "kind": "button",
+                "label": "Continue",
+                "action": { "kind": "navigate_page", "page_id": "page-thanks" }
+            }));
+        let raw = serde_json::to_vec(&value).expect("updated document JSON");
+        DocumentV2::decode(&raw, "funnel-a").expect("valid document with a secondary page")
     }
 
     fn stage_capacity() -> V2StageCapacity {
@@ -3057,6 +3127,243 @@ mod tests {
             "checkbox".to_owned(),
         );
         assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn editing_a_form_preserves_the_current_page_in_the_preview_capture() {
+        let mut loaded = loaded_editor(document_with_secondary_page(), Some(stage_capacity()));
+        loaded.selected_page = "page-thanks".to_owned();
+        loaded.selected_section = Some("section-thanks".to_owned());
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(0, "funnel-a", Ok(loaded));
+
+        let created = state
+            .apply_local_edit(
+                Edit::CreateForm {
+                    section: SectionId::parse("section-thanks").expect("section id"),
+                    after: None,
+                },
+                "create-form-on-secondary-page".to_owned(),
+            )
+            .expect("form can be created on the selected page");
+        assert_eq!(created.page_id, "page-thanks");
+        state.pending = false;
+        let form = state
+            .document
+            .as_ref()
+            .expect("document remains loaded")
+            .forms()[0]
+            .id()
+            .clone();
+
+        let edited = state
+            .apply_local_edit(
+                Edit::SetFormPurpose {
+                    form,
+                    purpose: "Collect a qualified request.".to_owned(),
+                },
+                "edit-form-on-secondary-page".to_owned(),
+            )
+            .expect("form can be edited");
+
+        assert_eq!(state.selected_page, "page-thanks");
+        assert_eq!(edited.page_id, "page-thanks");
+    }
+
+    #[test]
+    fn changing_field_types_clears_inapplicable_form_drafts_and_errors() {
+        let mut ids = TestIds(0);
+        let created = document()
+            .apply(
+                Edit::CreateForm {
+                    section: SectionId::parse("section-hero").expect("section id"),
+                    after: None,
+                },
+                &mut ids,
+            )
+            .expect("form can be created")
+            .document;
+        let form = created.forms()[0].id().clone();
+        let text_field = created.forms()[0].fields()[0].id().clone();
+        let email_field = created.forms()[0].fields()[1].id().clone();
+        let created = created
+            .apply(
+                Edit::SetFormField {
+                    form: form.clone(),
+                    field: text_field.clone(),
+                    value: eez_domain::document_v2::NewFormField::Select {
+                        name: "name".to_owned(),
+                        label: "Your name".to_owned(),
+                        help: None,
+                        required: false,
+                        options: vec!["Option one".to_owned(), "Option two".to_owned()],
+                    },
+                },
+                &mut ids,
+            )
+            .expect("select field can be set up")
+            .document;
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(created, Some(stage_capacity()))),
+        );
+
+        let options_key = format!(
+            "form:{}:field:{}:options",
+            form.as_str(),
+            text_field.as_str()
+        );
+        let min_key = format!("form:{}:field:{}:min", form.as_str(), email_field.as_str());
+        let max_key = format!("form:{}:field:{}:max", form.as_str(), email_field.as_str());
+        for (key, message) in [
+            (options_key.as_str(), "Add at least two options."),
+            (
+                min_key.as_str(),
+                "Enter a whole number for the minimum length.",
+            ),
+            (
+                max_key.as_str(),
+                "Enter a whole number for the maximum length.",
+            ),
+        ] {
+            state
+                .form_input_drafts
+                .insert(key.to_owned(), "invalid".to_owned());
+            state
+                .form_input_errors
+                .insert(key.to_owned(), message.to_owned());
+        }
+        assert!(state.has_uncommitted_form_inputs());
+        assert!(!state.can_save());
+        assert!(!state.can_undo());
+
+        state
+            .apply_local_edit(
+                Edit::SetFormField {
+                    form: form.clone(),
+                    field: text_field,
+                    value: eez_domain::document_v2::NewFormField::Text {
+                        name: "name".to_owned(),
+                        label: "Your name".to_owned(),
+                        help: None,
+                        required: false,
+                        validation: None,
+                    },
+                },
+                "convert-select-to-text".to_owned(),
+            )
+            .expect("select field can be converted to text");
+        assert!(!state.form_input_drafts.contains_key(&options_key));
+        assert!(!state.form_input_errors.contains_key(&options_key));
+        assert!(state.form_input_drafts.contains_key(&min_key));
+        state.pending = false;
+
+        state
+            .apply_local_edit(
+                Edit::SetFormField {
+                    form,
+                    field: email_field,
+                    value: eez_domain::document_v2::NewFormField::Checkbox {
+                        name: "email".to_owned(),
+                        label: "Email address".to_owned(),
+                        help: None,
+                        required: true,
+                    },
+                },
+                "convert-email-to-checkbox".to_owned(),
+            )
+            .expect("email field can be converted to checkbox");
+        assert!(!state.form_input_drafts.contains_key(&min_key));
+        assert!(!state.form_input_drafts.contains_key(&max_key));
+        assert!(!state.form_input_errors.contains_key(&min_key));
+        assert!(!state.form_input_errors.contains_key(&max_key));
+        assert!(!state.has_uncommitted_form_inputs());
+        state.pending = false;
+
+        assert!(state.can_save());
+        assert!(state.can_undo());
+        state.saved_document_json = state
+            .document
+            .as_ref()
+            .expect("document remains loaded")
+            .canonical_json();
+        assert!(state.can_publish());
+    }
+
+    #[test]
+    fn changing_form_settings_clears_hidden_result_and_marketing_errors() {
+        let mut ids = TestIds(0);
+        let created = document_with_secondary_page()
+            .apply(
+                Edit::CreateForm {
+                    section: SectionId::parse("section-hero").expect("section id"),
+                    after: None,
+                },
+                &mut ids,
+            )
+            .expect("form can be created")
+            .document;
+        let form = created.forms()[0].id().clone();
+        let success_page = created.pages()[1].id().clone();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(created, Some(stage_capacity()))),
+        );
+        let result_key = format!("form:{}:setting:result-message", form.as_str());
+        let marketing_key = format!("form:{}:setting:marketing-copy", form.as_str());
+
+        state
+            .form_input_drafts
+            .insert(result_key.clone(), "Thank you".to_owned());
+        state
+            .form_input_errors
+            .insert(result_key.clone(), "Enter a message.".to_owned());
+        state
+            .apply_local_edit(
+                Edit::SetFormResult {
+                    form: form.clone(),
+                    result: FormResult::SuccessPage {
+                        page_id: success_page,
+                    },
+                },
+                "hide-inline-result-message".to_owned(),
+            )
+            .unwrap_or_else(|| panic!("form result can be changed: {:?}", state.error));
+        assert!(!state.form_input_drafts.contains_key(&result_key));
+        assert!(!state.form_input_errors.contains_key(&result_key));
+        state.pending = false;
+
+        state
+            .apply_local_edit(
+                Edit::SetFormMarketingOptIn {
+                    form: form.clone(),
+                    copy: Some("Send me updates.".to_owned()),
+                },
+                "enable-marketing-opt-in".to_owned(),
+            )
+            .expect("marketing opt-in can be enabled");
+        state.pending = false;
+        state
+            .form_input_drafts
+            .insert(marketing_key.clone(), "invalid".to_owned());
+        state
+            .form_input_errors
+            .insert(marketing_key.clone(), "Enter marketing wording.".to_owned());
+
+        state
+            .apply_local_edit(
+                Edit::SetFormMarketingOptIn { form, copy: None },
+                "disable-marketing-opt-in".to_owned(),
+            )
+            .expect("marketing opt-in can be disabled");
+
+        assert!(!state.form_input_drafts.contains_key(&marketing_key));
+        assert!(!state.form_input_errors.contains_key(&marketing_key));
+        assert!(!state.has_uncommitted_form_inputs());
     }
 
     #[test]
