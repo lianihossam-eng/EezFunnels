@@ -1536,6 +1536,33 @@ h1 {
   gap: 12px;
 }
 
+.submission-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 16px;
+  color: #44516a;
+  font-size: 13px;
+}
+
+.submission-toolbar select,
+.submission-status-control select {
+  min-height: 40px;
+  padding: 8px 34px 8px 11px;
+  border: 1px solid #cbd4e4;
+  border-radius: 8px;
+  background: #fff;
+  color: #26334b;
+  font: inherit;
+}
+
+.submission-toolbar select:focus-visible,
+.submission-status-control select:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 2px;
+}
+
 .submission-retention-note,
 .submission-list-end {
   margin: 0;
@@ -1564,7 +1591,7 @@ h1 {
 
 .submission-entry > summary {
   display: grid;
-  grid-template-columns: minmax(110px, 0.65fr) minmax(120px, 1fr) minmax(145px, 1fr) auto;
+  grid-template-columns: minmax(100px, 0.65fr) minmax(120px, 1fr) minmax(145px, 1fr) auto auto;
   align-items: center;
   gap: 14px;
   min-height: 68px;
@@ -1631,6 +1658,47 @@ h1 {
   border-color: #b8dfca;
   color: #175b36;
   background: #effaf3;
+}
+
+.submission-status-badge {
+  justify-self: start;
+  padding: 5px 8px;
+  border: 1px solid #c9d6fa;
+  border-radius: 999px;
+  background: #f1f5ff;
+  color: #344c8f;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.submission-status-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 17px;
+  color: #344159;
+  font-size: 13px;
+}
+
+.submission-status-control select {
+  min-width: 150px;
+}
+
+.submission-status-control select:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.submission-status-feedback {
+  color: #59667d;
+  font-size: 12px;
+}
+
+.submission-status-error {
+  color: #a12525;
+  font-size: 12px;
 }
 
 .submission-entry-content {
@@ -1990,7 +2058,8 @@ h1 {
   .submission-entry-purpose,
   .submission-entry-funnel,
   .submission-entry-time,
-  .submission-consent-state {
+  .submission-consent-state,
+  .submission-status-badge {
     grid-column: 1;
   }
 
@@ -1998,10 +2067,11 @@ h1 {
   .submission-entry-funnel { grid-row: 2; }
   .submission-entry-time { grid-row: 3; }
   .submission-consent-state { grid-row: 4; }
+  .submission-status-badge { grid-row: 5; }
 
   .submission-entry > summary::after {
     grid-column: 2;
-    grid-row: 1 / span 4;
+    grid-row: 1 / span 5;
     align-self: center;
   }
 

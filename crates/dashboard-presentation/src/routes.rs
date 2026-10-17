@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 mod editor;
 use editor::FunnelDetail;
-use eez_domain::{FormCompletionPeriod, FunnelBlueprint};
+use eez_domain::{FormCompletionPeriod, FormSubmissionStatus, FunnelBlueprint};
 use serde::Deserialize;
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
@@ -162,6 +162,7 @@ struct FormSubmissionListResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct FormSubmissionListItem {
     submission_id: String,
+    status: FormSubmissionStatus,
     funnel_name: String,
     page_title: String,
     form_purpose: String,
@@ -297,6 +298,7 @@ impl SubmissionRequestVersion {
 struct SubmissionInboxState {
     #[cfg(any(feature = "browser", test))]
     latest: SubmissionRequestVersion,
+    status: Option<FormSubmissionStatus>,
     response: Option<Result<FormSubmissionListResponse, ()>>,
     loading_more: bool,
     load_more_error: bool,
@@ -314,6 +316,19 @@ impl SubmissionInboxState {
     }
 
     #[cfg(any(feature = "browser", test))]
+    fn set_status(&mut self, status: Option<FormSubmissionStatus>) -> bool {
+        if self.status == status {
+            return false;
+        }
+        self.latest = self.latest.next();
+        self.status = status;
+        self.response = None;
+        self.loading_more = false;
+        self.load_more_error = false;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
     fn complete(
         &mut self,
         request: SubmissionRequestVersion,
@@ -327,7 +342,13 @@ impl SubmissionInboxState {
     }
 
     #[cfg(any(feature = "browser", test))]
-    fn begin_more(&mut self) -> Option<(SubmissionRequestVersion, String)> {
+    fn begin_more(
+        &mut self,
+    ) -> Option<(
+        SubmissionRequestVersion,
+        String,
+        Option<FormSubmissionStatus>,
+    )> {
         if self.loading_more {
             return None;
         }
@@ -335,7 +356,7 @@ impl SubmissionInboxState {
         let request = self.latest.next();
         self.latest = request;
         self.loading_more = true;
-        Some((request, cursor))
+        Some((request, cursor, self.status))
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -381,6 +402,36 @@ fn Submissions() -> Element {
             h1 { "Submissions" }
             p { class: "page-description", "Review form responses alongside the consent and retention record captured at submission time." }
         }
+        div { class: "submission-toolbar",
+            label { r#for: "submission-status-filter", "Filter submissions by status" }
+            select {
+                id: "submission-status-filter",
+                "aria-label": "Filter submissions by status",
+                value: snapshot.status.map(FormSubmissionStatus::as_str).unwrap_or("all"),
+                onchange: move |event| {
+                    let selected = match event.value().as_str() {
+                        "all" => Some(None),
+                        "new" => Some(Some(FormSubmissionStatus::New)),
+                        "contacted" => Some(Some(FormSubmissionStatus::Contacted)),
+                        "qualified" => Some(Some(FormSubmissionStatus::Qualified)),
+                        "closed" => Some(Some(FormSubmissionStatus::Closed)),
+                        _ => None,
+                    };
+                    #[cfg(feature = "browser")]
+                    if let Some(selected) = selected {
+                        let mut load_state = load_state;
+                        load_state.with_mut(|state| state.set_status(selected));
+                        spawn(async move { refresh_submission_list(load_state).await; });
+                    }
+                    #[cfg(not(feature = "browser"))]
+                    let _ = selected;
+                },
+                option { value: "all", "All statuses" }
+                for status in FormSubmissionStatus::ALL {
+                    option { value: status.as_str(), "{status.label()}" }
+                }
+            }
+        }
         match snapshot.response {
             None => rsx! {
                 section { class: "submission-loading", "aria-label": "Loading submissions", role: "status", "aria-busy": "true",
@@ -405,17 +456,22 @@ fn Submissions() -> Element {
                 }
             },
             Some(Ok(response)) if response.items.is_empty() => rsx! {
-                section { class: "empty-state submission-empty", "aria-label": "No submissions yet",
-                    h2 { "No form submissions yet" }
-                    p { "Responses from published funnels will appear here while they remain within the configured retention period." }
-                    Link { to: RouteView::Funnels {}, class: "secondary-button", "View funnels" }
+                section { class: "empty-state submission-empty", "aria-label": "No matching submissions",
+                    if let Some(status) = snapshot.status {
+                        h2 { "No {status.label().to_lowercase()} submissions" }
+                        p { "No retained submissions currently match this status." }
+                    } else {
+                        h2 { "No form submissions yet" }
+                        p { "Responses from published funnels will appear here while they remain within the configured retention period." }
+                        Link { to: RouteView::Funnels {}, class: "secondary-button", "View funnels" }
+                    }
                 }
             },
             Some(Ok(response)) => rsx! {
                 section { class: "submission-list", "aria-label": "Form submissions",
                     p { class: "submission-retention-note", "Only submissions within the configured retention period are shown." }
                     for item in response.items.iter() {
-                        SubmissionEntry { key: "{item.submission_id}", item: item.clone() }
+                        SubmissionEntry { key: "{item.submission_id}", item: item.clone(), load_state }
                     }
                     if snapshot.load_more_error {
                         p { class: "editor-save-error", role: "alert", "Older submissions could not be loaded. Your current results are still available." }
@@ -599,7 +655,20 @@ fn FunnelCompletions(id: String) -> Element {
 }
 
 #[component]
-fn SubmissionEntry(item: FormSubmissionListItem) -> Element {
+fn SubmissionEntry(
+    item: FormSubmissionListItem,
+    load_state: Signal<SubmissionInboxState>,
+) -> Element {
+    #[allow(unused_mut)]
+    let mut current_status = use_signal(|| item.status);
+    let mut status_pending = use_signal(|| false);
+    let mut status_error = use_signal(|| false);
+    let status_control_id = format!("submission-status-{}", item.submission_id);
+    let submission_id = item.submission_id.clone();
+    let status_accessible_name = format!(
+        "Follow-up status for {} submitted {}",
+        item.form_purpose, item.submitted_at_label
+    );
     rsx! {
         details { class: "submission-entry",
             summary {
@@ -609,8 +678,53 @@ fn SubmissionEntry(item: FormSubmissionListItem) -> Element {
                 span { class: if item.marketing_opt_in { "submission-consent-state opted-in" } else { "submission-consent-state" },
                     if item.marketing_opt_in { "Marketing opt-in granted" } else { "Marketing opt-in not granted" }
                 }
+                span { class: "submission-status-badge", "{current_status().label()}" }
             }
             div { class: "submission-entry-content",
+                div { class: "submission-status-control",
+                    label { r#for: "{status_control_id}", "Follow-up status" }
+                    select {
+                        id: "{status_control_id}",
+                        "aria-label": "{status_accessible_name}",
+                        value: current_status().as_str(),
+                        disabled: status_pending(),
+                        onchange: move |event| {
+                            let Some(next_status) = FormSubmissionStatus::from_wire_value(&event.value()) else {
+                                return;
+                            };
+                            if status_pending() || next_status == current_status() {
+                                return;
+                            }
+                            status_pending.set(true);
+                            status_error.set(false);
+                            let submission_id = submission_id.clone();
+                            #[cfg(feature = "browser")]
+                            spawn(async move {
+                                if update_public_form_submission_status(&submission_id, next_status).await.is_ok() {
+                                    current_status.set(next_status);
+                                    refresh_submission_list(load_state).await;
+                                } else {
+                                    status_error.set(true);
+                                }
+                                status_pending.set(false);
+                            });
+                            #[cfg(not(feature = "browser"))]
+                            {
+                                let _ = (submission_id, next_status);
+                                status_pending.set(false);
+                            }
+                        },
+                        option { value: "new", "New" }
+                        option { value: "contacted", "Contacted" }
+                        option { value: "qualified", "Qualified" }
+                        option { value: "closed", "Closed" }
+                    }
+                    if status_pending() {
+                        span { class: "submission-status-feedback", role: "status", "Saving status…" }
+                    } else if status_error() {
+                        span { class: "submission-status-error", role: "alert", "Status could not be saved. Choose a status to retry." }
+                    }
+                }
                 dl { class: "submission-context-list",
                     div { dt { "Page" } dd { "{item.page_title}" } }
                     div { dt { "Form" } dd { "{item.form_purpose}" } }
@@ -1268,10 +1382,21 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
 }
 
 #[cfg(feature = "browser")]
-async fn load_submission_page(cursor: Option<&str>) -> Result<FormSubmissionListResponse, ()> {
-    let path = match cursor {
-        Some(cursor) => format!("/api/submissions?cursor={cursor}"),
-        None => "/api/submissions".to_owned(),
+async fn load_submission_page(
+    cursor: Option<&str>,
+    status: Option<FormSubmissionStatus>,
+) -> Result<FormSubmissionListResponse, ()> {
+    let mut parameters = Vec::new();
+    if let Some(status) = status {
+        parameters.push(format!("status={}", status.as_str()));
+    }
+    if let Some(cursor) = cursor {
+        parameters.push(format!("cursor={cursor}"));
+    }
+    let path = if parameters.is_empty() {
+        "/api/submissions".to_owned()
+    } else {
+        format!("/api/submissions?{}", parameters.join("&"))
     };
     let response = api_request("GET", &path, None, None).await?;
     if response.status != 200 {
@@ -1327,8 +1452,11 @@ async fn load_form_completion_report(
 
 #[cfg(feature = "browser")]
 async fn refresh_submission_list(mut load_state: Signal<SubmissionInboxState>) {
-    let request_version = load_state.with_mut(SubmissionInboxState::begin);
-    let result = load_submission_page(None).await;
+    let (request_version, status) = load_state.with_mut(|state| {
+        let request_version = state.begin();
+        (request_version, state.status)
+    });
+    let result = load_submission_page(None, status).await;
     if load_state.try_peek().is_err() {
         return;
     }
@@ -1351,15 +1479,47 @@ async fn refresh_form_completion_report(
 
 #[cfg(feature = "browser")]
 async fn load_more_submissions(mut load_state: Signal<SubmissionInboxState>) {
-    let Some((request_version, cursor)) = load_state.with_mut(SubmissionInboxState::begin_more)
+    let Some((request_version, cursor, status)) =
+        load_state.with_mut(SubmissionInboxState::begin_more)
     else {
         return;
     };
-    let result = load_submission_page(Some(&cursor)).await;
+    let result = load_submission_page(Some(&cursor), status).await;
     if load_state.try_peek().is_err() {
         return;
     }
     load_state.with_mut(|state| state.complete_more(request_version, result));
+}
+
+#[cfg(feature = "browser")]
+async fn update_public_form_submission_status(
+    submission_id: &str,
+    status: FormSubmissionStatus,
+) -> Result<(), ()> {
+    let response = api_request(
+        "POST",
+        &format!("/api/submissions/{submission_id}/status"),
+        Some(serde_json::json!({ "status": status }).to_string()),
+        None,
+    )
+    .await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let result = serde_json::from_str::<FormSubmissionStatusMutationResponse>(&response.body)
+        .map_err(|_| ())?;
+    if result.submission_id == submission_id && result.status == status {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+#[cfg(feature = "browser")]
+#[derive(Deserialize)]
+struct FormSubmissionStatusMutationResponse {
+    submission_id: String,
+    status: FormSubmissionStatus,
 }
 
 #[cfg(feature = "browser")]
@@ -1736,6 +1896,7 @@ mod tests {
     fn submission_item(submission_id: &str) -> FormSubmissionListItem {
         FormSubmissionListItem {
             submission_id: submission_id.to_owned(),
+            status: FormSubmissionStatus::New,
             funnel_name: "Lead capture".to_owned(),
             page_title: "Home".to_owned(),
             form_purpose: "Contact".to_owned(),
@@ -1770,8 +1931,9 @@ mod tests {
             Ok(submission_page(&["newest"], Some("cursor-one"))),
         );
 
-        let (older_load, cursor) = state.begin_more().expect("next page can load");
+        let (older_load, cursor, status) = state.begin_more().expect("next page can load");
         assert_eq!(cursor, "cursor-one");
+        assert_eq!(status, None);
         state.complete_more(
             older_load,
             Ok(submission_page(&["older"], Some("cursor-two"))),
@@ -1796,7 +1958,7 @@ mod tests {
             initial_load,
             Ok(submission_page(&["newest"], Some("cursor-one"))),
         );
-        let (failed_load, _) = state.begin_more().expect("next page can load");
+        let (failed_load, _, _) = state.begin_more().expect("next page can load");
         state.complete_more(failed_load, Err(()));
 
         assert!(state.load_more_error);
@@ -1804,7 +1966,7 @@ mod tests {
             state.response.as_ref().unwrap().as_ref().unwrap().items[0].submission_id,
             "newest"
         );
-        let (retry, cursor) = state.begin_more().expect("failed page can be retried");
+        let (retry, cursor, _) = state.begin_more().expect("failed page can be retried");
         assert_eq!(cursor, "cursor-one");
         state.complete_more(retry, Ok(submission_page(&["older"], None)));
         assert!(!state.load_more_error);
@@ -1819,6 +1981,28 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn changing_submission_status_filter_clears_pages_and_ignores_stale_loads() {
+        let mut state = SubmissionInboxState::default();
+        let unfiltered = state.begin();
+        state.complete(
+            unfiltered,
+            Ok(submission_page(&["newest"], Some("cursor-one"))),
+        );
+        let (older, _, _) = state.begin_more().expect("older page starts");
+
+        assert!(state.set_status(Some(FormSubmissionStatus::Contacted)));
+        assert_eq!(state.status, Some(FormSubmissionStatus::Contacted));
+        assert!(state.response.is_none());
+        assert!(!state.loading_more);
+        assert!(!state.load_more_error);
+
+        state.complete_more(older, Ok(submission_page(&["stale"], None)));
+        assert!(state.response.is_none());
+        assert!(state.set_status(None));
+        assert!(!state.set_status(None));
     }
 
     #[test]

@@ -26,6 +26,7 @@ fn registry_lists_each_executable_command_once_with_its_actor_and_key_policy() {
             "funnel.document.stage.v2",
             "funnel.list",
             "form.submission.list",
+            "form.submission.status.set",
             "form.completion.report",
             "funnel.public.read",
             "funnel.publish",
@@ -82,6 +83,7 @@ fn registry_lists_each_executable_command_once_with_its_actor_and_key_policy() {
             "funnel.document.preview.v2",
             "funnel.document.stage.v2",
             "form.submission.list",
+            "form.submission.status.set",
             "form.completion.report",
             "funnel.revision.save.v2",
             "funnel.revision.history.read.v2",
@@ -124,6 +126,7 @@ fn dispatch_preflight_requires_keys_only_for_registered_mutations() {
         "funnel.editor.read",
         "funnel.list",
         "form.submission.list",
+        "form.submission.status.set",
         "form.completion.report",
     ] {
         assert!(resolve_command(CommandActor::LocalUser, id, None).is_ok());

@@ -9,6 +9,7 @@
     "wrangler": "wrangler",
     "test:pr010:migration": "python3 scripts/test-pr010-migration.py",
     "test:pr052:migration": "python3 scripts/test-pr052-migration.py",
+    "test:pr053:migration": "python3 scripts/test-pr053-migration.py",
     "test:pr010:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr011:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr012:browser": "node scripts/test-pr010-browser.mjs",
