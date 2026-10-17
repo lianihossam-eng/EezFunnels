@@ -1047,6 +1047,47 @@ try {
   const conversionFunnel = await apiCreate(origin, "PR-024 browser conversion");
   await page.goto(`${origin}/funnels/${conversionFunnel.funnel.id}`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "PR-024 browser conversion" }).waitFor();
+  const conversionPreviewRoute = `**/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`;
+  let releaseConversionPreview;
+  let reportConversionPreviewReady;
+  const conversionPreviewReady = new Promise((resolve) => (reportConversionPreviewReady = resolve));
+  const conversionPreviewReleased = new Promise((resolve) => (releaseConversionPreview = resolve));
+  await page.route(conversionPreviewRoute, async (route) => {
+    const response = await route.fetch();
+    const preview = await response.json();
+    reportConversionPreviewReady();
+    await conversionPreviewReleased;
+    await route.fulfill({
+      response,
+      body: JSON.stringify({
+        ...preview,
+        conversion_available: true,
+        blockers: [],
+        warnings: [],
+        preview_html: "<!doctype html><html><body>stale conversion preview</body></html>",
+      }),
+    });
+  });
+  const delayedConversionPreview = page
+    .getByRole("button", { name: "Review typed conversion" })
+    .click();
+  await conversionPreviewReady;
+  await page.evaluate((funnelId) => {
+    window.history.pushState(null, "", `/funnels/${funnelId}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, secondaryId);
+  await page.getByRole("heading", { name: "PR-010 route race" }).waitFor();
+  releaseConversionPreview();
+  await delayedConversionPreview;
+  await delay(100);
+  assert.equal(
+    await page.locator(".editor-conversion-preview iframe").count(),
+    0,
+    "A late V1 conversion preview must not be applied to the next funnel route",
+  );
+  await page.unroute(conversionPreviewRoute);
+  await page.goto(`${origin}/funnels/${conversionFunnel.funnel.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-024 browser conversion" }).waitFor();
   const reviewConversion = page.getByRole("button", { name: "Review typed conversion" });
   const blockedConversionResponse = page.waitForResponse(
     (response) => response.request().method() === "POST"

@@ -325,6 +325,13 @@ struct EditorSaveCapture {
     settings_changes: Vec<EditorSettingChange>,
 }
 
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorConversionCapture {
+    route_epoch: u64,
+    funnel_id: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct EditorState {
     funnel_id: String,
@@ -364,6 +371,19 @@ impl EditorState {
         *self = Self::for_route(funnel_id);
         self.route_epoch = route_epoch;
         route_epoch
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn conversion_capture(&self) -> EditorConversionCapture {
+        EditorConversionCapture {
+            route_epoch: self.route_epoch,
+            funnel_id: self.funnel_id.clone(),
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn is_current_conversion(&self, capture: &EditorConversionCapture) -> bool {
+        self.route_epoch == capture.route_epoch && self.funnel_id == capture.funnel_id
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -1112,11 +1132,16 @@ async fn load_editor(funnel_id: &str) -> Result<EditorReadResponse, ()> {
 
 #[cfg(feature = "browser")]
 async fn preview_v1_conversion(
-    mut state: Signal<EditorConversionState>,
+    mut conversion_state: Signal<EditorConversionState>,
+    editor_state: Signal<EditorState>,
+    capture: EditorConversionCapture,
     funnel_id: String,
     base_revision_id: String,
 ) {
-    state.set(EditorConversionState {
+    if capture.funnel_id != funnel_id || !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
+    conversion_state.set(EditorConversionState {
         loading: true,
         ..EditorConversionState::default()
     });
@@ -1130,16 +1155,29 @@ async fn preview_v1_conversion(
         Ok(response) => Err(error_message(&response.body)),
         Err(()) => Err("The conversion preview could not be reached.".to_owned()),
     };
+    if !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
     match result {
-        Ok(preview) => state.set(EditorConversionState {
+        Ok(preview) => conversion_state.set(EditorConversionState {
             preview: Some(preview),
             ..EditorConversionState::default()
         }),
-        Err(error) => state.set(EditorConversionState {
+        Err(error) => conversion_state.set(EditorConversionState {
             error: Some(error),
             ..EditorConversionState::default()
         }),
     }
+}
+
+#[cfg(feature = "browser")]
+fn is_current_conversion_route(
+    editor_state: Signal<EditorState>,
+    capture: &EditorConversionCapture,
+) -> bool {
+    editor_state
+        .try_peek()
+        .is_ok_and(|state| state.is_current_conversion(capture))
 }
 
 #[cfg(feature = "browser")]
@@ -1151,12 +1189,17 @@ struct EditorConversionCommitResponse {
 
 #[cfg(feature = "browser")]
 async fn commit_v1_conversion(
-    mut state: Signal<EditorConversionState>,
+    mut conversion_state: Signal<EditorConversionState>,
     mut idempotency_key: Signal<Option<PreparedIdempotencyKey>>,
     mut idempotency_body: Signal<Option<String>>,
+    editor_state: Signal<EditorState>,
+    capture: EditorConversionCapture,
     funnel_id: String,
     base_revision_id: String,
 ) {
+    if capture.funnel_id != funnel_id || !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
     let path = format!("/api/funnels/{funnel_id}/convert-v2");
     let body = serde_json::json!({ "base_revision_id": base_revision_id }).to_string();
     if idempotency_body().as_deref() != Some(body.as_str()) {
@@ -1169,7 +1212,7 @@ async fn commit_v1_conversion(
     let key = match prepare_idempotency_key("POST", &path, Some(&body), idempotency_key()) {
         Ok(key) => key,
         Err(()) => {
-            state.with_mut(|state| {
+            conversion_state.with_mut(|state| {
                 state.error = Some("A retry-safe conversion could not be prepared.".to_owned());
             });
             return;
@@ -1177,13 +1220,16 @@ async fn commit_v1_conversion(
     };
     idempotency_key.set(Some(key.clone()));
     idempotency_body.set(Some(body.clone()));
-    state.with_mut(|state| {
+    conversion_state.with_mut(|state| {
         state.committing = true;
         state.retryable = false;
         state.error = None;
         state.committed_revision_id = None;
     });
     let response = api_request("POST", &path, Some(body), Some(key.clone())).await;
+    if !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
     match response {
         Ok(response) if response.status == 201 => {
             match serde_json::from_str::<EditorConversionCommitResponse>(&response.body) {
@@ -1191,13 +1237,13 @@ async fn commit_v1_conversion(
                     let _ = clear_idempotency_storage(&key);
                     idempotency_key.set(None);
                     idempotency_body.set(None);
-                    state.with_mut(|state| {
+                    conversion_state.with_mut(|state| {
                         state.committing = false;
                         state.retryable = false;
                         state.committed_revision_id = Some(saved.revision_id);
                     });
                 }
-                _ => state.with_mut(|state| {
+                _ => conversion_state.with_mut(|state| {
                     state.committing = false;
                     state.error = Some(
                         "The conversion result was invalid. The V1 revision is still preserved."
@@ -1213,13 +1259,13 @@ async fn commit_v1_conversion(
                 idempotency_key.set(None);
                 idempotency_body.set(None);
             }
-            state.with_mut(|state| {
+            conversion_state.with_mut(|state| {
                 state.committing = false;
                 state.retryable = retryable;
                 state.error = Some(error_message(&response.body));
             });
         }
-        Err(()) => state.with_mut(|state| {
+        Err(()) => conversion_state.with_mut(|state| {
             state.committing = false;
             state.retryable = true;
             state.error = Some(
@@ -1902,8 +1948,17 @@ fn FunnelDetailV1(id: String) -> Element {
                             let funnel_id = conversion_review_funnel_id.clone();
                             let base_revision_id = conversion_review_base_revision_id.clone();
                             #[cfg(feature = "browser")]
+                            let capture = state.with(EditorState::conversion_capture);
+                            #[cfg(feature = "browser")]
                             spawn(async move {
-                                preview_v1_conversion(conversion_state, funnel_id, base_revision_id).await;
+                                preview_v1_conversion(
+                                    conversion_state,
+                                    state,
+                                    capture,
+                                    funnel_id,
+                                    base_revision_id,
+                                )
+                                .await;
                             });
                             #[cfg(not(feature = "browser"))]
                             let _ = (funnel_id, base_revision_id);
@@ -1969,11 +2024,15 @@ fn FunnelDetailV1(id: String) -> Element {
                                     let funnel_id = conversion_commit_funnel_id.clone();
                                     let base_revision_id = conversion_commit_base_revision_id.clone();
                                     #[cfg(feature = "browser")]
+                                    let capture = state.with(EditorState::conversion_capture);
+                                    #[cfg(feature = "browser")]
                                     spawn(async move {
                                         commit_v1_conversion(
                                             conversion_state,
                                             conversion_key,
                                             conversion_body,
+                                            state,
+                                            capture,
                                             funnel_id,
                                             base_revision_id,
                                         ).await;
@@ -2691,6 +2750,19 @@ mod tests {
             }),
         );
         state
+    }
+
+    #[test]
+    fn conversion_completion_is_scoped_to_the_captured_funnel_route() {
+        let mut state = EditorState::for_route("funnel-a".to_owned());
+        let capture = state.conversion_capture();
+        assert!(state.is_current_conversion(&capture));
+
+        state.begin_route("funnel-b".to_owned());
+        assert!(!state.is_current_conversion(&capture));
+
+        state.begin_route("funnel-a".to_owned());
+        assert!(!state.is_current_conversion(&capture));
     }
 
     fn editor_response(
