@@ -183,7 +183,7 @@ pub(crate) fn validate_data(
                     "pages.slug",
                 ));
             }
-        } else if !valid_page_slug(&page.slug) {
+        } else if !is_valid_page_slug(&page.slug) {
             return Err(DocumentError::at(
                 "validation/page_slug_invalid",
                 "pages.slug",
@@ -621,7 +621,7 @@ fn validate_nonempty_text(
     validate_block_text(value, maximum, path)
 }
 
-fn valid_page_slug(value: &str) -> bool {
+pub fn is_valid_page_slug(value: &str) -> bool {
     if value.is_empty() || value.len() > 64 || !value.is_ascii() {
         return false;
     }

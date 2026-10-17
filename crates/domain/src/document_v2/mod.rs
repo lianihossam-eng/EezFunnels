@@ -13,6 +13,7 @@ pub use theme::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
     ThemeColors, ThemeOverrides, ThemePartialOverrides, ThemeResponsive, ThemeV2, TypeScale,
 };
+pub use validate::is_valid_page_slug;
 
 pub const STRUCTURAL_SCHEMA_VERSION_V2: u32 = 2;
 pub const DOCUMENT_VERSION_V2: u32 = 2;

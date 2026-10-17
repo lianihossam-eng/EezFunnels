@@ -9,6 +9,7 @@ use axum::Router;
 use eez_commands::{command_ids, command_registry, Session};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tower_service::Service;
 use worker::{event, Context, Env, HttpRequest};
 
@@ -144,8 +145,8 @@ pub async fn fetch(
         funnel_editor_preview_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/revisions") {
         funnel_editor_save_response(&env, request, funnel_id, correlation_id.clone()).await
-    } else if let Some(slug) = public_slug_from_path(&request_path) {
-        public_funnel_response(&env, request, slug, correlation_id.clone()).await
+    } else if let Some(route) = public_route_from_path(&request_path) {
+        public_funnel_response(&env, request, route, correlation_id.clone()).await
     } else if let Some(funnel_id) = request_path.strip_prefix("/api/funnels/") {
         funnel_item_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
@@ -261,9 +262,32 @@ const MAX_V2_STAGE_REQUEST_BYTES: usize = 16_384;
 const MAX_V2_STAGE_UPLOAD_BYTES: usize = eez_storage::stage::V2_DOCUMENT_STAGE_MAX_BYTES;
 const MAX_V2_PREVIEW_ENVELOPE_BYTES: usize = MAX_V2_DOCUMENT_BYTES * 6 + 4 * 1_024;
 
-fn public_slug_from_path(path: &str) -> Option<&str> {
-    let slug = path.strip_prefix("/f/")?;
-    (!slug.is_empty() && !slug.contains('/')).then_some(slug)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PublicFunnelRoute<'a> {
+    funnel_slug: &'a str,
+    page_slug: Option<&'a str>,
+}
+
+fn public_route_from_path(path: &str) -> Option<PublicFunnelRoute<'_>> {
+    let mut segments = path.split('/');
+    if !segments.next()?.is_empty() || segments.next()? != "f" {
+        return None;
+    }
+    let funnel_slug = segments.next()?;
+    if funnel_slug.is_empty() {
+        return None;
+    }
+    match (segments.next(), segments.next()) {
+        (None, None) => Some(PublicFunnelRoute {
+            funnel_slug,
+            page_slug: None,
+        }),
+        (Some(page_slug), None) if !page_slug.is_empty() => Some(PublicFunnelRoute {
+            funnel_slug,
+            page_slug: Some(page_slug),
+        }),
+        _ => None,
+    }
 }
 
 fn valid_public_slug(slug: &str) -> bool {
@@ -490,31 +514,33 @@ fn publication_command_parameters(
 async fn public_funnel_response(
     env: &Env,
     request: HttpRequest,
-    slug: &str,
+    route: PublicFunnelRoute<'_>,
     correlation_id: String,
 ) -> Response<axum::body::Body> {
     if request.method() != Method::GET {
         return method_not_allowed_for(&correlation_id, "GET");
     }
-    if !valid_public_slug(slug) {
+    if !valid_public_slug(route.funnel_slug) {
         return funnel_slug_not_found_response(&correlation_id);
     }
-    let parameters = serde_json::json!({ "slug": slug }).to_string();
+    let parameters = match route.page_slug {
+        Some(page_slug) => {
+            serde_json::json!({ "slug": route.funnel_slug, "page_slug": page_slug }).to_string()
+        }
+        None => serde_json::json!({ "slug": route.funnel_slug }).to_string(),
+    };
     let result =
         match execute_funnel_command(env, command_ids::FUNNEL_PUBLIC_READ, &parameters, None).await
         {
             Ok(result) => result,
             Err(error) => return funnel_command_error_response(error, &correlation_id),
         };
-    let (Some(revision_id), Some(html)) = (
-        result.get("revision_id").and_then(Value::as_str),
-        result.get("html").and_then(Value::as_str),
-    ) else {
+    let Some(html) = result.get("html").and_then(Value::as_str) else {
         let error = ApiError::from_code("internal/unexpected");
         log_api_error(&error, &correlation_id, error.code());
         return error_response(&error, correlation_id);
     };
-    let etag = format!("\"{revision_id}\"");
+    let etag = public_html_etag(html);
     let etag_header = match HeaderValue::from_str(&etag) {
         Ok(etag_header) => etag_header,
         Err(_) => {
@@ -543,6 +569,10 @@ async fn public_funnel_response(
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     response
+}
+
+fn public_html_etag(html: &str) -> String {
+    format!("\"{:x}\"", Sha256::digest(html.as_bytes()))
 }
 
 fn request_if_none_match(headers: &HeaderMap<HeaderValue>, etag: &str) -> bool {
@@ -2143,10 +2173,11 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 mod tests {
     use super::{
         correlation_id, editor_command_parameters, funnel_subroute, normalize_correlation_id,
-        public_slug_from_path, publication_command_parameters, request_if_none_match,
-        stage_upload_token, v1_conversion_command_parameters, v2_document_revision_query,
-        v2_edit_command_parameters, v2_preview_command_parameters, v2_save_command_parameters,
-        v2_stage_command_parameters, valid_public_slug, EditorCommandParametersError,
+        public_html_etag, public_route_from_path, publication_command_parameters,
+        request_if_none_match, stage_upload_token, v1_conversion_command_parameters,
+        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
+        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
+        EditorCommandParametersError,
     };
     use axum::http::{HeaderMap, HeaderValue};
 
@@ -2275,8 +2306,28 @@ mod tests {
         headers.insert("if-none-match", HeaderValue::from_static("\"older\""));
         assert!(!request_if_none_match(&headers, etag));
 
-        assert_eq!(public_slug_from_path("/f/quick-offer"), Some("quick-offer"));
-        assert_eq!(public_slug_from_path("/f/quick-offer/extra"), None);
+        assert_eq!(
+            public_route_from_path("/f/quick-offer"),
+            Some(super::PublicFunnelRoute {
+                funnel_slug: "quick-offer",
+                page_slug: None,
+            })
+        );
+        assert_eq!(
+            public_route_from_path("/f/quick-offer/checkout"),
+            Some(super::PublicFunnelRoute {
+                funnel_slug: "quick-offer",
+                page_slug: Some("checkout"),
+            })
+        );
+        assert_eq!(public_route_from_path("/f/quick-offer/extra/depth"), None);
+        assert_eq!(public_route_from_path("/f/quick-offer/"), None);
+        assert_eq!(public_route_from_path("/f//checkout"), None);
+        assert_eq!(public_route_from_path("/f/quick-offer/checkout/"), None);
+        assert_ne!(
+            public_html_etag("<main>entry</main>"),
+            public_html_etag("<main>checkout</main>")
+        );
         assert!(valid_public_slug("quick-offer-123"));
         assert!(!valid_public_slug("../private"));
         assert!(!valid_public_slug("quick_offer"));

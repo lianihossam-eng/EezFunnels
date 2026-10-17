@@ -128,9 +128,32 @@ fn published_revision_dispatch_uses_the_stored_schema_version() {
         render_manifest_json: legacy_revision.render_manifest_json.clone(),
         created_at: "2026-10-16T00:00:00Z".to_owned(),
     };
-    let legacy_html = render_published_revision(&legacy_record, "legacy-funnel")
-        .expect("V1 reader remains available");
+    let legacy_html =
+        render_published_revision(&legacy_record, "legacy-funnel", "legacy-funnel", None)
+            .expect("V1 reader remains available");
     assert!(legacy_html.contains("Legacy offer"));
+    assert_eq!(
+        render_published_revision(
+            &legacy_record,
+            "legacy-funnel",
+            "legacy-funnel",
+            Some("next"),
+        )
+        .expect_err("V1 funnels do not have public page routes")
+        .code(),
+        "not_found/slug"
+    );
+    assert_eq!(
+        render_published_revision(
+            &legacy_record,
+            "legacy-funnel",
+            "legacy-funnel",
+            Some("next"),
+        )
+        .expect_err("V1 funnels do not have public page routes")
+        .code(),
+        "not_found/slug"
+    );
 
     let typed =
         FunnelCreateCommandV2::from_json(r#"{"name":"Typed offer","blueprint":"lead_gen"}"#)
@@ -146,7 +169,7 @@ fn published_revision_dispatch_uses_the_stored_schema_version() {
         render_manifest_json: typed_revision.render_manifest_json.clone(),
         created_at: "2026-10-16T00:00:00Z".to_owned(),
     };
-    let typed_html = render_published_revision(&typed_record, "typed-funnel")
+    let typed_html = render_published_revision(&typed_record, "typed-funnel", "typed-funnel", None)
         .expect("V2 reader selected by the stored row");
     assert!(typed_html.contains("Welcome to your new funnel"));
 }

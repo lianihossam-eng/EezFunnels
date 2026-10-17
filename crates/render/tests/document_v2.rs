@@ -12,8 +12,16 @@ fn document() -> DocumentV2 {
     .expect("valid V2 starter")
 }
 
+fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String {
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(manifest_json).expect("serialized manifest");
+    manifest["renderer_version"] = serde_json::Value::String(version.to_owned());
+    String::from_utf8(serde_json_canonicalizer::to_vec(&manifest).expect("canonical manifest"))
+        .expect("UTF-8 manifest")
+}
+
 #[test]
-fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v4_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -22,7 +30,7 @@ fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v3");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v4");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -151,7 +159,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v3", "renderer-v3-next");
+        .replace("renderer-v4", "renderer-v4-next");
     assert!(matches!(
         render_published(
             2,
@@ -241,7 +249,9 @@ fn v2_image_and_form_content_are_not_saved_or_rendered_before_their_gates() {
 }
 
 #[test]
-fn v2_internal_page_edges_do_not_claim_public_routes_before_pr027() {
+fn v2_public_pages_render_and_internal_edges_use_canonical_routes() {
+    use eez_render::document_v2::render_published_route;
+
     let mut value: serde_json::Value = serde_json::from_str(
         std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
     )
@@ -252,21 +262,91 @@ fn v2_internal_page_edges_do_not_claim_public_routes_before_pr027() {
     value["pages"]
         .as_array_mut()
         .expect("pages")
-        .push(serde_json::json!({"id":"page-next", "slug":"next", "title":"Next", "sections":[]}));
+        .push(serde_json::json!({
+            "id":"page-next",
+            "slug":"next",
+            "title":"Next page",
+            "sections":[{
+                "id":"section-next",
+                "type":"hero",
+                "blocks":[{
+                    "id":"block-next-title",
+                    "kind":"heading",
+                    "level":1,
+                    "text":"Next page content"
+                }]
+            }]
+        }));
     let data_json = serde_json::to_vec(&value).expect("document serialization");
     let multipage = DocumentV2::decode(&data_json, "funnel-01").expect("valid page graph");
     let prepared = prepare_revision(&multipage, "revision-multipage").expect("manifest");
+    let legacy_manifest =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v3");
 
-    assert!(matches!(
-        render_published(
+    let entry = render_published_route(
+        2,
+        "funnel-01",
+        "revision-multipage",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+        "quick-offer",
+        None,
+    )
+    .expect("entry page renders");
+    assert!(entry.contains("<a class=\"v2-button\" href=\"/f/quick-offer/next\">Next</a>"));
+
+    let legacy_entry = render_published_route(
+        2,
+        "funnel-01",
+        "revision-multipage",
+        &prepared.data_json,
+        &legacy_manifest,
+        "quick-offer",
+        None,
+    )
+    .expect("stored V3 entry page remains readable");
+    assert!(legacy_entry.contains("<span class=\"v2-button\" aria-disabled=\"true\">Next</span>"));
+    assert!(!legacy_entry.contains("href=\"/f/quick-offer/next\""));
+    assert_eq!(
+        render_published_route(
+            2,
+            "funnel-01",
+            "revision-multipage",
+            &prepared.data_json,
+            &legacy_manifest,
+            "quick-offer",
+            Some("next"),
+        )
+        .expect_err("V3 manifests cannot expose routes added by V4"),
+        V2RenderError::PageMissing
+    );
+
+    let next = render_published_route(
+        2,
+        "funnel-01",
+        "revision-multipage",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+        "quick-offer",
+        Some("next"),
+    )
+    .expect("requested page renders");
+    assert!(next.contains("<title>Next page</title>"));
+    assert!(next.contains("Next page content"));
+    assert_ne!(entry, next);
+    assert_eq!(
+        render_published_route(
             2,
             "funnel-01",
             "revision-multipage",
             &prepared.data_json,
             &prepared.render_manifest_json,
-        ),
-        Err(V2RenderError::MultiPagePublicRouteUnavailable)
-    ));
+            "quick-offer",
+            Some("missing"),
+        )
+        .expect_err("unknown page is not rendered"),
+        V2RenderError::PageMissing
+    );
 }
 
 struct TestIds(u32);
