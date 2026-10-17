@@ -58,6 +58,14 @@ impl V2StageCapacity {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PublicationDisplayState {
+    Checking,
+    Unknown,
+    Unpublished,
+    Published(String),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct V2LocalDraft {
     version: u8,
@@ -404,6 +412,25 @@ impl V2EditorState {
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
             && self.can_retry_publication_as(true)
+    }
+
+    fn publication_display_state(&self) -> PublicationDisplayState {
+        if self.publication_refreshing {
+            PublicationDisplayState::Checking
+        } else if self.publication_state_unknown {
+            PublicationDisplayState::Unknown
+        } else if let Some(revision_id) = &self.published_revision_id {
+            PublicationDisplayState::Published(revision_id.clone())
+        } else {
+            PublicationDisplayState::Unpublished
+        }
+    }
+
+    fn show_live_funnel_link(&self) -> bool {
+        matches!(
+            self.publication_display_state(),
+            PublicationDisplayState::Published(_)
+        )
     }
 
     fn can_unpublish(&self) -> bool {
@@ -2044,10 +2071,17 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                         p { strong { "Draft revision " } code { "{view.base_revision_id}" } }
                         p {
                             strong { "Live revision " }
-                            if let Some(live) = view.published_revision_id.as_ref() { code { "{live}" } }
-                            else { span { "Not published" } }
+                            if view.publication_refreshing {
+                                span { "Checking…" }
+                            } else if view.publication_state_unknown {
+                                span { "Status unavailable" }
+                            } else if let Some(live) = view.published_revision_id.as_ref() {
+                                code { "{live}" }
+                            } else {
+                                span { "Not published" }
+                            }
                         }
-                        if view.published_revision_id.is_some() {
+                        if view.show_live_funnel_link() {
                             if let Some(funnel) = view.funnel.as_ref() {
                                 a { class: "editor-live-link", href: "/f/{funnel.slug}", target: "_blank", rel: "noopener noreferrer", "Open live funnel" }
                             }
@@ -2956,6 +2990,11 @@ mod tests {
             .expect("current revision can be published");
 
         assert!(state.begin_publication_refresh(&capture));
+        assert_eq!(
+            state.publication_display_state(),
+            PublicationDisplayState::Checking
+        );
+        assert!(!state.show_live_funnel_link());
         state.finish_publication_refresh(&capture, Ok(Some("revision-live-elsewhere".to_owned())));
 
         assert_eq!(
@@ -2964,6 +3003,11 @@ mod tests {
         );
         assert!(!state.publication_refreshing);
         assert!(!state.publication_state_unknown);
+        assert_eq!(
+            state.publication_display_state(),
+            PublicationDisplayState::Published("revision-live-elsewhere".to_owned())
+        );
+        assert!(state.show_live_funnel_link());
         assert!(!state.publication_retryable);
     }
 
@@ -2985,6 +3029,11 @@ mod tests {
 
         assert!(!state.publication_refreshing);
         assert!(state.publication_state_unknown);
+        assert_eq!(
+            state.publication_display_state(),
+            PublicationDisplayState::Unknown
+        );
+        assert!(!state.show_live_funnel_link());
         assert!(!state.can_publish());
         assert!(!state.can_unpublish());
         assert!(state.begin_publication(false).is_none());

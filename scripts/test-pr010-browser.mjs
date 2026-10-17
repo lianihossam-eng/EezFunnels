@@ -1176,6 +1176,44 @@ try {
   assert.equal(stageUploadCount, 1, "retry does not upload to the consumed stage");
   await page.unroute(finalizationRoute);
 
+  const firstPublishResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/publish`),
+  );
+  await page.getByRole("button", { name: "Publish saved revision" }).click();
+  assert.equal((await firstPublishResponse).status(), 200);
+  await page.getByRole("link", { name: "Open live funnel" }).waitFor();
+
+  const unpublishRoute = `**/api/funnels/${conversionFunnel.funnel.id}/unpublish`;
+  await page.route(unpublishRoute, async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "conflict/publish_stale_revision" }),
+    });
+  });
+  await page.route(funnelMetadataRoute, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      return;
+    }
+    await route.continue();
+  });
+  const unpublishConflictResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/unpublish`),
+  );
+  await page.getByRole("button", { name: "Unpublish" }).click();
+  await page.getByRole("button", { name: "Confirm unpublish" }).click();
+  assert.equal((await unpublishConflictResponse).status(), 409);
+  await page.getByRole("alert").filter({ hasText: "current state could not be loaded" }).waitFor();
+  await page.getByText("Status unavailable").waitFor();
+  assert.equal(await page.getByRole("link", { name: "Open live funnel" }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Publish saved revision" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Unpublish" }).isDisabled(), true);
+  await page.unroute(unpublishRoute);
+  await page.unroute(funnelMetadataRoute);
+
   await page.addScriptTag({ content: require("axe-core").source });
   const convertedAxe = await page.evaluate(async () => {
     const result = await window.axe.run(document, {
@@ -1185,7 +1223,7 @@ try {
   });
   assert.deepEqual(convertedAxe, [], `Converted typed editor axe findings: ${JSON.stringify(convertedAxe)}`);
 
-  console.log(`PR-010/011/012/013/024/031 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, schema-probe retry, button destination editing, stage-capacity fallback, final-save receipt replay, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
+  console.log(`PR-010/011/012/013/024/031 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, schema-probe retry, button destination editing, stage-capacity fallback, final-save receipt replay, failed publication refresh UI, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,
