@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
+use eez_domain::FormCompletionPeriod;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
@@ -299,6 +300,13 @@ pub struct PublicFormSubmissionRevision {
 pub struct PublicFormSubmissionPage {
     pub items: Vec<PublicFormSubmissionRecord>,
     pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct FormCompletionCountRow {
+    pub utc_day: String,
+    pub form_id: Option<String>,
+    pub completions: i64,
 }
 
 pub enum MutationResult {
@@ -1450,6 +1458,30 @@ impl<'a> Repository<'a> {
         let has_more = items.len() > PUBLIC_FORM_SUBMISSION_PAGE_SIZE;
         items.truncate(PUBLIC_FORM_SUBMISSION_PAGE_SIZE);
         Ok(PublicFormSubmissionPage { items, has_more })
+    }
+
+    pub async fn form_completion_count_rows(
+        &self,
+        funnel_id: &str,
+        period: FormCompletionPeriod,
+    ) -> RepositoryResult<Vec<FormCompletionCountRow>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        let start_offset = D1Type::Integer(i32::from(period.days() - 1));
+        let period_days = D1Type::Integer(i32::from(period.days()));
+        let rows = self
+            .database
+            .prepare(
+                "WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), grouped(utc_day, form_id, completions) AS (SELECT strftime('%Y-%m-%d', submissions.submitted_at, 'unixepoch'), submissions.form_id, COUNT(*) FROM public_form_submissions AS submissions JOIN funnel ON funnel.id = submissions.funnel_id CROSS JOIN bounds WHERE submissions.submitted_at >= bounds.start_at AND submissions.submitted_at < bounds.end_at AND submissions.expires_at > bounds.now GROUP BY strftime('%Y-%m-%d', submissions.submitted_at, 'unixepoch'), submissions.form_id) SELECT days.utc_day, grouped.form_id, COALESCE(grouped.completions, 0) AS completions FROM days CROSS JOIN funnel LEFT JOIN grouped ON grouped.utc_day = days.utc_day ORDER BY days.utc_day ASC, grouped.form_id ASC",
+            )
+            .bind_refs([
+                &funnel_id,
+                &start_offset,
+                &period_days,
+            ])?
+            .all()
+            .await?
+            .results::<FormCompletionCountRow>()?;
+        Ok(rows)
     }
 
     pub async fn list_public_form_submission_revisions(
