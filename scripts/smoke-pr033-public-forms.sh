@@ -585,6 +585,91 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert b"submission_key" not in inbox_body and b"request_fingerprint" not in inbox_body
         assert inbox["items"][0]["request_consent_acknowledged"] is True, inbox
         assert inbox["items"][0]["request_consent_copy_version"] == "request-v2", inbox
+        assert all(item["status"] == "new" for item in inbox["items"]), inbox
+
+        triage_id = inbox["items"][0]["submission_id"]
+        status_path = f"/api/submissions/{triage_id}/status"
+        status_payload = json.dumps({"status": "contacted"}, separators=(",", ":")).encode()
+        status_headers = {"Content-Type": "application/json"}
+        update_status, update_body, update_headers = request(
+            "POST", status_path, status_payload, status_headers
+        )
+        assert update_status == 200, update_body
+        assert update_headers.get("cache-control") == "private, no-store", update_headers
+        assert json.loads(update_body)["status"] == "contacted", update_body
+        repeated_status, repeated_body, _ = request(
+            "POST", status_path, status_payload, status_headers
+        )
+        assert repeated_status == 200, repeated_body
+        assert json.loads(repeated_body)["status"] == "contacted", repeated_body
+
+        contacted_status, contacted_body, contacted_headers = request(
+            "GET", "/api/submissions?status=contacted"
+        )
+        assert contacted_status == 200, contacted_body
+        assert contacted_headers.get("cache-control") == "private, no-store", contacted_headers
+        contacted = json.loads(contacted_body)
+        assert [item["submission_id"] for item in contacted["items"]] == [triage_id], contacted
+        assert contacted["items"][0]["status"] == "contacted", contacted
+        original_submission = next(item for item in inbox["items"] if item["submission_id"] == triage_id)
+        for retained_key in (
+            "fields",
+            "request_consent_acknowledged",
+            "request_consent_copy_version",
+            "request_consent_copy",
+            "request_consent_recorded_at_label",
+            "marketing_opt_in",
+            "marketing_opt_in_copy_version",
+            "marketing_opt_in_copy",
+            "marketing_opt_in_recorded_at_label",
+        ):
+            assert contacted["items"][0][retained_key] == original_submission[retained_key], (
+                retained_key, contacted["items"][0], original_submission
+            )
+        new_status, new_body, _ = request("GET", "/api/submissions?status=new")
+        assert new_status == 200, new_body
+        assert len(json.loads(new_body)["items"]) == 2, new_body
+
+        for invalid_query in (
+            "status=unknown",
+            "status=new&status=closed",
+            "status=new&other=value",
+        ):
+            invalid_status, invalid_body, invalid_headers = request(
+                "GET", f"/api/submissions?{invalid_query}"
+            )
+            assert invalid_status == 400, (invalid_query, invalid_status, invalid_body)
+            assert invalid_headers.get("cache-control") == "private, no-store", invalid_headers
+
+        wrong_content_status, _, wrong_content_headers = request(
+            "POST", status_path, b'{"status":"closed"}', {"Content-Type": "text/plain"}
+        )
+        assert wrong_content_status == 400, wrong_content_status
+        assert wrong_content_headers.get("cache-control") == "private, no-store", wrong_content_headers
+        invalid_status, _, _ = request(
+            "POST",
+            status_path,
+            b'{"status":"closed","status":"new"}',
+            status_headers,
+        )
+        assert invalid_status == 400, invalid_status
+        unknown_status, _, unknown_headers = request(
+            "POST",
+            "/api/submissions/11111111-1111-4111-8111-111111111111/status",
+            b'{"status":"closed"}',
+            status_headers,
+        )
+        assert unknown_status == 404, unknown_status
+        assert unknown_headers.get("cache-control") == "private, no-store", unknown_headers
+        status_method, _, status_method_headers = request("GET", status_path)
+        assert status_method == 405, status_method
+        assert status_method_headers.get("cache-control") == "private, no-store", status_method_headers
+        status_host_denied, _, status_host_denied_headers = request(
+            "POST", status_path, status_payload,
+            {"Host": "not-allowed.example", "Content-Type": "application/json"},
+        )
+        assert status_host_denied == 403, status_host_denied
+        assert status_host_denied_headers.get("cache-control") == "private, no-store", status_host_denied_headers
 
         invalid_inbox_status, invalid_inbox_body, invalid_inbox_headers = request(
             "GET", "/api/submissions?limit=10"
@@ -770,6 +855,16 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert len(second_page["items"]) == 3, second_page
         assert second_page["next_cursor"] is None, second_page
         assert second_page["items"][-1]["fields"][0]["value"] == "Inbox fixture 01", second_page
+        assert all(item["status"] == "new" for item in second_page["items"]), second_page
+
+        expired_status, _, expired_headers = request(
+            "POST",
+            "/api/submissions/90000000-0000-4000-8000-000000000002/status",
+            b'{"status":"closed"}',
+            {"Content-Type": "application/json"},
+        )
+        assert expired_status == 404, expired_status
+        assert expired_headers.get("cache-control") == "private, no-store", expired_headers
 
         if os.environ.get("PR033_BROWSER") == "1":
             subprocess.run(

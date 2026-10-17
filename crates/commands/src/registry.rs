@@ -20,6 +20,7 @@ pub mod command_ids {
     pub const FUNNEL_REVISION_SAVE: &str = "funnel.revision.save";
     pub const FUNNEL_UNPUBLISH: &str = "funnel.unpublish";
     pub const FORM_SUBMISSION_LIST: &str = "form.submission.list";
+    pub const FORM_SUBMISSION_STATUS_SET: &str = "form.submission.status.set";
     pub const FORM_COMPLETION_REPORT: &str = "form.completion.report";
 }
 
@@ -58,6 +59,7 @@ pub(crate) enum CommandHandler {
     RevisionHistoryReadV2,
     List,
     FormSubmissionList,
+    FormSubmissionStatusSet,
     FormCompletionReport,
     PublicRead,
     Publish,
@@ -84,6 +86,7 @@ impl CommandHandler {
             Self::RevisionHistoryReadV2 => command_ids::FUNNEL_REVISION_HISTORY_READ_V2,
             Self::List => command_ids::FUNNEL_LIST,
             Self::FormSubmissionList => command_ids::FORM_SUBMISSION_LIST,
+            Self::FormSubmissionStatusSet => command_ids::FORM_SUBMISSION_STATUS_SET,
             Self::FormCompletionReport => command_ids::FORM_COMPLETION_REPORT,
             Self::PublicRead => command_ids::FUNNEL_PUBLIC_READ,
             Self::Publish => command_ids::FUNNEL_PUBLISH,
@@ -136,7 +139,7 @@ pub(crate) struct ResolvedCommand<'key> {
     pub(crate) idempotency_key: Option<&'key str>,
 }
 
-const COMMAND_REGISTRY: [CommandDefinition; 20] = [
+const COMMAND_REGISTRY: [CommandDefinition; 21] = [
     CommandDefinition {
         id: command_ids::FUNNEL_CREATE,
         description: "Create a funnel from a built-in blueprint.",
@@ -240,6 +243,15 @@ const COMMAND_REGISTRY: [CommandDefinition; 20] = [
         idempotency_policy: IdempotencyPolicy::NotRequired,
         mcp_exposure: McpExposure::Hidden,
         handler: CommandHandler::FormSubmissionList,
+    },
+    CommandDefinition {
+        id: command_ids::FORM_SUBMISSION_STATUS_SET,
+        description:
+            "Set the follow-up status of a retained public form submission for the local owner.",
+        actor: CommandActor::LocalUser,
+        idempotency_policy: IdempotencyPolicy::NotRequired,
+        mcp_exposure: McpExposure::Hidden,
+        handler: CommandHandler::FormSubmissionStatusSet,
     },
     CommandDefinition {
         id: command_ids::FORM_COMPLETION_REPORT,

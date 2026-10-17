@@ -4,8 +4,8 @@ use std::fmt::{Display, Formatter};
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
-    DomainError, FormCompletionPeriod, FormSubmissionChannel, Funnel, FunnelBlueprint, FunnelId,
-    RenderManifest, Revision, RevisionId, Section, ThemePreset,
+    DomainError, FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, Funnel,
+    FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section, ThemePreset,
 };
 use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
@@ -41,6 +41,10 @@ mod v1_conversion_tests;
 #[cfg(test)]
 #[path = "funnel/form_completion_tests.rs"]
 mod form_completion_tests;
+
+#[cfg(test)]
+#[path = "funnel/form_submission_status_tests.rs"]
+mod form_submission_status_tests;
 
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
@@ -645,6 +649,8 @@ impl FunnelListCommand {
 struct FormSubmissionListCommand {
     #[serde(default)]
     cursor: Option<PublicFormSubmissionCursor>,
+    #[serde(default)]
+    status: Option<FormSubmissionStatus>,
 }
 
 impl FormSubmissionListCommand {
@@ -652,6 +658,27 @@ impl FormSubmissionListCommand {
 
     fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         serde_json::from_str(parameters).map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FormSubmissionStatusSetCommand {
+    submission_id: String,
+    status: FormSubmissionStatus,
+}
+
+impl FormSubmissionStatusSetCommand {
+    const ID: &'static str = command_ids::FORM_SUBMISSION_STATUS_SET;
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let command: Self = serde_json::from_str(parameters)?;
+        let parsed = uuid::Uuid::parse_str(&command.submission_id)
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        if parsed.to_string() != command.submission_id {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
     }
 }
 
@@ -1028,6 +1055,13 @@ struct FormSubmissionListResult {
 }
 
 #[derive(Serialize)]
+struct FormSubmissionStatusSetResult {
+    command_id: &'static str,
+    submission_id: String,
+    status: FormSubmissionStatus,
+}
+
+#[derive(Serialize)]
 struct FormCompletionReportResult {
     command_id: &'static str,
     funnel_id: String,
@@ -1061,6 +1095,7 @@ struct FormSubmissionChannelCount {
 #[derive(Serialize)]
 struct FormSubmissionListItem {
     submission_id: String,
+    status: FormSubmissionStatus,
     funnel_name: String,
     page_title: String,
     form_purpose: String,
@@ -1215,6 +1250,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             CommandHandler::FormSubmissionList => {
                 self.execute_form_submission_list(parameters).await
             }
+            CommandHandler::FormSubmissionStatusSet => {
+                self.execute_form_submission_status_set(parameters).await
+            }
             CommandHandler::FormCompletionReport => {
                 self.execute_form_completion_report(parameters).await
             }
@@ -1331,7 +1369,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let command = FormSubmissionListCommand::from_json(parameters)?;
         let page = self
             .repository
-            .list_public_form_submissions(command.cursor.as_ref())
+            .list_public_form_submissions(command.cursor.as_ref(), command.status)
             .await?;
         let revision_ids = page
             .items
@@ -1377,6 +1415,26 @@ impl<'repo, 'database> Session<'repo, 'database> {
             command_id: FormSubmissionListCommand::ID,
             items,
             next_cursor,
+        })
+        .map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_form_submission_status_set(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FormSubmissionStatusSetCommand::from_json(parameters)?;
+        let updated = self
+            .repository
+            .set_public_form_submission_status(&command.submission_id, command.status)
+            .await?;
+        if !updated {
+            return Err(FunnelCommandError::SubmissionNotFound);
+        }
+        serde_json::to_value(FormSubmissionStatusSetResult {
+            command_id: FormSubmissionStatusSetCommand::ID,
+            submission_id: command.submission_id,
+            status: command.status,
         })
         .map_err(|_| FunnelCommandError::Internal)
     }
@@ -2913,6 +2971,7 @@ fn form_submission_list_item(
 
     Ok(FormSubmissionListItem {
         submission_id: record.submission_id,
+        status: record.triage_status,
         funnel_name: record.funnel_name,
         page_title: page.title().to_owned(),
         form_purpose: form.purpose().to_owned(),
@@ -3039,6 +3098,7 @@ pub enum FunnelCommandError {
     StalePublishedRevision,
     EditorRevisionLimitReached,
     FunnelNotFound,
+    SubmissionNotFound,
     RevisionNotFound,
     SlugNotFound,
     UnknownCommand,
@@ -3064,6 +3124,7 @@ impl FunnelCommandError {
             Self::StalePublishedRevision => "conflict/publish_stale_revision",
             Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
             Self::FunnelNotFound => "not_found/funnel",
+            Self::SubmissionNotFound => "not_found/route",
             Self::RevisionNotFound => "not_found/revision",
             Self::SlugNotFound => "not_found/slug",
             Self::UnknownCommand => "validation/operation_not_supported",

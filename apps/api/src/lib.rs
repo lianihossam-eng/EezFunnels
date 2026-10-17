@@ -10,7 +10,7 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
-use eez_domain::{FormCompletionPeriod, FormSubmissionChannel};
+use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
     NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
@@ -112,6 +112,8 @@ pub async fn fetch(
         media_asset_response(&env, request, asset_id, correlation_id.clone()).await
     } else if request_path == "/api/v2/stage-capacity" {
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
+    } else if let Some(submission_id) = form_submission_status_id_from_path(&request_path) {
+        form_submission_status_response(&env, request, submission_id, correlation_id.clone()).await
     } else if request_path == "/api/submissions" {
         form_submission_list_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/funnels" {
@@ -206,7 +208,10 @@ pub async fn fetch(
         router.call(request).await?
     };
 
-    if funnel_subroute(&request_path, "/completions").is_some() {
+    if funnel_subroute(&request_path, "/completions").is_some()
+        || request_path == "/api/submissions"
+        || request_path.starts_with("/api/submissions/")
+    {
         response.headers_mut().insert(
             "cache-control",
             HeaderValue::from_static("private, no-store"),
@@ -1123,6 +1128,24 @@ fn is_urlencoded_form(headers: &HeaderMap<HeaderValue>) -> bool {
     parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
 }
 
+fn is_json_content_type(headers: &HeaderMap<HeaderValue>) -> bool {
+    let values = headers.get_all(axum::http::header::CONTENT_TYPE);
+    if values.iter().count() != 1 {
+        return false;
+    }
+    let Some(value) = values.iter().next().and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    if !parts
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return false;
+    }
+    parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
+}
+
 fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, ()> {
     let Some(query) = query.filter(|query| !query.is_empty()) else {
         return Err(());
@@ -1142,35 +1165,77 @@ fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, (
     period.ok_or(())
 }
 
-fn public_form_submission_cursor(
-    query: Option<&str>,
-) -> Result<Option<PublicFormSubmissionCursor>, ()> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PublicFormSubmissionQuery {
+    cursor: Option<PublicFormSubmissionCursor>,
+    status: Option<FormSubmissionStatus>,
+}
+
+fn public_form_submission_query(query: Option<&str>) -> Result<PublicFormSubmissionQuery, ()> {
     let Some(query) = query.filter(|query| !query.is_empty()) else {
-        return Ok(None);
+        return Ok(PublicFormSubmissionQuery {
+            cursor: None,
+            status: None,
+        });
     };
     let mut cursor = None;
+    let mut status = None;
     for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        if name != "cursor" || cursor.is_some() {
-            return Err(());
+        match name.as_ref() {
+            "cursor" if cursor.is_none() => {
+                let Some((submitted_at_text, submission_id)) = value.split_once('.') else {
+                    return Err(());
+                };
+                let submitted_at = submitted_at_text.parse::<i64>().map_err(|_| ())?;
+                let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
+                if submitted_at <= 0
+                    || submitted_at > 9_007_199_254_740_991
+                    || submitted_at.to_string() != submitted_at_text
+                    || parsed_id.to_string() != submission_id
+                {
+                    return Err(());
+                }
+                cursor = Some(PublicFormSubmissionCursor {
+                    submitted_at,
+                    submission_id: submission_id.to_owned(),
+                });
+            }
+            "status" if status.is_none() => {
+                status = Some(FormSubmissionStatus::from_wire_value(&value).ok_or(())?);
+            }
+            _ => return Err(()),
         }
-        let Some((submitted_at_text, submission_id)) = value.split_once('.') else {
-            return Err(());
-        };
-        let submitted_at = submitted_at_text.parse::<i64>().map_err(|_| ())?;
-        let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
-        if submitted_at <= 0
-            || submitted_at > 9_007_199_254_740_991
-            || submitted_at.to_string() != submitted_at_text
-            || parsed_id.to_string() != submission_id
-        {
-            return Err(());
-        }
-        cursor = Some(PublicFormSubmissionCursor {
-            submitted_at,
-            submission_id: submission_id.to_owned(),
-        });
     }
-    Ok(cursor)
+    Ok(PublicFormSubmissionQuery { cursor, status })
+}
+
+fn form_submission_status_id_from_path(path: &str) -> Option<&str> {
+    let route = path.strip_prefix("/api/submissions/")?;
+    let (submission_id, suffix) = route.split_once('/')?;
+    (suffix == "status" && !submission_id.is_empty()).then_some(submission_id)
+}
+
+fn form_submission_status_command_parameters(
+    submission_id: &str,
+    body: &str,
+) -> Result<String, ()> {
+    let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
+    if parsed_id.to_string() != submission_id {
+        return Err(());
+    }
+    validate_unique_json(body).map_err(|_| ())?;
+    let value: Value = serde_json::from_str(body).map_err(|_| ())?;
+    let object = value.as_object().ok_or(())?;
+    if object.len() != 1 || object.keys().any(|key| key != "status") {
+        return Err(());
+    }
+    let status = object.get("status").and_then(Value::as_str).ok_or(())?;
+    FormSubmissionStatus::from_wire_value(status).ok_or(())?;
+    serde_json::to_string(&serde_json::json!({
+        "submission_id": submission_id,
+        "status": status,
+    }))
+    .map_err(|_| ())
 }
 
 fn public_form_submission_identity(query: Option<&str>) -> Option<PublicFormSubmissionIdentity> {
@@ -1362,8 +1427,8 @@ async fn form_submission_list_response(
         );
         return response;
     }
-    let cursor = match public_form_submission_cursor(request.uri().query()) {
-        Ok(cursor) => cursor,
+    let submission_query = match public_form_submission_query(request.uri().query()) {
+        Ok(query) => query,
         Err(()) => {
             let error = ApiError::from_code("validation/invalid_cursor");
             let mut response = error_response(&error, correlation_id.clone());
@@ -1374,7 +1439,11 @@ async fn form_submission_list_response(
             return response;
         }
     };
-    let parameters = serde_json::json!({ "cursor": cursor }).to_string();
+    let parameters = serde_json::json!({
+        "cursor": submission_query.cursor,
+        "status": submission_query.status,
+    })
+    .to_string();
     match execute_funnel_command(env, command_ids::FORM_SUBMISSION_LIST, &parameters, None).await {
         Ok(result) => {
             let mut response = json_success_response(result, StatusCode::OK, &correlation_id, None);
@@ -1393,6 +1462,65 @@ async fn form_submission_list_response(
                 HeaderValue::from_static("private, no-store"),
             );
             response
+        }
+    }
+}
+
+async fn form_submission_status_response(
+    env: &Env,
+    request: HttpRequest,
+    submission_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::POST {
+        return method_not_allowed_for(&correlation_id, "POST");
+    }
+    if !is_json_content_type(request.headers()) {
+        return error_response(
+            &ApiError::from_code("validation/invalid_json"),
+            correlation_id,
+        );
+    }
+    let body = match to_bytes(axum::body::Body::new(request.into_body()), 1_024).await {
+        Ok(body) => body,
+        Err(_) => {
+            return error_response(
+                &ApiError::from_code("validation/invalid_json"),
+                correlation_id,
+            )
+        }
+    };
+    let body = match std::str::from_utf8(&body) {
+        Ok(body) => body,
+        Err(_) => {
+            return error_response(
+                &ApiError::from_code("validation/invalid_json"),
+                correlation_id,
+            )
+        }
+    };
+    let parameters = match form_submission_status_command_parameters(submission_id, body) {
+        Ok(parameters) => parameters,
+        Err(()) => {
+            return error_response(
+                &ApiError::from_code("validation/invalid_json"),
+                correlation_id,
+            )
+        }
+    };
+    match execute_funnel_command(
+        env,
+        command_ids::FORM_SUBMISSION_STATUS_SET,
+        &parameters,
+        None,
+    )
+    .await
+    {
+        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Err(error) => {
+            let error = ApiError::from_code(error.code());
+            log_api_error(&error, &correlation_id, error.code());
+            error_response(&error, correlation_id)
         }
     }
 }
@@ -3010,9 +3138,11 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 mod tests {
     use super::{
         bind_public_form_submission_identity, correlation_id, editor_command_parameters,
-        form_completion_period, funnel_subroute, normalize_correlation_id, parse_public_form_body,
-        public_form_submission_channel_from_page_query, public_form_submission_cursor,
-        public_form_submission_identity, public_form_submission_route_from_path,
+        form_completion_period, form_submission_status_command_parameters,
+        form_submission_status_id_from_path, funnel_subroute, is_json_content_type,
+        normalize_correlation_id, parse_public_form_body,
+        public_form_submission_channel_from_page_query, public_form_submission_identity,
+        public_form_submission_query, public_form_submission_route_from_path,
         public_form_success_location, public_html_etag, public_route_from_path,
         publication_command_parameters, request_if_none_match, stage_upload_token,
         v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
@@ -3022,7 +3152,7 @@ mod tests {
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
-    use eez_domain::{FormCompletionPeriod, FormSubmissionChannel};
+    use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
@@ -3034,6 +3164,11 @@ mod tests {
                 let _ = editor_command_parameters("fuzz-funnel", input);
                 let _ = v1_conversion_command_parameters("fuzz-funnel", input);
                 let _ = publication_command_parameters("fuzz-funnel", "funnel.publish", input);
+                let _ = public_form_submission_query(Some(input));
+                let _ = form_submission_status_command_parameters(
+                    "11111111-1111-4111-8111-111111111111",
+                    input,
+                );
             });
             assert!(
                 result.is_ok(),
@@ -3544,16 +3679,33 @@ mod tests {
     }
 
     #[test]
-    fn public_form_submission_cursor_accepts_one_canonical_cursor_only() {
+    fn public_form_submission_query_accepts_one_canonical_cursor_and_status() {
         let submission_id = "11111111-1111-4111-8111-111111111111";
-        assert_eq!(public_form_submission_cursor(None), Ok(None));
-        assert_eq!(public_form_submission_cursor(Some("")), Ok(None));
         assert_eq!(
-            public_form_submission_cursor(Some(&format!("cursor=1234567890.{submission_id}"))),
-            Ok(Some(PublicFormSubmissionCursor {
-                submitted_at: 1_234_567_890,
-                submission_id: submission_id.to_owned(),
-            }))
+            public_form_submission_query(None),
+            Ok(super::PublicFormSubmissionQuery {
+                cursor: None,
+                status: None,
+            })
+        );
+        assert_eq!(
+            public_form_submission_query(Some("")),
+            Ok(super::PublicFormSubmissionQuery {
+                cursor: None,
+                status: None,
+            })
+        );
+        assert_eq!(
+            public_form_submission_query(Some(&format!(
+                "cursor=1234567890.{submission_id}&status=contacted"
+            ))),
+            Ok(super::PublicFormSubmissionQuery {
+                cursor: Some(PublicFormSubmissionCursor {
+                    submitted_at: 1_234_567_890,
+                    submission_id: submission_id.to_owned(),
+                }),
+                status: Some(FormSubmissionStatus::Contacted),
+            })
         );
         for query in [
             "other=1234567890.11111111-1111-4111-8111-111111111111",
@@ -3562,9 +3714,79 @@ mod tests {
             "cursor=9007199254740992.11111111-1111-4111-8111-111111111111",
             "cursor=1234567890.not-a-uuid",
             "cursor=01234567890.11111111-1111-4111-8111-111111111111",
+            "status=unknown",
+            "status=new&status=closed",
+            "status=NEW",
+            "status=new&other=value",
         ] {
-            assert_eq!(public_form_submission_cursor(Some(query)), Err(()), "{query}");
+            assert_eq!(public_form_submission_query(Some(query)), Err(()), "{query}");
         }
+    }
+
+    #[test]
+    fn form_submission_status_route_requires_one_exact_id_and_suffix() {
+        let submission_id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            form_submission_status_id_from_path(&format!(
+                "/api/submissions/{submission_id}/status"
+            )),
+            Some(submission_id)
+        );
+        for path in [
+            "/api/submissions/id/status/extra",
+            "/api/submissions/id/other",
+            "/api/submissions//status",
+            "/api/submissions/id/status/",
+            "/api/submissions/id",
+        ] {
+            assert_eq!(form_submission_status_id_from_path(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn status_mutation_requires_one_json_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        assert!(is_json_content_type(&headers));
+
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        assert!(is_json_content_type(&headers));
+
+        headers.insert("content-type", HeaderValue::from_static("text/plain"));
+        assert!(!is_json_content_type(&headers));
+        headers.append("content-type", HeaderValue::from_static("application/json"));
+        assert!(!is_json_content_type(&headers));
+    }
+
+    #[test]
+    fn status_mutation_adapter_accepts_only_one_closed_status_field() {
+        let submission_id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            form_submission_status_command_parameters(submission_id, r#"{"status":"qualified"}"#),
+            Ok(format!(
+                r#"{{"status":"qualified","submission_id":"{submission_id}"}}"#
+            ))
+        );
+        for body in [
+            r#"{"status":"unknown"}"#,
+            r#"{"status":"new","status":"closed"}"#,
+            r#"{"status":"new","extra":true}"#,
+            r#"{"status":null}"#,
+            "null",
+        ] {
+            assert_eq!(
+                form_submission_status_command_parameters(submission_id, body),
+                Err(()),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            form_submission_status_command_parameters("not-a-uuid", r#"{"status":"new"}"#),
+            Err(())
+        );
     }
 
     #[test]
