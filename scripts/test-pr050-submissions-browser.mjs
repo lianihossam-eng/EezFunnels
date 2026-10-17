@@ -146,6 +146,7 @@ try {
   );
   await statusFilter.selectOption("all");
   await resetToFunnel;
+  await page.waitForFunction(() => document.querySelectorAll("details.submission-entry").length === 25);
   assert.equal(await entries.count(), 25);
 
   const emptyFunnelList = page.waitForResponse((response) =>
@@ -168,16 +169,24 @@ try {
   await page.setViewportSize({ width: 320, height: 740 });
   const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   assert.ok(width.scroll <= width.viewport, JSON.stringify(width));
+  const toolbarDisplay = await page.locator(".submission-toolbar").evaluate((toolbar) =>
+    getComputedStyle(toolbar).display,
+  );
+  assert.equal(toolbarDisplay, "grid");
   const filterLayout = await page.locator(".submission-filter-group").evaluateAll((groups) =>
     groups.map((group) => ({
       top: group.getBoundingClientRect().top,
+      groupWidth: group.getBoundingClientRect().width,
+      columnCount: getComputedStyle(group).gridTemplateColumns.trim().split(/\s+/).length,
       selectWidth: group.querySelector("select").getBoundingClientRect().width,
       selectRight: group.querySelector("select").getBoundingClientRect().right,
     })),
   );
   assert.equal(filterLayout.length, 2, JSON.stringify(filterLayout));
   assert.ok(filterLayout[1].top > filterLayout[0].top, JSON.stringify(filterLayout));
-  assert.ok(filterLayout.every(({ selectWidth, selectRight }) => selectWidth > 0 && selectRight <= width.viewport), JSON.stringify(filterLayout));
+  assert.ok(filterLayout.every(({ groupWidth, columnCount, selectWidth, selectRight }) =>
+    columnCount === 1 && selectWidth >= groupWidth - 1 && selectRight <= width.viewport,
+  ), JSON.stringify(filterLayout));
 
   await page.addScriptTag({ content: axeSource });
   const violations = await page.evaluate(async () => {

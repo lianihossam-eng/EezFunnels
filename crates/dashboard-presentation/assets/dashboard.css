@@ -1359,22 +1359,6 @@ h1 {
 }
 
 @media (max-width: 680px) {
-  .submission-toolbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    justify-content: stretch;
-  }
-
-  .submission-filter-group {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 5px;
-  }
-
-  .submission-toolbar select {
-    width: 100%;
-    max-width: none;
-  }
-
   .funnel-card {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 13px;
@@ -2117,5 +2101,23 @@ h1 {
 
   .submission-entry-content {
     padding: 4px 15px 16px;
+  }
+}
+
+@media (max-width: 680px) {
+  .submission-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .submission-filter-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .submission-toolbar select {
+    width: 100%;
+    max-width: none;
   }
 }
