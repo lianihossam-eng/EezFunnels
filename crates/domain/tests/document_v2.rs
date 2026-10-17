@@ -1,7 +1,7 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
-    FontFamily, FormId, FormSubmissionValue, IdKind, IdSource, ThemeColors, ThemeOverrides,
-    TypeScale,
+    FocusTarget, FontFamily, FormId, FormResult, FormSubmissionValue, IdKind, IdSource, PageId,
+    ThemeColors, ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -371,6 +371,352 @@ fn document_graph_rejects_cycles_and_unreachable_pages() {
         "\"pages\":[{\"id\":\"page-home\",\"slug\":\"\",\"title\":\"Home\",\"sections\":[{\"id\":\"section-hero\",\"type\":\"hero\",\"blocks\":[{\"id\":\"block-title\",\"kind\":\"heading\",\"level\":1,\"text\":\"Hello\"},{\"id\":\"block-copy\",\"kind\":\"text\",\"text\":\"Body copy\"}]}]},{\"id\":\"page-orphan\",\"slug\":\"orphan\",\"title\":\"Orphan\",\"sections\":[]}]",
     );
     assert!(DocumentV2::decode(unreachable.as_bytes(), "funnel-01").is_err());
+}
+
+#[test]
+fn adding_a_page_creates_editable_hero_and_reachable_internal_route_atomically() {
+    let original = decode(MINIMAL);
+    let source = PageId::parse("page-home").expect("entry page ID");
+    let mut ids = TestIds(0);
+    let outcome = original
+        .apply(
+            Edit::AddPage {
+                from: source.clone(),
+                title: "Thank you".to_owned(),
+                slug: "thanks".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("page and its route are created in one valid edit");
+
+    assert_eq!(outcome.document.pages().len(), 2);
+    let FocusTarget::Page(new_page_id) = &outcome.focus else {
+        panic!("page creation focuses the new page");
+    };
+    let new_page = outcome.document.page(new_page_id).expect("new page exists");
+    assert_eq!(new_page.title(), "Thank you");
+    assert_eq!(new_page.slug(), "thanks");
+    assert_eq!(new_page.sections().len(), 1);
+    assert_eq!(
+        new_page.sections()[0].section_type(),
+        eez_domain::document_v2::SectionKind::Hero
+    );
+    assert!(new_page.sections()[0].blocks().iter().any(|block| {
+        matches!(block, BlockV2::Heading { level: 1, text, .. } if text == "Thank you")
+    }));
+    assert!(new_page.sections()[0]
+        .blocks()
+        .iter()
+        .any(|block| { matches!(block, BlockV2::Text { .. }) }));
+    let route = outcome
+        .document
+        .page(&source)
+        .unwrap()
+        .sections()
+        .iter()
+        .flat_map(|section| section.blocks())
+        .find(|block| {
+            matches!(
+                block,
+                BlockV2::Button {
+                    action: ActionV2::NavigatePage { page_id },
+                    ..
+                } if page_id == new_page_id
+            )
+        })
+        .expect("source page has an explicit internal route to the new page");
+    assert!(matches!(route, BlockV2::Button { label, .. } if label == "Continue"));
+    assert!(DocumentV2::decode(outcome.document.canonical_bytes(), "funnel-01").is_ok());
+    assert_eq!(original.pages().len(), 1);
+}
+
+#[test]
+fn page_creation_rejects_duplicate_and_invalid_slugs_without_changing_source() {
+    let original = with_external_url_result("https://example.test/").expect("route fixture");
+    let source = PageId::parse("page-home").expect("entry page ID");
+    let original_bytes = original.canonical_bytes().to_vec();
+    for (slug, expected) in [
+        ("next", "validation/page_slug_duplicate"),
+        ("Thank_You", "validation/page_slug_invalid"),
+    ] {
+        let error = original
+            .apply(
+                Edit::AddPage {
+                    from: source.clone(),
+                    title: "Thank you".to_owned(),
+                    slug: slug.to_owned(),
+                },
+                &mut TestIds(0),
+            )
+            .expect_err("invalid slug never enters a document");
+        assert_eq!(error.code(), expected);
+        assert_eq!(original.canonical_bytes(), original_bytes);
+    }
+}
+
+#[test]
+fn page_metadata_edits_reject_invalid_titles_and_duplicate_or_invalid_slugs_atomically() {
+    let original = decode(MINIMAL);
+    let mut ids = TestIds(0);
+    let first = original
+        .apply(
+            Edit::AddPage {
+                from: PageId::parse("page-home").expect("entry page ID"),
+                title: "Next".to_owned(),
+                slug: "next".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("first page");
+    let first_page = match first.focus {
+        FocusTarget::Page(page_id) => page_id,
+        _ => panic!("page addition focuses the page"),
+    };
+    let second = first
+        .document
+        .apply(
+            Edit::AddPage {
+                from: PageId::parse("page-home").expect("entry page ID"),
+                title: "Offer".to_owned(),
+                slug: "offer".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("second page");
+    let before = second.document.canonical_bytes().to_vec();
+
+    for (edit, expected) in [
+        (
+            Edit::SetPageTitle {
+                page: first_page.clone(),
+                value: String::new(),
+            },
+            "validation/page_title_length",
+        ),
+        (
+            Edit::SetPageSlug {
+                page: first_page.clone(),
+                value: "bad_slug".to_owned(),
+            },
+            "validation/page_slug_invalid",
+        ),
+        (
+            Edit::SetPageSlug {
+                page: first_page,
+                value: "offer".to_owned(),
+            },
+            "validation/page_slug_duplicate",
+        ),
+    ] {
+        let error = second
+            .document
+            .apply(edit, &mut ids)
+            .expect_err("invalid page metadata is rejected");
+        assert_eq!(error.code(), expected);
+        assert_eq!(second.document.canonical_bytes(), before);
+    }
+}
+
+#[test]
+fn page_title_slug_and_internal_destination_edits_keep_stable_page_references() {
+    let original = decode(MINIMAL);
+    let mut ids = TestIds(0);
+    let added = original
+        .apply(
+            Edit::AddPage {
+                from: PageId::parse("page-home").expect("entry page ID"),
+                title: "Next".to_owned(),
+                slug: "next".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("new page");
+    let page_id = match added.focus {
+        FocusTarget::Page(page_id) => page_id,
+        _ => panic!("page addition focuses page"),
+    };
+    let source_id = PageId::parse("page-home").expect("entry page ID");
+    let button_id = added
+        .document
+        .page(&source_id)
+        .unwrap()
+        .sections()
+        .iter()
+        .flat_map(|section| section.blocks())
+        .find_map(|block| match block {
+            BlockV2::Button {
+                id,
+                action: ActionV2::NavigatePage { page_id: target },
+                ..
+            } if target == &page_id => Some(id.clone()),
+            _ => None,
+        })
+        .expect("new route button");
+    let changed_action = added
+        .document
+        .apply(
+            Edit::SetBlock {
+                block: button_id.clone(),
+                value: eez_domain::document_v2::NewBlock::Button {
+                    label: "Continue".to_owned(),
+                    action: ActionV2::NavigatePage {
+                        page_id: page_id.clone(),
+                    },
+                },
+            },
+            &mut ids,
+        )
+        .expect("destination update uses stable page ID");
+    let renamed = changed_action
+        .document
+        .apply(
+            Edit::SetPageTitle {
+                page: page_id.clone(),
+                value: "Confirmation".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("title edit");
+    let rerouted = renamed
+        .document
+        .apply(
+            Edit::SetPageSlug {
+                page: page_id.clone(),
+                value: "confirmation".to_owned(),
+            },
+            &mut ids,
+        )
+        .expect("slug edit");
+    assert_eq!(
+        rerouted.document.page(&page_id).unwrap().title(),
+        "Confirmation"
+    );
+    assert_eq!(
+        rerouted.document.page(&page_id).unwrap().slug(),
+        "confirmation"
+    );
+    assert!(rerouted.document.pages()[0]
+        .sections()
+        .iter()
+        .flat_map(|section| section.blocks())
+        .any(|block| matches!(block,
+            BlockV2::Button {
+                id,
+                label,
+                action: ActionV2::NavigatePage { page_id: target },
+            } if id == &button_id && label == "Continue" && target == &page_id
+        )));
+}
+
+#[test]
+fn entry_page_deletion_is_rejected() {
+    let original = decode(MINIMAL);
+    let error = original
+        .apply(
+            Edit::DeletePage {
+                page: PageId::parse("page-home").expect("entry page ID"),
+            },
+            &mut TestIds(0),
+        )
+        .expect_err("entry page is required");
+    assert_eq!(error.code(), "validation/entry_page_delete");
+    assert_eq!(
+        original.canonical_bytes(),
+        decode(MINIMAL).canonical_bytes()
+    );
+}
+
+#[test]
+fn deleting_a_page_removes_routes_resets_form_results_and_prunes_unplaced_forms() {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-home-form", "kind":"form", "form_id":"form-home"},
+        {"id":"block-route", "kind":"button", "label":"Continue", "action":{"kind":"navigate_page", "page_id":"page-thanks"}}
+    ]);
+    value["pages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id":"page-thanks", "slug":"thanks", "title":"Thank you", "sections":[{
+                "id":"section-thanks", "type":"hero", "blocks":[
+                    {"id":"block-thanks-form", "kind":"form", "form_id":"form-thanks"}
+                ]
+            }]
+        }));
+    let form = serde_json::json!({
+        "fields":[{"id":"field-email", "kind":"email", "name":"email", "label":"Email", "required":true}],
+        "purpose":"Contact request",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to be contacted."}
+    });
+    value["forms"] = serde_json::json!([
+        {"id":"form-home", "fields":form["fields"].clone(), "purpose":form["purpose"].clone(), "request_consent":form["request_consent"].clone(), "result":{"kind":"success_page", "page_id":"page-thanks"}},
+        {"id":"form-thanks", "fields":[{"id":"field-thanks-email", "kind":"email", "name":"email", "label":"Email", "required":true}], "purpose":"Thank you follow-up", "request_consent":{"copy_version":"thanks-request-v1", "copy":"I agree to be contacted."}, "result":{"kind":"inline", "message":"Thanks."}}
+    ]);
+    let source = DocumentV2::decode(&serde_json::to_vec(&value).unwrap(), "funnel-01")
+        .expect("valid two-page forms document");
+    let deleted = source
+        .apply(
+            Edit::DeletePage {
+                page: PageId::parse("page-thanks").expect("thank-you page ID"),
+            },
+            &mut TestIds(0),
+        )
+        .expect("safe deletion");
+
+    assert_eq!(deleted.document.pages().len(), 1);
+    assert_eq!(deleted.document.forms().len(), 1);
+    assert_eq!(deleted.document.forms()[0].id().as_str(), "form-home");
+    assert_eq!(
+        deleted.document.forms()[0].result(),
+        &FormResult::Inline {
+            message: "Thanks — your request has been received.".to_owned(),
+        }
+    );
+    assert!(!deleted.document.pages()[0]
+        .sections()
+        .iter()
+        .flat_map(|section| section.blocks())
+        .any(|block| matches!(
+            block,
+            BlockV2::Button {
+                action: ActionV2::NavigatePage { .. },
+                ..
+            }
+        )));
+}
+
+#[test]
+fn deleting_a_page_is_rejected_when_its_descendants_become_unreachable() {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-home-next", "kind":"button", "label":"Next", "action":{"kind":"navigate_page", "page_id":"page-next"}}
+    ]);
+    value["pages"].as_array_mut().unwrap().push(serde_json::json!({
+        "id":"page-next", "slug":"next", "title":"Next", "sections":[{
+            "id":"section-next", "type":"hero", "blocks":[
+                {"id":"block-next-final", "kind":"button", "label":"Final", "action":{"kind":"navigate_page", "page_id":"page-final"}}
+            ]
+        }]
+    }));
+    value["pages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id":"page-final", "slug":"final", "title":"Final", "sections":[]
+        }));
+    let original = DocumentV2::decode(&serde_json::to_vec(&value).unwrap(), "funnel-01")
+        .expect("valid reachable page chain");
+    let original_bytes = original.canonical_bytes().to_vec();
+    let error = original
+        .apply(
+            Edit::DeletePage {
+                page: PageId::parse("page-next").expect("next page ID"),
+            },
+            &mut TestIds(0),
+        )
+        .expect_err("deletion would orphan page-final");
+    assert_eq!(error.code(), "validation/page_unreachable");
+    assert_eq!(original.canonical_bytes(), original_bytes);
 }
 
 #[test]

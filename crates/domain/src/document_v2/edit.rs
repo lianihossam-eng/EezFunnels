@@ -11,6 +11,7 @@ use crate::ThemePreset;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdKind {
+    Page,
     Section,
     Block,
     Form,
@@ -99,6 +100,22 @@ pub enum Edit {
     SetPageSeoTitle {
         page: PageId,
         value: String,
+    },
+    SetPageTitle {
+        page: PageId,
+        value: String,
+    },
+    SetPageSlug {
+        page: PageId,
+        value: String,
+    },
+    AddPage {
+        from: PageId,
+        title: String,
+        slug: String,
+    },
+    DeletePage {
+        page: PageId,
     },
     SetPageSeoDescription {
         page: PageId,
@@ -224,6 +241,157 @@ impl DocumentV2 {
             Edit::SetPageSeoTitle { page, value } => {
                 page_mut(&mut data, &page)?.seo_title = Some(value);
                 FocusTarget::Page(page)
+            }
+            Edit::SetPageTitle { page, value } => {
+                page_mut(&mut data, &page)?.title = value;
+                FocusTarget::Page(page)
+            }
+            Edit::SetPageSlug { page, value } => {
+                page_mut(&mut data, &page)?.slug = value;
+                FocusTarget::Page(page)
+            }
+            Edit::AddPage { from, title, slug } => {
+                let source_index = data
+                    .pages
+                    .iter()
+                    .position(|page| page.id == from)
+                    .ok_or_else(|| DocumentError::at("validation/page_missing", "page_id"))?;
+                let page_id =
+                    PageId::from_validated(allocate_id(ids, IdKind::Page, page_ids(&data))?);
+                let mut used_section_ids = section_ids(&data);
+                let section_id = SectionId::from_validated(allocate_id(
+                    ids,
+                    IdKind::Section,
+                    used_section_ids.clone(),
+                )?);
+                used_section_ids.insert(section_id.as_str().to_owned());
+                let mut used_block_ids = block_ids(&data);
+                let hero_title_id = BlockId::from_validated(allocate_id(
+                    ids,
+                    IdKind::Block,
+                    used_block_ids.clone(),
+                )?);
+                used_block_ids.insert(hero_title_id.as_str().to_owned());
+                let hero_copy_id = BlockId::from_validated(allocate_id(
+                    ids,
+                    IdKind::Block,
+                    used_block_ids.clone(),
+                )?);
+                used_block_ids.insert(hero_copy_id.as_str().to_owned());
+                let button_id = BlockId::from_validated(allocate_id(
+                    ids,
+                    IdKind::Block,
+                    used_block_ids.clone(),
+                )?);
+                used_block_ids.insert(button_id.as_str().to_owned());
+                let new_page_title = title.clone();
+                let new_page = PageV2 {
+                    id: page_id.clone(),
+                    slug,
+                    title,
+                    seo_title: None,
+                    seo_description: None,
+                    noindex: false,
+                    sections: vec![SectionV2 {
+                        id: section_id,
+                        section_type: SectionKind::Hero,
+                        blocks: vec![
+                            BlockV2::Heading {
+                                id: hero_title_id,
+                                level: 1,
+                                text: new_page_title,
+                            },
+                            BlockV2::Text {
+                                id: hero_copy_id,
+                                text: "Replace this text with your page content.".to_owned(),
+                            },
+                        ],
+                    }],
+                };
+
+                let route_button = BlockV2::Button {
+                    id: button_id,
+                    label: "Continue".to_owned(),
+                    action: super::ActionV2::NavigatePage {
+                        page_id: page_id.clone(),
+                    },
+                };
+                let cta_section = data.pages[source_index]
+                    .sections
+                    .iter()
+                    .position(|section| {
+                        section.section_type == SectionKind::Cta && section.blocks.len() < 50
+                    });
+                if let Some(section_index) = cta_section {
+                    data.pages[source_index].sections[section_index]
+                        .blocks
+                        .push(route_button);
+                } else {
+                    let cta_section_id = SectionId::from_validated(allocate_id(
+                        ids,
+                        IdKind::Section,
+                        used_section_ids,
+                    )?);
+                    let cta_heading_id = BlockId::from_validated(allocate_id(
+                        ids,
+                        IdKind::Block,
+                        used_block_ids.clone(),
+                    )?);
+                    used_block_ids.insert(cta_heading_id.as_str().to_owned());
+                    let cta_copy_id =
+                        BlockId::from_validated(allocate_id(ids, IdKind::Block, used_block_ids)?);
+                    data.pages[source_index].sections.push(SectionV2 {
+                        id: cta_section_id,
+                        section_type: SectionKind::Cta,
+                        blocks: vec![
+                            BlockV2::Heading {
+                                id: cta_heading_id,
+                                level: 2,
+                                text: "Continue to the next step".to_owned(),
+                            },
+                            BlockV2::Text {
+                                id: cta_copy_id,
+                                text: "Use this button to open the new page.".to_owned(),
+                            },
+                            route_button,
+                        ],
+                    });
+                }
+                data.pages.push(new_page);
+                FocusTarget::Page(page_id)
+            }
+            Edit::DeletePage { page } => {
+                if page == data.entry_page_id {
+                    return Err(DocumentError::at(
+                        "validation/entry_page_delete",
+                        "pages.id",
+                    ));
+                }
+                if !data.pages.iter().any(|candidate| candidate.id == page) {
+                    return Err(DocumentError::at("validation/page_missing", "page_id"));
+                }
+                data.pages.retain(|candidate| candidate.id != page);
+                for candidate in &mut data.pages {
+                    for section in &mut candidate.sections {
+                        section.blocks.retain(|block| {
+                            !matches!(block, BlockV2::Button {
+                                action: super::ActionV2::NavigatePage { page_id }, ..
+                            } if page_id == &page)
+                        });
+                    }
+                }
+                for form in &mut data.forms {
+                    if matches!(
+                        &form.result,
+                        FormResult::SuccessPage { page_id } if page_id == &page
+                    ) {
+                        form.result = FormResult::Inline {
+                            message: DEFAULT_FORM_CONFIRMATION.to_owned(),
+                        };
+                    }
+                }
+                prune_unplaced_forms(&mut data);
+                FocusTarget::Page(data.entry_page_id.clone())
             }
             Edit::SetPageSeoDescription { page, value } => {
                 page_mut(&mut data, &page)?.seo_description = Some(value);
@@ -643,7 +811,7 @@ fn new_form(data: &DocumentData, ids: &mut impl IdSource) -> Result<FormV2, Docu
         },
         marketing_opt_in: None,
         result: FormResult::Inline {
-            message: "Thanks — your request has been received.".to_owned(),
+            message: DEFAULT_FORM_CONFIRMATION.to_owned(),
         },
     })
 }
@@ -807,6 +975,15 @@ fn allocate_id(
         return Err(DocumentError::at("validation/new_id_not_fresh", "id"));
     }
     Ok(value)
+}
+
+const DEFAULT_FORM_CONFIRMATION: &str = "Thanks — your request has been received.";
+
+fn page_ids(data: &DocumentData) -> BTreeSet<String> {
+    data.pages
+        .iter()
+        .map(|page| page.id.as_str().to_owned())
+        .collect()
 }
 
 fn section_ids(data: &DocumentData) -> BTreeSet<String> {

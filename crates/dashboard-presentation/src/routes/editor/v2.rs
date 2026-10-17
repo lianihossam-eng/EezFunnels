@@ -96,6 +96,9 @@ struct V2EditorState {
     selected_page: String,
     selected_section: Option<String>,
     new_section_kind: SectionKind,
+    new_page_title: String,
+    new_page_slug: String,
+    delete_page_confirmation: Option<String>,
     new_block_kind: V2NewBlockKind,
     history: Vec<String>,
     history_cursor: usize,
@@ -152,6 +155,9 @@ impl Default for V2EditorState {
             selected_page: String::new(),
             selected_section: None,
             new_section_kind: SectionKind::Features,
+            new_page_title: "New page".to_owned(),
+            new_page_slug: "new-page".to_owned(),
+            delete_page_confirmation: None,
             new_block_kind: V2NewBlockKind::default(),
             history: Vec::new(),
             history_cursor: 0,
@@ -500,10 +506,7 @@ impl V2EditorState {
         let outcome = match document.apply(edit.clone(), &mut ids) {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.error = Some(format!(
-                    "This change cannot be applied yet ({})",
-                    error.code()
-                ));
+                self.error = Some(describe_v2_edit_error(error.code()));
                 self.status = None;
                 return None;
             }
@@ -512,8 +515,8 @@ impl V2EditorState {
         if document_json == document.canonical_json() {
             return None;
         }
-        self.select_focus(&outcome.focus);
         self.document = Some(outcome.document);
+        self.select_focus(&outcome.focus);
         self.push_history(document_json.clone());
         self.generation = self.generation.wrapping_add(1);
         self.pending = true;
@@ -772,7 +775,17 @@ impl V2EditorState {
 
     fn select_focus(&mut self, focus: &FocusTarget) {
         match focus {
-            FocusTarget::Page(page) => self.selected_page = page.as_str().to_owned(),
+            FocusTarget::Page(page) => {
+                self.selected_page = page.as_str().to_owned();
+                self.selected_section = self.document.as_ref().and_then(|document| {
+                    document
+                        .pages()
+                        .iter()
+                        .find(|candidate| candidate.id() == page)
+                        .and_then(|candidate| candidate.sections().first())
+                        .map(|section| section.id().as_str().to_owned())
+                });
+            }
             FocusTarget::Section(section) => {
                 self.selected_section = Some(section.as_str().to_owned())
             }
@@ -782,6 +795,28 @@ impl V2EditorState {
 }
 
 const EDITOR_HISTORY_LIMIT: usize = 100;
+
+fn describe_v2_edit_error(code: &str) -> String {
+    match code {
+        "validation/page_slug_invalid" => {
+            "Use a lower-case route slug with letters, numbers, and single hyphens. The slug sets the public route.".to_owned()
+        }
+        "validation/page_slug_duplicate" => {
+            "That public route slug is already used by another page. Choose a unique slug.".to_owned()
+        }
+        "validation/page_title_length" => {
+            "Page titles must contain between 1 and 8,192 characters.".to_owned()
+        }
+        "validation/page_unreachable" => {
+            "This change would leave a page unreachable from the home page. Keep a route to every page before removing this one.".to_owned()
+        }
+        "validation/page_graph_cycle" => {
+            "This internal page route would create a loop. Choose a destination that does not lead back to this page.".to_owned()
+        }
+        "validation/entry_page_delete" => "The home page cannot be deleted.".to_owned(),
+        _ => format!("This change cannot be applied yet ({code})."),
+    }
+}
 
 trait CanonicalDocumentJson {
     fn canonical_json(&self) -> String;
@@ -1485,6 +1520,64 @@ fn section_kind_label(kind: SectionKind) -> &'static str {
     }
 }
 
+fn public_page_route(funnel_slug: &str, page_slug: &str) -> String {
+    if page_slug.is_empty() {
+        format!("/f/{funnel_slug}")
+    } else {
+        format!("/f/{funnel_slug}/{page_slug}")
+    }
+}
+
+#[cfg(feature = "browser")]
+fn page_reaches(document: &DocumentV2, start: &str, target: &str) -> bool {
+    let mut visited = std::collections::BTreeSet::new();
+    let mut pending = vec![start.to_owned()];
+    while let Some(page_id) = pending.pop() {
+        if page_id == target {
+            return true;
+        }
+        if !visited.insert(page_id.clone()) {
+            continue;
+        }
+        let Some(page) = document
+            .pages()
+            .iter()
+            .find(|page| page.id().as_str() == page_id)
+        else {
+            continue;
+        };
+        for block in page.sections().iter().flat_map(|section| section.blocks()) {
+            match block {
+                BlockV2::Button {
+                    action: ActionV2::NavigatePage { page_id },
+                    ..
+                } => pending.push(page_id.as_str().to_owned()),
+                BlockV2::Form { form_id, .. } => {
+                    if let Some(FormResult::SuccessPage { page_id }) =
+                        document.form(form_id).map(FormV2::result)
+                    {
+                        pending.push(page_id.as_str().to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+#[cfg(feature = "browser")]
+fn valid_page_route_targets(document: &DocumentV2, source: &str) -> Vec<String> {
+    document
+        .pages()
+        .iter()
+        .filter(|page| {
+            page.id().as_str() != source && !page_reaches(document, page.id().as_str(), source)
+        })
+        .map(|page| page.id().as_str().to_owned())
+        .collect()
+}
+
 fn section_kind_from_id(value: &str) -> Option<SectionKind> {
     match value {
         "hero" => Some(SectionKind::Hero),
@@ -1941,10 +2034,24 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
     let add_form_location = add_block_location.clone();
     let locked = !view.can_edit();
     let dirty = view.has_unsaved_changes();
+    let public_funnel_slug = view
+        .funnel
+        .as_ref()
+        .map(|funnel| funnel.slug.clone())
+        .unwrap_or_else(|| "your-funnel".to_owned());
     let recovered_document = view
         .recovered_draft
         .as_ref()
         .and_then(|draft| DocumentV2::decode(draft.document_json.as_bytes(), &view.funnel_id).ok());
+    let pending_delete_page = view.delete_page_confirmation.as_deref().and_then(|id| {
+        view.document.as_ref().and_then(|document| {
+            document
+                .pages()
+                .iter()
+                .find(|page| page.id().as_str() == id)
+                .map(|page| (page.id().clone(), page.title().to_owned()))
+        })
+    });
 
     rsx! {
         div {
@@ -2221,6 +2328,47 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                         }
                     }
                 }
+                if let Some((delete_page_id, delete_page_title)) = pending_delete_page {
+                    dialog {
+                        id: "v2-delete-page-dialog",
+                        class: "funnel-dialog confirmation-dialog",
+                        "aria-modal": "true",
+                        "aria-labelledby": "v2-delete-page-title",
+                        "aria-describedby": "v2-delete-page-description",
+                        oncancel: move |event| {
+                            event.prevent_default();
+                            state.with_mut(|state| state.delete_page_confirmation = None);
+                            spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                        },
+                        h2 { id: "v2-delete-page-title", "Delete {delete_page_title}?" }
+                        p { id: "v2-delete-page-description", "This removes the page and navigation buttons that point to it. Forms that send visitors to this page will use the standard inline confirmation, and forms placed only on this page will be removed. If this leaves any remaining page unreachable from Home, the deletion will be rejected." }
+                        div { class: "dialog-actions",
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                autofocus: true,
+                                onclick: move |_| {
+                                    state.with_mut(|state| state.delete_page_confirmation = None);
+                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                                },
+                                "Cancel"
+                            }
+                            button {
+                                class: "primary-button danger-button",
+                                r#type: "button",
+                                onclick: move |_| {
+                                    state.with_mut(|state| state.delete_page_confirmation = None);
+                                    let delete_page_id = delete_page_id.clone();
+                                    spawn(async move {
+                                        super::super::set_modal_dialog("v2-delete-page-dialog", false).await;
+                                        dispatch_v2_edit(state, Edit::DeletePage { page: delete_page_id });
+                                    });
+                                },
+                                "Confirm delete page"
+                            }
+                        }
+                    }
+                }
                 section { class: "editor-workspace", "aria-label": "Typed visual editor",
                     div { class: "editor-outline-panel",
                         div { class: "section-heading",
@@ -2231,6 +2379,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                             label { class: "editor-setting-control",
                                 "Current page"
                                 select {
+                                    id: "v2-current-page",
                                     value: "{view.selected_page}",
                                     disabled: view.pending || view.saving,
                                     onchange: move |event| {
@@ -2238,9 +2387,55 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                         schedule_v2_preview(state, request);
                                     },
                                     for page in document.pages() {
-                                        option { value: "{page.id().as_str()}", "{page.title()}" }
+                                        option {
+                                            value: "{page.id().as_str()}",
+                                            "{page.title()} · {public_page_route(&public_funnel_slug, page.slug())}"
+                                        }
                                     }
                                 }
+                            }
+                        }
+                        fieldset { class: "editor-setting-group",
+                            legend { "Add a page" }
+                            label { class: "editor-setting-control", r#for: "v2-new-page-title",
+                                "Page title"
+                                input {
+                                    id: "v2-new-page-title",
+                                    r#type: "text",
+                                    value: "{view.new_page_title}",
+                                    disabled: locked,
+                                    oninput: move |event| state.with_mut(|state| state.new_page_title = event.value()),
+                                }
+                            }
+                            label { class: "editor-setting-control", r#for: "v2-new-page-slug",
+                                "Public route slug"
+                                input {
+                                    id: "v2-new-page-slug",
+                                    r#type: "text",
+                                    value: "{view.new_page_slug}",
+                                    disabled: locked,
+                                    "aria-describedby": "v2-new-page-slug-help",
+                                    oninput: move |event| state.with_mut(|state| state.new_page_slug = event.value()),
+                                }
+                            }
+                            p { id: "v2-new-page-slug-help", "This slug determines the public route, for example {public_page_route(&public_funnel_slug, &view.new_page_slug)}. Use lower-case letters, numbers, and single hyphens." }
+                            p { class: "editor-publication-help", "A Continue button will be added to the selected page so visitors can reach this page." }
+                            p { class: "editor-publication-help", "Every page must remain reachable from the home page, and internal routes cannot form loops. Invalid changes are rejected without changing the draft." }
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: locked,
+                                onclick: move |_| {
+                                    let (from, title, slug) = state.with(|state| (
+                                        PageId::parse(state.selected_page.clone()).ok(),
+                                        state.new_page_title.clone(),
+                                        state.new_page_slug.clone(),
+                                    ));
+                                    if let Some(from) = from {
+                                        dispatch_v2_edit(state, Edit::AddPage { from, title, slug });
+                                    }
+                                },
+                                "Add page"
                             }
                         }
                         fieldset { class: "editor-setting-group",
@@ -2280,7 +2475,51 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 let seo_title_page = page.id().clone();
                                 let seo_description_page = page.id().clone();
                                 let noindex_page = page.id().clone();
+                                let title_page = page.id().clone();
+                                let slug_page = page.id().clone();
+                                let delete_page_id = page.id().as_str().to_owned();
+                                let is_entry_page = page.id() == document.entry_page_id();
+                                let current_page_route = public_page_route(&public_funnel_slug, page.slug());
                                 rsx! {
+                                    fieldset { class: "editor-setting-group",
+                                        legend { "Page details" }
+                                        label { class: "editor-setting-control", r#for: "v2-page-title-{page.id().as_str()}" ,
+                                            "Page title"
+                                            input {
+                                                id: "v2-page-title-{page.id().as_str()}",
+                                                r#type: "text",
+                                                value: page.title(),
+                                                disabled: locked,
+                                                onchange: move |event| dispatch_v2_edit(state, Edit::SetPageTitle { page: title_page.clone(), value: event.value() }),
+                                            }
+                                        }
+                                        label { class: "editor-setting-control", r#for: "v2-page-slug-{page.id().as_str()}" ,
+                                            "Public route slug"
+                                            input {
+                                                id: "v2-page-slug-{page.id().as_str()}",
+                                                r#type: "text",
+                                                value: page.slug(),
+                                                disabled: locked || is_entry_page,
+                                                "aria-describedby": "v2-page-slug-help-{page.id().as_str()}",
+                                                onchange: move |event| dispatch_v2_edit(state, Edit::SetPageSlug { page: slug_page.clone(), value: event.value() }),
+                                            }
+                                        }
+                                        p { id: "v2-page-slug-help-{page.id().as_str()}", "This slug determines the public route: {current_page_route}. The home page always uses the funnel route." }
+                                        if is_entry_page {
+                                            p { class: "editor-publication-help", "The home page is the entry page and cannot be deleted." }
+                                        } else {
+                                            button {
+                                                class: "secondary-button danger-button",
+                                                r#type: "button",
+                                                disabled: locked,
+                                                onclick: move |_| {
+                                                    state.with_mut(|state| state.delete_page_confirmation = Some(delete_page_id.clone()));
+                                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", true).await; });
+                                                },
+                                                "Delete page"
+                                            }
+                                        }
+                                    }
                                     fieldset { class: "editor-setting-group",
                                         legend { "Page search and sharing" }
                                         p { "Settings for {page.title()}. Save and publish to update the public page." }
@@ -3797,6 +4036,173 @@ fn V2ImageBlockSettings(state: Signal<V2EditorState>, block: BlockV2, locked: bo
 
 #[cfg(feature = "browser")]
 #[component]
+fn V2ButtonActionSettings(
+    state: Signal<V2EditorState>,
+    block_id: BlockId,
+    button_label: String,
+    action: ActionV2,
+    locked: bool,
+) -> Element {
+    let block_id_text = block_id.as_str().to_owned();
+    let (pages, valid_destinations) = state.with(|state| {
+        let funnel_slug = state
+            .funnel
+            .as_ref()
+            .map(|funnel| funnel.slug.as_str())
+            .unwrap_or("your-funnel");
+        let pages = state
+            .document
+            .as_ref()
+            .map(|document| {
+                document
+                    .pages()
+                    .iter()
+                    .map(|page| {
+                        (
+                            page.id().as_str().to_owned(),
+                            format!(
+                                "{} · {}",
+                                page.title(),
+                                public_page_route(funnel_slug, page.slug())
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let valid_destinations = state
+            .document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .pages()
+                    .iter()
+                    .find(|page| {
+                        page.sections()
+                            .iter()
+                            .flat_map(|section| section.blocks())
+                            .any(|block| block.id().as_str() == block_id_text)
+                    })
+                    .map(|page| valid_page_route_targets(document, page.id().as_str()))
+            })
+            .unwrap_or_default();
+        (pages, valid_destinations)
+    });
+    let internal = matches!(&action, ActionV2::NavigatePage { .. });
+    let external_url = match &action {
+        ActionV2::ExternalHttps { url } => url.clone(),
+        ActionV2::NavigatePage { .. } => "https://example.com".to_owned(),
+    };
+    let current_destination = match &action {
+        ActionV2::NavigatePage { page_id } => Some(page_id.as_str().to_owned()),
+        ActionV2::ExternalHttps { .. } => None,
+    };
+    let selected_destination = current_destination.unwrap_or_else(|| {
+        pages
+            .iter()
+            .find(|(id, _)| valid_destinations.contains(id))
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default()
+    });
+    let has_internal_destination = internal || !selected_destination.is_empty();
+    let block_for_mode = block_id.clone();
+    let block_for_destination = block_id.clone();
+    let block_for_url = block_id.clone();
+    let label_for_mode = button_label.clone();
+    let label_for_destination = button_label.clone();
+    let label_for_url = button_label;
+    let mode_external_url = external_url.clone();
+    let destination_for_mode = selected_destination.clone();
+    let url_block_label = format!("Button destination URL for {block_id_text}");
+    let page_control_label = format!("Button destination page for {block_id_text}");
+    let action_control_label = format!("Button action for {block_id_text}");
+
+    rsx! {
+        div { class: "editor-setting-group",
+            label { class: "editor-setting-control", r#for: "v2-button-action-{block_id_text}",
+                "Button action"
+                select {
+                    id: "v2-button-action-{block_id_text}",
+                    value: if internal { "page" } else { "external" },
+                    disabled: locked,
+                    "aria-label": "{action_control_label}",
+                    "aria-describedby": "v2-button-action-help-{block_id_text}",
+                    onchange: move |event| {
+                        let next_action = match event.value().as_str() {
+                            "external" => Some(ActionV2::ExternalHttps { url: mode_external_url.clone() }),
+                            "page" => PageId::parse(destination_for_mode.clone()).ok()
+                                .map(|page_id| ActionV2::NavigatePage { page_id }),
+                            _ => None,
+                        };
+                        if let Some(action) = next_action {
+                            dispatch_v2_edit(state, Edit::SetBlock {
+                                block: block_for_mode.clone(),
+                                value: NewBlock::Button { label: label_for_mode.clone(), action },
+                            });
+                        }
+                    },
+                    option { value: "external", "External HTTPS URL" }
+                    option { value: "page", disabled: !has_internal_destination, "Internal page" }
+                }
+            }
+            if internal {
+                label { class: "editor-setting-control", r#for: "v2-button-page-{block_id_text}",
+                    "Destination page"
+                    select {
+                        id: "v2-button-page-{block_id_text}",
+                        value: "{selected_destination}",
+                        disabled: locked,
+                        "aria-label": "{page_control_label}",
+                        "aria-describedby": "v2-button-action-help-{block_id_text}",
+                        onchange: move |event| {
+                            if let Ok(page_id) = PageId::parse(event.value()) {
+                                dispatch_v2_edit(state, Edit::SetBlock {
+                                    block: block_for_destination.clone(),
+                                    value: NewBlock::Button {
+                                        label: label_for_destination.clone(),
+                                        action: ActionV2::NavigatePage { page_id },
+                                    },
+                                });
+                            }
+                        },
+                        for (id, page_label) in pages.iter() {
+                            option { value: "{id}", selected: id == &selected_destination, "{page_label}" }
+                        }
+                    }
+                }
+            } else {
+                label { class: "editor-setting-control", r#for: "v2-button-url-{block_id_text}",
+                    "Destination URL"
+                    input {
+                        id: "v2-button-url-{block_id_text}",
+                        r#type: "url",
+                        value: "{external_url}",
+                        disabled: locked,
+                        "aria-label": "{url_block_label}",
+                        "aria-describedby": "v2-button-action-help-{block_id_text}",
+                        onchange: move |event| dispatch_v2_edit(state, Edit::SetBlock {
+                            block: block_for_url.clone(),
+                            value: NewBlock::Button {
+                                label: label_for_url.clone(),
+                                action: ActionV2::ExternalHttps { url: event.value() },
+                            },
+                        }),
+                    }
+                }
+            }
+            p { id: "v2-button-action-help-{block_id_text}",
+                if has_internal_destination {
+                    "Internal destinations use stable page IDs. Routes must keep every page reachable from Home and remain loop-free; invalid edits are rejected without changing the draft."
+                } else {
+                    "Add another page from this page before creating an internal destination."
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     section_id: SectionId,
@@ -3841,6 +4247,15 @@ fn V2BlockEditor(
             } else if let Some(form) = form {
                 V2FormEditor { state, form, locked }
             } else {
+                if let BlockV2::Button { id, label, action } = block.clone() {
+                    V2ButtonActionSettings {
+                        state,
+                        block_id: id,
+                        button_label: label,
+                        action,
+                        locked,
+                    }
+                }
                 label { class: "editor-setting-control",
                     "{control_label}"
                     textarea {
