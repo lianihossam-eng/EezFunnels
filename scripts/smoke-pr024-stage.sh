@@ -88,13 +88,20 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         )
 
     def create_funnel(key):
+        payload = {"name": f"PR-024 stage {key}", "blueprint": "lead_gen"}
         status, content = post_json(
             "/api/funnels/v2",
-            {"name": f"PR-024 stage {key}", "blueprint": "lead_gen"},
+            payload,
             key,
         )
         assert status == 201, (status, content)
         result = json.loads(content)
+        replay_status, replay_content = post_json("/api/funnels/v2", payload, key)
+        assert replay_status == 201, (replay_status, replay_content)
+        replay_result = json.loads(replay_content)
+        assert {k: v for k, v in replay_result.items() if k != "correlation_id"} == {
+            k: v for k, v in result.items() if k != "correlation_id"
+        }, (result, replay_result)
         return result["funnel"]["id"], result["initial_revision"]["id"]
 
     def mint_stage(funnel_id, revision_id, data, key):

@@ -1596,11 +1596,8 @@ async fn execute_funnel_command(
         .map_err(|_| ApiError::from_code("external/unavailable"))?;
     let repository = bindings.repository();
     let document_stages = bindings.document_stage_repository();
-    if command_id == command_ids::FUNNEL_CREATE_V2
-        && document_stages.ensure_sequence_control().await.is_err()
-    {
-        return Err(ApiError::from_code("external/unavailable"));
-    }
+    // Stage control is initialized by stage endpoints; V2 creation and its receipt replays do not
+    // depend on it, so a temporary R2 sequence-control outage must not block funnel creation.
     Session::with_document_stages(&repository, &document_stages)
         .execute(actor, command_id, parameters, idempotency_key)
         .await
