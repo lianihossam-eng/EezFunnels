@@ -25,6 +25,7 @@ pub mod errors;
 pub mod host;
 mod json;
 mod mcp;
+mod origin;
 
 pub use host::HostAllowlist;
 
@@ -693,6 +694,9 @@ async fn public_form_submission_response(
     if request.method() != Method::POST {
         return method_not_allowed_for(&correlation_id, "POST");
     }
+    if !origin::matches_request_host(request.headers(), request.uri().scheme_str()) {
+        return form_submission_origin_error(&correlation_id);
+    }
     if !valid_public_slug(route.funnel_slug)
         || PageId::parse(route.page_id.to_owned()).is_err()
         || FormId::parse(route.form_id.to_owned()).is_err()
@@ -957,6 +961,15 @@ fn public_form_success_location(
 
 fn form_submission_payload_error(correlation_id: &str) -> Response<axum::body::Body> {
     let mut response = editor_payload_error_response(correlation_id, "validation/invalid_json");
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+
+fn form_submission_origin_error(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("request/invalid_origin");
+    let mut response = error_response(&error, correlation_id.to_owned());
     response
         .headers_mut()
         .insert("cache-control", HeaderValue::from_static("no-store"));

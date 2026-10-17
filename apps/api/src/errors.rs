@@ -71,6 +71,13 @@ impl ApiError {
                 "The request host is not allowed.",
                 false,
             ),
+            "request/invalid_origin" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                403,
+                "The request Origin is not allowed.",
+                false,
+            ),
             "not_found/funnel" | "not_found/slug" | "not_found/revision" => (
                 code.to_owned(),
                 ErrorCategory::NotFound,
@@ -222,6 +229,7 @@ mod tests {
             ErrorCategory::Authorization,
             403,
         ),
+        ("request/invalid_origin", ErrorCategory::Validation, 403),
         ("not_found/funnel", ErrorCategory::NotFound, 404),
         ("not_found/slug", ErrorCategory::NotFound, 404),
         ("not_found/revision", ErrorCategory::NotFound, 404),

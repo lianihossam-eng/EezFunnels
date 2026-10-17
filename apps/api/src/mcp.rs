@@ -1,5 +1,5 @@
 use axum::body::{to_bytes, Body};
-use axum::http::header::{ACCEPT, ALLOW, AUTHORIZATION, CONTENT_TYPE, ORIGIN};
+use axum::http::header::{ACCEPT, ALLOW, AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::Response;
 use eez_commands::{command_ids, command_registry, CommandActor, IdempotencyPolicy, McpExposure};
@@ -9,7 +9,6 @@ use worker::{Env, HttpRequest};
 
 use crate::errors::{ApiError, ErrorCategory};
 use crate::json::{validate_unique_json, JsonValidationError};
-use crate::HostAllowlist;
 
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
 const MAX_COMMAND_PARAMETERS_BYTES: usize = 16 * 1024;
@@ -168,7 +167,7 @@ pub(crate) async fn handle(
     if !authorized(request.headers(), &expected_token) {
         return api_error_response("authorization/token_invalid", correlation_id);
     }
-    if !origin_matches_host(request.headers(), request.uri().scheme_str()) {
+    if !crate::origin::matches_request_host(request.headers(), request.uri().scheme_str()) {
         return mcp_http_error(McpHttpError::InvalidOrigin, correlation_id);
     }
     if request.uri().path() != "/mcp" || request.uri().query().is_some() {
@@ -787,39 +786,6 @@ fn authorized(headers: &HeaderMap<HeaderValue>, expected: &str) -> bool {
         let supplied = credentials.trim_start_matches(' ');
         scheme.eq_ignore_ascii_case("Bearer") && !supplied.is_empty() && supplied == expected
     })
-}
-
-fn origin_matches_host(headers: &HeaderMap<HeaderValue>, request_scheme: Option<&str>) -> bool {
-    let mut values = headers.get_all(ORIGIN).iter();
-    let Some(origin) = values.next() else {
-        return true;
-    };
-    if values.next().is_some() {
-        return false;
-    }
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-    let Some((scheme, authority)) = origin.split_once("://") else {
-        return false;
-    };
-    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
-        return false;
-    }
-    if authority.is_empty()
-        || authority.contains(',')
-        || authority.chars().any(|character| {
-            character.is_whitespace()
-                || character.is_control()
-                || matches!(character, '/' | '?' | '#')
-        })
-    {
-        return false;
-    }
-    if request_scheme.is_some_and(|request_scheme| !request_scheme.eq_ignore_ascii_case(scheme)) {
-        return false;
-    }
-    HostAllowlist::parse(authority).allows_headers(headers)
 }
 
 fn has_json_content_type(headers: &HeaderMap<HeaderValue>) -> bool {

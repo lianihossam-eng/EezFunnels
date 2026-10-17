@@ -71,7 +71,7 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/funnels/:id/publish` and `/unpublish` | Change the published revision pointer |
 | `/api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `/f/:slug` | Render a published funnel |
-| `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a validated same-origin public form submission |
+| `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |
 
