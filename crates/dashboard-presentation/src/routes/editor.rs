@@ -1540,6 +1540,7 @@ fn ResponsivePreview(title: String, srcdoc: String) -> Element {
 enum EditorSurface {
     #[default]
     Loading,
+    Error,
     V1,
     V2,
 }
@@ -1588,6 +1589,44 @@ impl EditorSurfaceState {
     }
 }
 
+fn editor_surface_for_schema(schema_version: u64) -> Option<EditorSurface> {
+    match schema_version {
+        1 => Some(EditorSurface::V1),
+        2 => Some(EditorSurface::V2),
+        _ => None,
+    }
+}
+
+fn editor_surface_from_metadata(metadata: &serde_json::Value) -> Option<EditorSurface> {
+    match metadata.get("schema_version") {
+        None => Some(EditorSurface::V1),
+        Some(schema_version) => editor_surface_for_schema(schema_version.as_u64()?),
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn load_editor_surface(
+    mut state: Signal<EditorSurfaceState>,
+    funnel_id: String,
+    request_epoch: u64,
+) {
+    let path = format!("/api/funnels/{funnel_id}");
+    let surface = match api_request("GET", &path, None, None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|value| editor_surface_from_metadata(&value))
+                .unwrap_or(EditorSurface::Error)
+        }
+        _ => EditorSurface::Error,
+    };
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            state.finish_route(&funnel_id, request_epoch, surface);
+        });
+    }
+}
+
 #[cfg(feature = "browser")]
 #[component]
 pub(super) fn FunnelDetail(id: String) -> Element {
@@ -1595,25 +1634,7 @@ pub(super) fn FunnelDetail(id: String) -> Element {
     use_effect(use_reactive!(|(id)| {
         let funnel_id = id.clone();
         let request_epoch = surface_state.with_mut(|state| state.begin_route(funnel_id.clone()));
-        spawn(async move {
-            let path = format!("/api/funnels/{funnel_id}");
-            let kind = match api_request("GET", &path, None, None).await {
-                Ok(response) if response.status == 200 => {
-                    let schema_version = serde_json::from_str::<serde_json::Value>(&response.body)
-                        .ok()
-                        .and_then(|value| value.get("schema_version").and_then(|v| v.as_u64()));
-                    if schema_version == Some(2) {
-                        EditorSurface::V2
-                    } else {
-                        EditorSurface::V1
-                    }
-                }
-                _ => EditorSurface::V1,
-            };
-            surface_state.with_mut(|state| {
-                state.finish_route(&funnel_id, request_epoch, kind);
-            });
-        });
+        spawn(async move { load_editor_surface(surface_state, funnel_id, request_epoch).await });
     }));
 
     match surface_state.with(|state| state.surface_for(&id)) {
@@ -1621,6 +1642,21 @@ pub(super) fn FunnelDetail(id: String) -> Element {
             section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",
                 "Loading the current funnel revision…"
                 code { class: "detail-id", "Funnel ID: {id}" }
+            }
+        },
+        EditorSurface::Error => rsx! {
+            section { class: "empty-state editor-load-error", role: "alert", "aria-label": "Funnel editor type error",
+                p { "The funnel type could not be checked. No editor was opened." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        let funnel_id = id.clone();
+                        let request_epoch = surface_state.with_mut(|state| state.begin_route(funnel_id.clone()));
+                        spawn(async move { load_editor_surface(surface_state, funnel_id, request_epoch).await });
+                    },
+                    "Try again"
+                }
             }
         },
         EditorSurface::V1 => rsx! { FunnelDetailV1 { id } },
@@ -3649,6 +3685,21 @@ mod tests {
         assert!(state.finish_route("funnel-2", second_request, EditorSurface::V1));
         assert_eq!(state.surface_for("funnel-2"), EditorSurface::V1);
         assert_eq!(state.surface_for("funnel-1"), EditorSurface::Loading);
+    }
+
+    #[test]
+    fn only_supported_schema_versions_select_an_editor_surface() {
+        assert_eq!(editor_surface_for_schema(1), Some(EditorSurface::V1));
+        assert_eq!(editor_surface_for_schema(2), Some(EditorSurface::V2));
+        assert_eq!(editor_surface_for_schema(99), None);
+        assert_eq!(
+            editor_surface_from_metadata(&serde_json::json!({})),
+            Some(EditorSurface::V1)
+        );
+        assert_eq!(
+            editor_surface_from_metadata(&serde_json::json!({ "schema_version": "unknown" })),
+            None
+        );
     }
 
     #[test]

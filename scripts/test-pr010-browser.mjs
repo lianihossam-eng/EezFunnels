@@ -1093,8 +1093,89 @@ try {
   const commitConversion = await commitConversionResponse;
   assert.equal(commitConversion.status(), 201, await commitConversion.text());
   await page.getByRole("link", { name: "Open typed editor" }).waitFor();
+
+  let failedSchemaProbe = false;
+  const funnelMetadataRoute = `**/api/funnels/${conversionFunnel.funnel.id}`;
+  await page.route(funnelMetadataRoute, async (route) => {
+    if (route.request().method() === "GET" && !failedSchemaProbe) {
+      failedSchemaProbe = true;
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("alert", { name: "Funnel editor type error" }).waitFor();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.unroute(funnelMetadataRoute);
+
+  await page.getByLabel("Block type").selectOption("button");
+  await page.getByRole("button", { name: "Add block" }).click();
+  const buttonUrl = page.locator('input[aria-label^="Destination URL for button"]').last();
+  await buttonUrl.waitFor();
+  assert.equal(await buttonUrl.inputValue(), "https://example.invalid/");
+  const buttonEditResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/edit-v2`)
+      && response.request().postData()?.includes("https://example.test/pr031-checkout"),
+  );
+  await buttonUrl.fill("https://example.test/pr031-checkout");
+  await buttonUrl.press("Tab");
+  const buttonEdit = await buttonEditResponse;
+  assert.equal(buttonEdit.status(), 200, await buttonEdit.text());
+  const buttonEditBody = await buttonEdit.json();
+  assert.ok(
+    buttonEditBody.document_json.includes("https://example.test/pr031-checkout"),
+    "the Rust edit command should return the changed external destination",
+  );
+  assert.match(buttonEditBody.preview_html, /<span class="v2-button" aria-disabled="true">Continue<\/span>/);
+
+  await page.route("**/api/v2/stage-capacity", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "temporary storage budget is unavailable" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), true);
+  await page.unroute("**/api/v2/stage-capacity");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.getByRole("button", { name: "Save revision" }).waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), false);
+
+  let stageCreateCount = 0;
+  let stageUploadCount = 0;
+  let finalizationCount = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === `/api/funnels/${conversionFunnel.funnel.id}/stages-v2` && request.method() === "POST") {
+      stageCreateCount += 1;
+    }
+    if (url.pathname === `/api/funnels/${conversionFunnel.funnel.id}/stages-v2` && request.method() === "PUT") {
+      stageUploadCount += 1;
+    }
+  });
+  const finalizationRoute = `**/api/funnels/${conversionFunnel.funnel.id}/revisions-v2`;
+  await page.route(finalizationRoute, async (route) => {
+    finalizationCount += 1;
+    if (finalizationCount === 1) {
+      const response = await route.fetch();
+      assert.equal(response.status(), 201, await response.text());
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Save revision" }).click();
+  await page.getByRole("button", { name: "Retry save" }).waitFor();
+  await page.getByRole("button", { name: "Retry save" }).click();
+  await page.getByText("All changes saved").waitFor();
+  assert.equal(finalizationCount, 2, "retry replays the final save receipt");
+  assert.equal(stageCreateCount, 1, "retry does not mint another stage");
+  assert.equal(stageUploadCount, 1, "retry does not upload to the consumed stage");
+  await page.unroute(finalizationRoute);
+
   await page.addScriptTag({ content: require("axe-core").source });
   const convertedAxe = await page.evaluate(async () => {
     const result = await window.axe.run(document, {
@@ -1104,7 +1185,7 @@ try {
   });
   assert.deepEqual(convertedAxe, [], `Converted typed editor axe findings: ${JSON.stringify(convertedAxe)}`);
 
-  console.log(`PR-010/011/012/013/024 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
+  console.log(`PR-010/011/012/013/024/031 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, schema-probe retry, button destination editing, stage-capacity fallback, final-save receipt replay, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,

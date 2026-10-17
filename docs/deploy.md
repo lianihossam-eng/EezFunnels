@@ -35,11 +35,11 @@ Edit the top-level `[vars]` entry in `wrangler.toml` and set `ALLOWED_HOSTS` to 
 
 ## V2 staged-save capacity
 
-V2 funnel creation and staged saves require explicit production values for `V2_STAGE_ORPHAN_BYTE_BUDGET` and `V2_STAGE_ORPHAN_KEY_BUDGET` in the top-level `[vars]` table. The repository intentionally supplies no production capacity. Without both positive values, V2 creation fails closed. Local development has separate explicit limits in `[env.dev.vars]`.
+The top-level `[vars]` table supplies initial caps of 104,857,600 bytes (100 MiB) and 1,000 object keys through `V2_STAGE_ORPHAN_BYTE_BUDGET` and `V2_STAGE_ORPHAN_KEY_BUDGET`. These are starting values; review them against the account and the exposure you accept before deployment. Local development has separate values in `[env.dev.vars]`. If either variable is missing, invalid, or non-positive, V2 staging and saves fail closed. The dashboard keeps an already saved V2 document readable and disables saves while the capacity endpoint is unavailable.
 
-Each R2 upload attempt permanently charges its expected byte length and one object key in the external stage-control object before the R2 PUT. Cleanup, failed or timed-out writes, and D1 restore never refund that charge. These lifetime limits bound worst-case orphan exposure even when an object is never observed or removed. The typed editor displays the configured worst-case byte/key exposure and the amount already charged; `GET /api/v2/stage-capacity` provides the same status to the dashboard.
+Before an upload, the Worker reserves its expected byte length and one object key across active stage attempts. The reservation is released when the stage is consumed or expired and its object cleanup completes; it is not a lifetime charge. The external stage-control object keeps the accepted caps outside D1 so a D1 restore does not reset them. The typed editor shows the byte/key caps and currently held reservations; `GET /api/v2/stage-capacity` provides the same status to the dashboard.
 
-Set an initial cap appropriate for the account before creating V2 funnels. Increasing either cap is an explicit operator change and the editor displays the resulting maximum exposure; the persisted limit only increases. If configuration is lowered below the persisted cap, V2 staging fails closed. The control object is initialized on the first V2 create and lives in R2 outside D1 Time Travel restores.
+Increasing either persisted cap is an explicit operator change; the persisted limits only increase. If configuration is lowered below the persisted cap, V2 staging fails closed. The control object is initialized on the first V2 create and lives in R2 outside D1 Time Travel restores.
 
 Do not deploy with the placeholder D1 or KV IDs. The `[env.dev]` resources are separate from the production bindings; the local development commands do not need real remote dev resources.
 

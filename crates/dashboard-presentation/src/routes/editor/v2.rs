@@ -76,6 +76,7 @@ struct V2EditorState {
     pending: bool,
     saving: bool,
     save_retryable: bool,
+    save_phase: V2SavePhase,
     stale: bool,
     funnel: Option<EditorFunnel>,
     base_revision_id: String,
@@ -94,6 +95,7 @@ struct V2EditorState {
     compare_revision_id: Option<String>,
     compare_document: Option<DocumentV2>,
     compare_loading: bool,
+    compare_request_epoch: u64,
     recovered_draft: Option<V2LocalDraft>,
     recovered_current_draft: bool,
     recovery_error: Option<String>,
@@ -102,7 +104,8 @@ struct V2EditorState {
     announcement: String,
     publication_pending: bool,
     publication_retryable: bool,
-    #[cfg(feature = "browser")]
+    publication_refreshing: bool,
+    #[cfg(any(feature = "browser", test))]
     publication_attempt: Option<PublicationAction>,
     publication_error: Option<String>,
     publication_status: Option<String>,
@@ -115,6 +118,8 @@ struct V2EditorState {
     save_key: Option<PreparedIdempotencyKey>,
     #[cfg(feature = "browser")]
     save_body: Option<String>,
+    #[cfg(feature = "browser")]
+    save_stage_id: Option<String>,
     #[cfg(feature = "browser")]
     publication_key: Option<PreparedIdempotencyKey>,
     #[cfg(feature = "browser")]
@@ -132,6 +137,7 @@ impl Default for V2EditorState {
             pending: false,
             saving: false,
             save_retryable: false,
+            save_phase: V2SavePhase::Staging,
             stale: false,
             funnel: None,
             base_revision_id: String::new(),
@@ -150,6 +156,7 @@ impl Default for V2EditorState {
             compare_revision_id: None,
             compare_document: None,
             compare_loading: false,
+            compare_request_epoch: 0,
             recovered_draft: None,
             recovered_current_draft: false,
             recovery_error: None,
@@ -158,7 +165,8 @@ impl Default for V2EditorState {
             announcement: String::new(),
             publication_pending: false,
             publication_retryable: false,
-            #[cfg(feature = "browser")]
+            publication_refreshing: false,
+            #[cfg(any(feature = "browser", test))]
             publication_attempt: None,
             publication_error: None,
             publication_status: None,
@@ -171,6 +179,8 @@ impl Default for V2EditorState {
             save_key: None,
             #[cfg(feature = "browser")]
             save_body: None,
+            #[cfg(feature = "browser")]
+            save_stage_id: None,
             #[cfg(feature = "browser")]
             publication_key: None,
             #[cfg(feature = "browser")]
@@ -186,6 +196,13 @@ enum V2NewBlockKind {
     Text,
     List,
     Button,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum V2SavePhase {
+    #[default]
+    Staging,
+    Finalizing,
 }
 
 impl V2NewBlockKind {
@@ -228,7 +245,7 @@ impl V2NewBlockKind {
             Self::Button => NewBlock::Button {
                 label: "Continue".to_owned(),
                 action: ActionV2::ExternalHttps {
-                    url: "https://example.com".to_owned(),
+                    url: "https://example.invalid".to_owned(),
                 },
             },
         }
@@ -255,6 +272,23 @@ struct V2SaveCapture {
     funnel_id: String,
     base_revision_id: String,
     document_json: String,
+    resume_finalization: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct V2CompareCapture {
+    route_epoch: u64,
+    funnel_id: String,
+    request_epoch: u64,
+    revision_id: String,
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct V2PublicationCapture {
+    route_epoch: u64,
+    funnel_id: String,
+    action: PublicationAction,
 }
 
 struct DeterministicIds {
@@ -308,7 +342,7 @@ impl V2EditorState {
                 self.selected_page = loaded.selected_page;
                 self.selected_section = loaded.selected_section;
                 self.revisions = loaded.revisions;
-                self.stage_capacity = Some(loaded.stage_capacity);
+                self.stage_capacity = loaded.stage_capacity;
                 self.recovered_draft = loaded.recovered_draft;
                 self.recovered_current_draft = loaded.recovered_current_draft;
                 self.recovery_error = loaded.recovery_error;
@@ -350,6 +384,7 @@ impl V2EditorState {
                 && !self.pending
                 && !self.saving
                 && !self.stale
+                && self.stage_capacity.is_some()
                 && !document.has_images()
                 && (self.save_retryable || self.has_unsaved_changes())
         })
@@ -361,16 +396,38 @@ impl V2EditorState {
             && !self.saving
             && !self.stale
             && !self.publication_pending
+            && !self.publication_refreshing
             && !self.has_unsaved_changes()
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
+            && self.can_retry_publication_as(true)
     }
 
     fn can_unpublish(&self) -> bool {
         self.published_revision_id.is_some()
             && !self.publication_pending
-            && !self.publication_retryable
+            && !self.publication_refreshing
             && !self.loading
+            && self.can_retry_publication_as(false)
+    }
+
+    fn can_retry_publication_as(&self, publish: bool) -> bool {
+        if !self.publication_retryable {
+            return true;
+        }
+        #[cfg(any(feature = "browser", test))]
+        {
+            matches!(
+                (publish, self.publication_attempt.as_ref()),
+                (true, Some(PublicationAction::Publish { .. }))
+                    | (false, Some(PublicationAction::Unpublish { .. }))
+            )
+        }
+        #[cfg(not(any(feature = "browser", test)))]
+        {
+            let _ = publish;
+            false
+        }
     }
 
     fn apply_local_edit(&mut self, edit: Edit, operation_id: String) -> Option<V2EditCapture> {
@@ -392,6 +449,12 @@ impl V2EditorState {
         self.document = Some(outcome.document);
         self.push_history(document_json.clone());
         self.generation = self.generation.wrapping_add(1);
+        self.save_retryable = false;
+        self.save_phase = V2SavePhase::Staging;
+        #[cfg(feature = "browser")]
+        {
+            self.save_stage_id = None;
+        }
         self.pending = true;
         self.error = None;
         self.status =
@@ -503,6 +566,203 @@ impl V2EditorState {
         ))
     }
 
+    fn discard_recovered_current_draft(&mut self) -> Option<(u64, String, String, String)> {
+        if !self.recovered_current_draft || self.saved_document_json.is_empty() {
+            return None;
+        }
+        let document =
+            DocumentV2::decode(self.saved_document_json.as_bytes(), &self.funnel_id).ok()?;
+        self.selected_page = document.entry_page_id().as_str().to_owned();
+        self.selected_section = document
+            .pages()
+            .iter()
+            .find(|page| page.id().as_str() == self.selected_page)
+            .and_then(|page| page.sections().first())
+            .map(|section| section.id().as_str().to_owned());
+        self.document = Some(document);
+        self.recovered_current_draft = false;
+        self.history = vec![self.saved_document_json.clone()];
+        self.history_cursor = 0;
+        self.generation = self.generation.wrapping_add(1);
+        self.preview_html.clear();
+        self.status = Some("Recovered draft discarded.".to_owned());
+        Some((
+            self.generation,
+            self.funnel_id.clone(),
+            self.base_revision_id.clone(),
+            self.saved_document_json.clone(),
+        ))
+    }
+
+    fn begin_compare(&mut self, revision_id: String) -> Option<V2CompareCapture> {
+        if revision_id.is_empty() || self.compare_loading || self.document.is_none() {
+            return None;
+        }
+        self.compare_request_epoch = self.compare_request_epoch.wrapping_add(1);
+        self.compare_loading = true;
+        self.compare_revision_id = Some(revision_id.clone());
+        self.compare_document = None;
+        self.error = None;
+        Some(V2CompareCapture {
+            route_epoch: self.route_epoch,
+            funnel_id: self.funnel_id.clone(),
+            request_epoch: self.compare_request_epoch,
+            revision_id,
+        })
+    }
+
+    fn finish_compare(&mut self, capture: &V2CompareCapture, result: Result<DocumentV2, ()>) {
+        if self.route_epoch != capture.route_epoch
+            || self.funnel_id != capture.funnel_id
+            || self.compare_request_epoch != capture.request_epoch
+            || self.compare_revision_id.as_deref() != Some(capture.revision_id.as_str())
+        {
+            return;
+        }
+        self.compare_loading = false;
+        match result {
+            Ok(document) => self.compare_document = Some(document),
+            Err(()) => {
+                self.error = Some("That revision could not be loaded for comparison.".to_owned())
+            }
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn is_current_publication(&self, capture: &V2PublicationCapture) -> bool {
+        self.route_epoch == capture.route_epoch && self.funnel_id == capture.funnel_id
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_publication(&mut self, publish: bool) -> Option<V2PublicationCapture> {
+        if self.publication_pending || self.publication_refreshing {
+            return None;
+        }
+        let action = match (
+            publish,
+            self.publication_attempt.as_ref(),
+            self.publication_retryable,
+        ) {
+            (true, Some(PublicationAction::Publish { .. }), true) => {
+                self.publication_attempt.clone()?
+            }
+            (false, Some(PublicationAction::Unpublish { .. }), true) => {
+                self.publication_attempt.clone()?
+            }
+            (true, _, _) if self.can_publish() => PublicationAction::Publish {
+                revision_id: self.base_revision_id.clone(),
+                expected_published_revision_id: self.published_revision_id.clone(),
+            },
+            (false, _, _) if self.can_unpublish() => PublicationAction::Unpublish {
+                expected_published_revision_id: self.published_revision_id.clone()?,
+            },
+            _ => return None,
+        };
+        self.publication_pending = true;
+        self.publication_retryable = false;
+        self.publication_attempt = Some(action.clone());
+        self.publication_error = None;
+        self.publication_status = Some(
+            if publish {
+                "Publishing the saved revision…"
+            } else {
+                "Unpublishing the live revision…"
+            }
+            .to_owned(),
+        );
+        Some(V2PublicationCapture {
+            route_epoch: self.route_epoch,
+            funnel_id: self.funnel_id.clone(),
+            action,
+        })
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_publication(
+        &mut self,
+        capture: &V2PublicationCapture,
+        result: Result<Option<String>, ()>,
+    ) -> bool {
+        if !self.is_current_publication(capture) {
+            return false;
+        }
+        let Ok(published_revision_id) = result else {
+            self.publication_pending = false;
+            self.publication_retryable = true;
+            self.publication_error = Some(
+                "The publication response could not be verified. Retry the same action.".to_owned(),
+            );
+            self.publication_status = None;
+            return false;
+        };
+        if published_revision_id.as_deref() != capture.action.resulting_revision_id() {
+            self.publication_pending = false;
+            self.publication_retryable = true;
+            self.publication_error = Some(
+                "The publication response could not be verified. Retry the same action.".to_owned(),
+            );
+            self.publication_status = None;
+            return false;
+        }
+        self.publication_pending = false;
+        self.publication_retryable = false;
+        self.publication_attempt = None;
+        self.published_revision_id = published_revision_id;
+        self.publication_status = Some(
+            if capture.action.resulting_revision_id().is_some() {
+                "Revision published."
+            } else {
+                "Funnel unpublished."
+            }
+            .to_owned(),
+        );
+        self.publication_error = None;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_publication_refresh(&mut self, capture: &V2PublicationCapture) -> bool {
+        if !self.is_current_publication(capture) {
+            return false;
+        }
+        self.publication_pending = false;
+        self.publication_retryable = false;
+        self.publication_attempt = None;
+        self.publication_refreshing = true;
+        self.publication_status =
+            Some("Publication changed elsewhere; refreshing its current state…".to_owned());
+        self.publication_error = None;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_publication_refresh(
+        &mut self,
+        capture: &V2PublicationCapture,
+        published_revision_id: Result<Option<String>, ()>,
+    ) {
+        if !self.is_current_publication(capture) {
+            return;
+        }
+        self.publication_refreshing = false;
+        match published_revision_id {
+            Ok(published_revision_id) => {
+                self.published_revision_id = published_revision_id;
+                self.publication_status = Some(
+                    "Publication changed in another session. The current state has been refreshed."
+                        .to_owned(),
+                );
+                self.publication_error = None;
+            }
+            Err(()) => {
+                self.publication_status = None;
+                self.publication_error = Some(
+                    "Publication changed in another session, but its current state could not be loaded. Reload the editor before trying again.".to_owned(),
+                );
+            }
+        }
+    }
+
     fn restore_document(&mut self, document: DocumentV2) -> Option<(u64, String, String, String)> {
         if !self.can_edit() || document.funnel_id().as_str() != self.funnel_id {
             return None;
@@ -546,6 +806,7 @@ impl V2EditorState {
             funnel_id: self.funnel_id.clone(),
             base_revision_id: self.base_revision_id.clone(),
             document_json: self.document.as_ref()?.canonical_json(),
+            resume_finalization: self.save_retryable && self.save_phase == V2SavePhase::Finalizing,
         };
         self.saving = true;
         self.save_retryable = false;
@@ -559,9 +820,9 @@ impl V2EditorState {
         &mut self,
         capture: &V2SaveCapture,
         response: Result<V2SaveResponse, V2RequestFailure>,
-    ) {
+    ) -> bool {
         if !self.is_current_save(capture) {
-            return;
+            return false;
         }
         self.saving = false;
         match response {
@@ -576,6 +837,7 @@ impl V2EditorState {
                 self.history = vec![self.saved_document_json.clone()];
                 self.history_cursor = 0;
                 self.save_retryable = false;
+                self.save_phase = V2SavePhase::Staging;
                 self.stale = false;
                 self.recovered_current_draft = false;
                 self.recovered_draft = None;
@@ -593,17 +855,23 @@ impl V2EditorState {
                         created_at: "Just now".to_owned(),
                     },
                 );
+                true
             }
             Ok(_) => {
-                self.error =
-                    Some("The save response did not match this funnel revision.".to_owned());
+                self.save_retryable = true;
+                self.error = Some(
+                    "The save response could not be verified. Retry the same action to confirm it."
+                        .to_owned(),
+                );
                 self.status = None;
+                false
             }
             Err(failure) => {
                 self.stale = failure.code.as_deref() == Some("conflict/edit_stale_revision");
                 self.save_retryable = failure.retryable && !self.stale;
                 self.error = Some(failure.message);
                 self.status = None;
+                false
             }
         }
     }
@@ -677,7 +945,7 @@ struct V2LoadedEditor {
     selected_page: String,
     selected_section: Option<String>,
     revisions: Vec<V2RevisionSummary>,
-    stage_capacity: V2StageCapacity,
+    stage_capacity: Option<V2StageCapacity>,
     recovered_draft: Option<V2LocalDraft>,
     recovered_current_draft: bool,
     recovery_error: Option<String>,
@@ -779,17 +1047,14 @@ async fn load_v2_editor(funnel_id: &str) -> Result<V2LoadedEditor, ()> {
     if metadata.schema_version != 2 || metadata.funnel.id != funnel_id {
         return Err(());
     }
-    let capacity_response = api_request("GET", "/api/v2/stage-capacity", None, None)
-        .await
-        .map_err(|_| ())?;
-    if capacity_response.status != 200 {
-        return Err(());
-    }
-    let stage_capacity: V2StageCapacity =
-        serde_json::from_str(&capacity_response.body).map_err(|_| ())?;
-    if !stage_capacity.is_valid() {
-        return Err(());
-    }
+    let stage_capacity = match api_request("GET", "/api/v2/stage-capacity", None, None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<V2StageCapacity>(&response.body)
+                .ok()
+                .filter(V2StageCapacity::is_valid)
+        }
+        _ => None,
+    };
     let document_response = api_request(
         "GET",
         &format!("/api/funnels/{funnel_id}/document"),
@@ -1134,6 +1399,40 @@ async fn save_v2_revision(mut state: Signal<V2EditorState>) {
     })
     .to_string();
     let stage_path = format!("/api/funnels/{}/stages-v2", capture.funnel_id);
+    if capture.resume_finalization {
+        let retry = state.with(|state| {
+            let stage_id = state.save_stage_id.clone()?;
+            let save_body = state.save_body.clone()?;
+            let save_key = state.save_key.clone()?;
+            let stage_key = state.stage_key.clone();
+            let expected_save_body = serde_json::json!({
+                "base_revision_id": capture.base_revision_id,
+                "stage_id": stage_id,
+                "expected_length": capture.document_json.len(),
+                "expected_sha256": digest,
+            })
+            .to_string();
+            (save_body == expected_save_body).then_some((stage_key, save_body, save_key))
+        });
+        if let Some((stage_key, save_body, save_key)) = retry {
+            finalize_v2_save(state, &capture, stage_key, save_body, save_key).await;
+        } else {
+            fail_v2_save(
+                state,
+                &capture,
+                V2RequestFailure {
+                    code: Some("conflict/edit_stale_revision".to_owned()),
+                    retryable: false,
+                    message: "The pending save could not be resumed safely. Reload the current revision before saving again.".to_owned(),
+                },
+            );
+        }
+        return;
+    }
+    state.with_mut(|state| {
+        state.save_phase = V2SavePhase::Staging;
+        state.save_stage_id = None;
+    });
     let previous_stage_key = state.with(|state| {
         (state.stage_body.as_deref() == Some(stage_body.as_str()))
             .then(|| state.stage_key.clone())
@@ -1174,7 +1473,7 @@ async fn save_v2_revision(mut state: Signal<V2EditorState>) {
                         &capture,
                         V2RequestFailure {
                             code: None,
-                            retryable: false,
+                            retryable: true,
                             message:
                                 "The stage response was invalid. Your browser draft is preserved."
                                     .to_owned(),
@@ -1257,14 +1556,28 @@ async fn save_v2_revision(mut state: Signal<V2EditorState>) {
     state.with_mut(|state| {
         state.save_key = Some(save_key.clone());
         state.save_body = Some(save_body.clone());
+        state.save_stage_id = Some(stage_id.clone());
+        state.save_phase = V2SavePhase::Finalizing;
     });
+    finalize_v2_save(state, &capture, Some(stage_key), save_body, save_key).await;
+}
+
+#[cfg(feature = "browser")]
+async fn finalize_v2_save(
+    mut state: Signal<V2EditorState>,
+    capture: &V2SaveCapture,
+    stage_key: Option<PreparedIdempotencyKey>,
+    save_body: String,
+    save_key: PreparedIdempotencyKey,
+) {
+    let save_path = format!("/api/funnels/{}/revisions-v2", capture.funnel_id);
     let save_response =
         api_request("POST", &save_path, Some(save_body), Some(save_key.clone())).await;
     let result = match save_response {
         Ok(response) if response.status == 201 => {
             serde_json::from_str::<V2SaveResponse>(&response.body).map_err(|_| V2RequestFailure {
                 code: None,
-                retryable: false,
+                retryable: true,
                 message: "The save response was invalid. The local draft remains available."
                     .to_owned(),
             })
@@ -1277,12 +1590,12 @@ async fn save_v2_revision(mut state: Signal<V2EditorState>) {
                 .to_owned(),
         }),
     };
-    let succeeded = result.is_ok();
-    if state.try_peek().is_ok() {
-        state.with_mut(|state| state.finish_save(&capture, result));
-    }
-    if succeeded {
-        let _ = clear_idempotency_storage(&stage_key);
+    let saved =
+        state.try_peek().is_ok() && state.with_mut(|state| state.finish_save(capture, result));
+    if saved {
+        if let Some(stage_key) = stage_key.as_ref() {
+            let _ = clear_idempotency_storage(stage_key);
+        }
         let _ = clear_idempotency_storage(&save_key);
         let _ = remove_v2_local_draft(&capture.funnel_id).await;
         if state.try_peek().is_ok() {
@@ -1291,6 +1604,7 @@ async fn save_v2_revision(mut state: Signal<V2EditorState>) {
                 state.stage_body = None;
                 state.save_key = None;
                 state.save_body = None;
+                state.save_stage_id = None;
             });
         }
     }
@@ -1311,20 +1625,15 @@ fn fail_v2_save(
 
 #[cfg(feature = "browser")]
 async fn compare_v2_revision(mut state: Signal<V2EditorState>, revision_id: String) {
-    if revision_id.is_empty() {
+    let capture = state.with_mut(|state| state.begin_compare(revision_id));
+    let Some(capture) = capture else {
         return;
-    }
-    state.with_mut(|state| {
-        state.compare_loading = true;
-        state.compare_revision_id = Some(revision_id.clone());
-        state.compare_document = None;
-        state.error = None;
-    });
+    };
     let response = api_request(
         "GET",
         &format!(
-            "/api/funnels/{}/document?revision_id={revision_id}",
-            state.with(|state| state.funnel_id.clone())
+            "/api/funnels/{}/document?revision_id={}",
+            capture.funnel_id, capture.revision_id
         ),
         None,
         None,
@@ -1332,22 +1641,12 @@ async fn compare_v2_revision(mut state: Signal<V2EditorState>, revision_id: Stri
     .await;
     let result = match response {
         Ok(response) if response.status == 200 => {
-            let funnel_id = state.with(|state| state.funnel_id.clone());
-            DocumentV2::decode(response.body.as_bytes(), &funnel_id).map_err(|_| ())
+            DocumentV2::decode(response.body.as_bytes(), &capture.funnel_id).map_err(|_| ())
         }
         _ => Err(()),
     };
     if state.try_peek().is_ok() {
-        state.with_mut(|state| {
-            state.compare_loading = false;
-            match result {
-                Ok(document) => state.compare_document = Some(document),
-                Err(()) => {
-                    state.error =
-                        Some("That revision could not be loaded for comparison.".to_owned())
-                }
-            }
-        });
+        state.with_mut(|state| state.finish_compare(&capture, result));
     }
 }
 
@@ -1414,6 +1713,16 @@ fn block_value_with_text(block: &BlockV2, text: String) -> Option<NewBlock> {
         BlockV2::Form { form_id, .. } => Some(NewBlock::Form {
             form_id: form_id.clone(),
         }),
+    }
+}
+
+fn block_value_with_action(block: &BlockV2, action: ActionV2) -> Option<NewBlock> {
+    match block {
+        BlockV2::Button { label, .. } => Some(NewBlock::Button {
+            label: label.clone(),
+            action,
+        }),
+        _ => None,
     }
 }
 
@@ -1536,6 +1845,13 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
         .recovered_draft
         .as_ref()
         .and_then(|draft| DocumentV2::decode(draft.document_json.as_bytes(), &view.funnel_id).ok());
+    let page_options = view.document.as_ref().map_or_else(Vec::new, |document| {
+        document
+            .pages()
+            .iter()
+            .map(|page| (page.id().as_str().to_owned(), page.title().to_owned()))
+            .collect()
+    });
 
     rsx! {
         div {
@@ -1624,6 +1940,12 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                         "aria-label": "Temporary R2 storage budget",
                         "Worst-case orphan exposure is capped at {capacity.worst_case_orphan_bytes} bytes across {capacity.worst_case_orphan_keys} object writes. Currently reserved: {capacity.orphan_bytes_held} bytes across {capacity.orphan_keys_held} object writes."
                     }
+                } else {
+                    p {
+                        class: "error-message editor-capacity-error",
+                        role: "alert",
+                        "The temporary storage budget is unavailable. You can keep editing this browser draft, but saving is disabled until the capacity endpoint is available. Reload the editor after resolving the deployment configuration."
+                    }
                 }
                 if let Some(status) = view.status.as_ref() {
                     p { class: "editor-save-status", role: "status", "aria-live": "polite", "aria-atomic": "true", "{status}" }
@@ -1654,13 +1976,8 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                             class: "text-button",
                             r#type: "button",
                             onclick: move |_| {
-                                state.with_mut(|state| {
-                                    state.document = DocumentV2::decode(state.saved_document_json.as_bytes(), &state.funnel_id).ok();
-                                    state.recovered_current_draft = false;
-                                    state.history = vec![state.saved_document_json.clone()];
-                                    state.history_cursor = 0;
-                                    state.status = Some("Recovered draft discarded.".to_owned());
-                                });
+                                let request = state.with_mut(V2EditorState::discard_recovered_current_draft);
+                                schedule_v2_preview(state, request);
                                 let funnel_id = discard_recovered_id.clone();
                                 let _ = spawn(async move { let _ = remove_v2_local_draft(&funnel_id).await; });
                             },
@@ -1975,6 +2292,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                     for (index, block) in section.blocks().iter().enumerate() {
                                         V2BlockEditor {
                                             state,
+                                            page_options: page_options.clone(),
                                             section_id: section.id().clone(),
                                             block: block.clone(),
                                             index,
@@ -2120,6 +2438,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
 #[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
+    page_options: Vec<(String, String)>,
     section_id: SectionId,
     block: BlockV2,
     index: usize,
@@ -2138,7 +2457,14 @@ fn V2BlockEditor(
     let id_down = block_id.clone();
     let id_duplicate = block_id.clone();
     let id_delete = block_id.clone();
-    let block_for_edit = block.clone();
+    let block_for_text_edit = block.clone();
+    let block_for_destination_type = block.clone();
+    let block_for_page_edit = block.clone();
+    let block_for_url_edit = block.clone();
+    let button_destination = match &block {
+        BlockV2::Button { action, .. } => Some(action.clone()),
+        _ => None,
+    };
     let block_count = block_ids.len();
     let block_ids_up = block_ids.clone();
     let block_ids_down = block_ids;
@@ -2159,10 +2485,86 @@ fn V2BlockEditor(
                         disabled: locked,
                         "aria-label": "{control_label} for {block.id().as_str()}",
                         onchange: move |event| {
-                            if let Some(value) = block_value_with_text(&block_for_edit, event.value()) {
-                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_edit.id().clone(), value });
+                            if let Some(value) = block_value_with_text(&block_for_text_edit, event.value()) {
+                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_text_edit.id().clone(), value });
                             }
                         },
+                    }
+                }
+            }
+            if let (BlockV2::Button { .. }, Some(action)) = (&block, button_destination) {
+                {
+                    let action_kind = match action {
+                        ActionV2::NavigatePage { .. } => "page",
+                        ActionV2::ExternalHttps { .. } => "external",
+                    };
+                    let type_page_options = page_options.clone();
+                    rsx! {
+                        label { class: "editor-setting-control",
+                            "Button destination type"
+                            select {
+                                value: "{action_kind}",
+                                disabled: locked,
+                                "aria-label": "Button destination type for {block.id().as_str()}",
+                                onchange: move |event| {
+                                    let next_action = match event.value().as_str() {
+                                        "page" => type_page_options.first().and_then(|(id, _)| PageId::parse(id.clone()).ok()).map(|page_id| ActionV2::NavigatePage { page_id }),
+                                        "external" => Some(ActionV2::ExternalHttps { url: "https://example.invalid".to_owned() }),
+                                        _ => None,
+                                    };
+                                    if let Some(next_action) = next_action {
+                                        if let Some(value) = block_value_with_action(&block_for_destination_type, next_action) {
+                                            dispatch_v2_edit(state, Edit::SetBlock { block: block_for_destination_type.id().clone(), value });
+                                        }
+                                    }
+                                },
+                                option { value: "page", "Internal page" }
+                                option { value: "external", "External HTTPS URL" }
+                            }
+                        }
+                        match action {
+                            ActionV2::NavigatePage { page_id } => {
+                                let selected_page = page_id.as_str().to_owned();
+                                rsx! {
+                                    label { class: "editor-setting-control",
+                                        "Destination page"
+                                        select {
+                                            value: "{selected_page}",
+                                            disabled: locked,
+                                            "aria-label": "Destination page for button {block.id().as_str()}",
+                                            onchange: move |event| {
+                                                if let Ok(page_id) = PageId::parse(event.value()) {
+                                                    if let Some(value) = block_value_with_action(&block_for_page_edit, ActionV2::NavigatePage { page_id }) {
+                                                        dispatch_v2_edit(state, Edit::SetBlock { block: block_for_page_edit.id().clone(), value });
+                                                    }
+                                                }
+                                            },
+                                            for (page_id, title) in page_options.clone() {
+                                                option { value: "{page_id}", "{title}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ActionV2::ExternalHttps { url } => {
+                                rsx! {
+                                    label { class: "editor-setting-control",
+                                        "Destination URL"
+                                        input {
+                                            r#type: "url",
+                                            value: "{url}",
+                                            disabled: locked,
+                                            "aria-label": "Destination URL for button {block.id().as_str()}",
+                                            onchange: move |event| {
+                                                if let Some(value) = block_value_with_action(&block_for_url_edit, ActionV2::ExternalHttps { url: event.value() }) {
+                                                    dispatch_v2_edit(state, Edit::SetBlock { block: block_for_url_edit.id().clone(), value });
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2240,60 +2642,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(feature = "browser")]
 async fn publish_v2_revision(mut state: Signal<V2EditorState>, publish: bool) {
-    let action = state.with_mut(|state| {
-        if state.publication_pending {
-            return None;
-        }
-        let attempt = match state.publication_attempt.clone() {
-            Some(action @ PublicationAction::Publish { .. })
-                if publish && state.publication_retryable =>
-            {
-                action
-            }
-            Some(action @ PublicationAction::Unpublish { .. })
-                if !publish && state.publication_retryable =>
-            {
-                action
-            }
-            _ if publish && state.can_publish() => PublicationAction::Publish {
-                revision_id: state.base_revision_id.clone(),
-                expected_published_revision_id: state.published_revision_id.clone(),
-            },
-            _ if !publish && state.published_revision_id.is_some() => {
-                PublicationAction::Unpublish {
-                    expected_published_revision_id: state.published_revision_id.clone()?,
-                }
-            }
-            _ => return None,
-        };
-        state.publication_pending = true;
-        state.publication_retryable = false;
-        state.publication_attempt = Some(attempt.clone());
-        state.publication_error = None;
-        state.publication_status = Some(
-            if publish {
-                "Publishing the saved revision…"
-            } else {
-                "Unpublishing the live revision…"
-            }
-            .to_owned(),
-        );
-        Some(attempt)
-    });
-    let Some(action) = action else {
+    let capture = state.with_mut(|state| state.begin_publication(publish));
+    let Some(capture) = capture else {
         return;
     };
-    let path = action.path(&state.with(|state| state.funnel_id.clone()));
-    let body = action.body();
+    let path = capture.action.path(&capture.funnel_id);
+    let body = capture.action.body();
     let previous_key = state.with(|state| {
-        (state.publication_body.as_deref() == Some(body.as_str()))
-            .then(|| state.publication_key.clone())
-            .flatten()
+        (state.is_current_publication(&capture)
+            && state.publication_body.as_deref() == Some(body.as_str()))
+        .then(|| state.publication_key.clone())
+        .flatten()
     });
     let key = match prepare_idempotency_key("POST", &path, Some(&body), previous_key) {
         Ok(key) => key,
         Err(()) => {
             state.with_mut(|state| {
+                if !state.is_current_publication(&capture) {
+                    return;
+                }
                 state.publication_pending = false;
                 state.publication_error =
                     Some("The browser could not prepare this publication request.".to_owned());
@@ -2301,65 +2668,73 @@ async fn publish_v2_revision(mut state: Signal<V2EditorState>, publish: bool) {
             return;
         }
     };
+    if !state.with(|state| state.is_current_publication(&capture) && state.publication_pending) {
+        let _ = clear_idempotency_storage(&key);
+        return;
+    }
     state.with_mut(|state| {
-        state.publication_key = Some(key.clone());
-        state.publication_body = Some(body.clone());
+        if state.is_current_publication(&capture) {
+            state.publication_key = Some(key.clone());
+            state.publication_body = Some(body.clone());
+        }
     });
     let response = api_request("POST", &path, Some(body), Some(key.clone())).await;
     match response {
         Ok(response) if response.status == 200 => {
-            match serde_json::from_str::<PublicationResponse>(&response.body) {
-                Ok(response)
-                    if response.published_revision_id.as_deref()
-                        == action.resulting_revision_id() =>
-                {
-                    state.with_mut(|state| {
-                        state.publication_pending = false;
-                        state.publication_retryable = false;
-                        state.publication_attempt = None;
-                        state.published_revision_id = response.published_revision_id;
-                        state.publication_status = Some(
-                            if publish {
-                                "Revision published."
-                            } else {
-                                "Funnel unpublished."
-                            }
-                            .to_owned(),
-                        );
-                        state.publication_error = None;
+            let result = serde_json::from_str::<PublicationResponse>(&response.body)
+                .map(|response| response.published_revision_id)
+                .map_err(|_| ());
+            let succeeded = state.with_mut(|state| state.finish_publication(&capture, result));
+            if succeeded {
+                let _ = clear_idempotency_storage(&key);
+                state.with_mut(|state| {
+                    if state.is_current_publication(&capture) {
                         state.publication_key = None;
                         state.publication_body = None;
-                    });
-                    let _ = clear_idempotency_storage(&key);
-                }
-                _ => {
-                    state.with_mut(|state| {
-                        state.publication_pending = false;
-                        state.publication_error =
-                            Some("The publication response could not be verified.".to_owned());
-                        state.publication_status = None;
-                    });
-                }
+                    }
+                });
             }
         }
         Ok(response) => {
             let failure = v2_failure(&response);
-            state.with_mut(|state| {
-                state.publication_pending = false;
-                state.publication_retryable = failure.retryable;
-                if !failure.retryable {
-                    state.publication_attempt = None;
-                    state.publication_key = None;
-                    state.publication_body = None;
-                }
-                state.publication_error = Some(failure.message);
-                state.publication_status = None;
-            });
-            if !failure.retryable {
+            if failure.code.as_deref() == Some("conflict/publish_stale_revision") {
+                let should_refresh =
+                    state.with_mut(|state| state.begin_publication_refresh(&capture));
                 let _ = clear_idempotency_storage(&key);
+                if should_refresh {
+                    state.with_mut(|state| {
+                        if state.is_current_publication(&capture) {
+                            state.publication_key = None;
+                            state.publication_body = None;
+                        }
+                    });
+                    let latest = refresh_v2_publication_state(&capture.funnel_id).await;
+                    state.with_mut(|state| state.finish_publication_refresh(&capture, latest));
+                }
+            } else {
+                state.with_mut(|state| {
+                    if !state.is_current_publication(&capture) {
+                        return;
+                    }
+                    state.publication_pending = false;
+                    state.publication_retryable = failure.retryable;
+                    if !failure.retryable {
+                        state.publication_attempt = None;
+                        state.publication_key = None;
+                        state.publication_body = None;
+                    }
+                    state.publication_error = Some(failure.message.clone());
+                    state.publication_status = None;
+                });
+                if !failure.retryable {
+                    let _ = clear_idempotency_storage(&key);
+                }
             }
         }
         Err(()) => state.with_mut(|state| {
+            if !state.is_current_publication(&capture) {
+                return;
+            }
             state.publication_pending = false;
             state.publication_retryable = true;
             state.publication_error = Some(
@@ -2369,6 +2744,21 @@ async fn publish_v2_revision(mut state: Signal<V2EditorState>, publish: bool) {
             state.publication_status = None;
         }),
     }
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_v2_publication_state(funnel_id: &str) -> Result<Option<String>, ()> {
+    let response = api_request("GET", &format!("/api/funnels/{funnel_id}"), None, None)
+        .await
+        .map_err(|_| ())?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let metadata: V2EditorMetadata = serde_json::from_str(&response.body).map_err(|_| ())?;
+    if metadata.schema_version != 2 || metadata.funnel.id != funnel_id {
+        return Err(());
+    }
+    Ok(metadata.published_revision_id)
 }
 
 #[cfg(test)]
@@ -2391,6 +2781,248 @@ mod tests {
     fn document() -> DocumentV2 {
         DocumentV2::starter("funnel-a", BlueprintId::LeadGen, ThemePreset::Minimal)
             .expect("valid V2 starter")
+    }
+
+    fn stage_capacity() -> V2StageCapacity {
+        V2StageCapacity {
+            orphan_byte_budget: 1024,
+            orphan_bytes_held: 0,
+            orphan_key_budget: 10,
+            orphan_keys_held: 0,
+            worst_case_orphan_bytes: 1024,
+            worst_case_orphan_keys: 10,
+        }
+    }
+
+    fn loaded_editor(
+        document: DocumentV2,
+        stage_capacity: Option<V2StageCapacity>,
+    ) -> V2LoadedEditor {
+        let selected_page = document.entry_page_id().as_str().to_owned();
+        let selected_section = document
+            .pages()
+            .iter()
+            .find(|page| page.id().as_str() == selected_page)
+            .and_then(|page| page.sections().first())
+            .map(|section| section.id().as_str().to_owned());
+        let saved_document_json = document.canonical_json();
+        V2LoadedEditor {
+            metadata: V2EditorMetadata {
+                schema_version: 2,
+                funnel: EditorFunnel {
+                    id: "funnel-a".to_owned(),
+                    name: "Funnel A".to_owned(),
+                    slug: "funnel-a".to_owned(),
+                    updated_at: "now".to_owned(),
+                },
+                base_revision_id: "revision-a".to_owned(),
+                published_revision_id: None,
+            },
+            document,
+            saved_document_json,
+            preview_html: "<main>Preview</main>".to_owned(),
+            selected_page,
+            selected_section,
+            revisions: Vec::new(),
+            stage_capacity,
+            recovered_draft: None,
+            recovered_current_draft: false,
+            recovery_error: None,
+        }
+    }
+
+    #[test]
+    fn unavailable_stage_capacity_keeps_the_editor_loaded_and_blocks_saves() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(0, "funnel-a", Ok(loaded_editor(document(), None)));
+        assert!(state.document.is_some());
+        assert!(!state.load_error);
+
+        let saved = state.document.as_ref().expect("loaded document");
+        let mut ids = TestIds(0);
+        let changed = saved
+            .apply(
+                Edit::SetThemePreset {
+                    preset: ThemePreset::Bold,
+                },
+                &mut ids,
+            )
+            .expect("valid theme edit");
+        state.document = Some(changed.document);
+        assert!(state.has_unsaved_changes());
+        assert!(!state.can_save());
+
+        state.stage_capacity = Some(stage_capacity());
+        assert!(state.can_save());
+    }
+
+    #[test]
+    fn a_late_revision_comparison_cannot_replace_the_next_route_state() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.document = Some(document());
+        let capture = state
+            .begin_compare("revision-old".to_owned())
+            .expect("comparison starts");
+
+        state.begin_route("funnel-b".to_owned());
+        state.finish_compare(&capture, Ok(document()));
+
+        assert_eq!(state.funnel_id, "funnel-b");
+        assert_eq!(state.compare_document, None);
+        assert!(!state.compare_loading);
+    }
+
+    #[test]
+    fn discarding_a_recovered_draft_restores_saved_selection_and_preview_request() {
+        let document = document();
+        let page_id = document.entry_page_id().as_str().to_owned();
+        let section_id = document.pages()[0].sections()[0].id().as_str().to_owned();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.document = Some(document.clone());
+        state.saved_document_json = document.canonical_json();
+        state.base_revision_id = "revision-a".to_owned();
+        state.recovered_current_draft = true;
+        state.selected_page = "missing-page".to_owned();
+        state.selected_section = Some("missing-section".to_owned());
+        state.preview_html = "stale preview".to_owned();
+
+        let request = state
+            .discard_recovered_current_draft()
+            .expect("recovered draft is discarded");
+
+        assert_eq!(state.selected_page, page_id);
+        assert_eq!(state.selected_section.as_deref(), Some(section_id.as_str()));
+        assert!(state.preview_html.is_empty());
+        assert_eq!(request.1, "funnel-a");
+        assert_eq!(request.2, "revision-a");
+        assert_eq!(request.3, state.saved_document_json);
+        assert!(!state.recovered_current_draft);
+    }
+
+    #[test]
+    fn unpublish_remains_retryable_after_an_uncertain_response() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.published_revision_id = Some("revision-live".to_owned());
+        state.publication_retryable = true;
+        state.publication_attempt = Some(PublicationAction::Unpublish {
+            expected_published_revision_id: "revision-live".to_owned(),
+        });
+
+        assert!(state.can_unpublish());
+        assert!(!state.can_publish());
+    }
+
+    #[test]
+    fn a_final_save_retry_resumes_the_existing_finalization_phase() {
+        let document = document();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.stage_capacity = Some(stage_capacity());
+        state.base_revision_id = "revision-a".to_owned();
+        state.saved_document_json = "older snapshot".to_owned();
+        state.document = Some(document);
+        state.save_phase = V2SavePhase::Finalizing;
+        state.save_retryable = true;
+
+        let capture = state.begin_save().expect("retryable save can be resumed");
+
+        assert!(capture.resume_finalization);
+        assert_eq!(state.save_phase, V2SavePhase::Finalizing);
+    }
+
+    #[test]
+    fn stale_publication_conflict_refreshes_the_live_revision_pointer() {
+        let document = document();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.base_revision_id = "revision-current".to_owned();
+        state.saved_document_json = document.canonical_json();
+        state.document = Some(document);
+        state.published_revision_id = Some("revision-old".to_owned());
+        let capture = state
+            .begin_publication(true)
+            .expect("current revision can be published");
+
+        assert!(state.begin_publication_refresh(&capture));
+        state.finish_publication_refresh(&capture, Ok(Some("revision-live-elsewhere".to_owned())));
+
+        assert_eq!(
+            state.published_revision_id.as_deref(),
+            Some("revision-live-elsewhere")
+        );
+        assert!(!state.publication_refreshing);
+        assert!(!state.publication_retryable);
+    }
+
+    #[test]
+    fn a_publication_response_from_an_old_route_cannot_change_the_current_route() {
+        let document = document();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.base_revision_id = "revision-a".to_owned();
+        state.saved_document_json = document.canonical_json();
+        state.document = Some(document);
+        let capture = state
+            .begin_publication(true)
+            .expect("current revision can be published");
+
+        state.begin_route("funnel-b".to_owned());
+        let accepted = state.finish_publication(&capture, Ok(Some("revision-a".to_owned())));
+
+        assert!(!accepted);
+        assert_eq!(state.funnel_id, "funnel-b");
+        assert_eq!(state.published_revision_id, None);
+        assert!(!state.publication_pending);
+    }
+
+    #[test]
+    fn new_button_defaults_to_an_editable_reserved_external_url() {
+        let NewBlock::Button { action, .. } = V2NewBlockKind::Button.create() else {
+            panic!("button kind creates a button block");
+        };
+
+        assert_eq!(
+            action,
+            ActionV2::ExternalHttps {
+                url: "https://example.invalid".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn button_action_edit_preserves_its_label() {
+        let document = document();
+        let button = document
+            .pages()
+            .iter()
+            .flat_map(|page| page.sections())
+            .flat_map(|section| section.blocks())
+            .find(|block| matches!(block, BlockV2::Button { .. }))
+            .expect("starter document includes a button block");
+        let expected_label = match button {
+            BlockV2::Button { label, .. } => label.clone(),
+            _ => unreachable!("selected block is a button"),
+        };
+        let NewBlock::Button { label, action } = block_value_with_action(
+            button,
+            ActionV2::ExternalHttps {
+                url: "https://example.invalid".to_owned(),
+            },
+        )
+        .expect("button accepts destination edits") else {
+            panic!("button action edit remains a button");
+        };
+
+        assert_eq!(label, expected_label);
+        assert_eq!(
+            action,
+            ActionV2::ExternalHttps {
+                url: "https://example.invalid".to_owned()
+            }
+        );
     }
 
     #[test]
