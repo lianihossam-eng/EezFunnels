@@ -7,9 +7,10 @@ use eez_domain::document_v2::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v6";
-const PREVIOUS_RENDERER_VERSION_V2: &str = "renderer-v5";
-const EARLIER_RENDERER_VERSION_V2: &str = "renderer-v4";
+pub const RENDERER_VERSION_V2: &str = "renderer-v7";
+const PREVIOUS_RENDERER_VERSION_V2: &str = "renderer-v6";
+const EARLIER_RENDERER_VERSION_V2: &str = "renderer-v5";
+const OLDER_RENDERER_VERSION_V2: &str = "renderer-v4";
 const OLDEST_RENDERER_VERSION_V2: &str = "renderer-v3";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
@@ -27,6 +28,7 @@ pub enum V2RenderError {
     PageMissing,
     ImagesNotEnabled,
     FormsNotEnabled,
+    MetadataNotEnabled,
     SerializationFailed,
 }
 
@@ -40,6 +42,7 @@ impl Display for V2RenderError {
             Self::PageMissing => "not_found/page",
             Self::ImagesNotEnabled => "validation/v2_images_not_enabled",
             Self::FormsNotEnabled => "validation/v2_forms_not_enabled",
+            Self::MetadataNotEnabled => "validation/v2_metadata_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -170,7 +173,7 @@ pub fn render_owner_preview_with_assets(
     assets: &[AssetDigestRecord],
 ) -> Result<String, V2RenderError> {
     let assets = canonical_asset_records(document, assets)?;
-    render_page(document, page_id, LinkMode::Inert, &assets)
+    render_page(document, page_id, LinkMode::Inert, &assets, true)
 }
 
 pub fn render_published(
@@ -243,7 +246,7 @@ fn render_published_route_with_slug(
     if document.has_forms()
         && !matches!(
             manifest.renderer_version(),
-            RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2
+            RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2 | EARLIER_RENDERER_VERSION_V2
         )
     {
         return Err(V2RenderError::FormsNotEnabled);
@@ -260,7 +263,10 @@ fn render_published_route_with_slug(
                 LinkMode::PublishedV3,
             )
         }
-        EARLIER_RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2 | RENDERER_VERSION_V2 => {
+        OLDER_RENDERER_VERSION_V2
+        | EARLIER_RENDERER_VERSION_V2
+        | PREVIOUS_RENDERER_VERSION_V2
+        | RENDERER_VERSION_V2 => {
             let page = match page_slug {
                 Some(slug) => document
                     .pages()
@@ -281,7 +287,13 @@ fn render_published_route_with_slug(
         _ => return Err(V2RenderError::UnsupportedRenderer),
     };
     let assets = canonical_asset_records(&document, assets)?;
-    render_page(&document, page.id(), link_mode, &assets)
+    render_page(
+        &document,
+        page.id(),
+        link_mode,
+        &assets,
+        manifest.renderer_version() == RENDERER_VERSION_V2,
+    )
 }
 
 pub fn validate_revision_v2(
@@ -369,6 +381,7 @@ fn validate_manifest(
         RENDERER_VERSION_V2
             | PREVIOUS_RENDERER_VERSION_V2
             | EARLIER_RENDERER_VERSION_V2
+            | OLDER_RENDERER_VERSION_V2
             | OLDEST_RENDERER_VERSION_V2
     ) || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
         || manifest.canonicalizer_profile != CANONICALIZER_PROFILE_V2
@@ -376,9 +389,19 @@ fn validate_manifest(
     {
         return Err(V2RenderError::UnsupportedRenderer);
     }
+    if !renderer_supports_metadata(&manifest.renderer_version)
+        && document.pages().iter().any(|page| {
+            page.seo_title().is_some() || page.seo_description().is_some() || page.noindex()
+        })
+    {
+        return Err(V2RenderError::MetadataNotEnabled);
+    }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let assets = canonical_asset_records(document, assets)?;
+    if !renderer_supports_images(&manifest.renderer_version) && !assets.is_empty() {
+        return Err(V2RenderError::ImagesNotEnabled);
+    }
     let assets_bytes = serde_json_canonicalizer::to_vec(&assets)
         .map_err(|_| V2RenderError::SerializationFailed)?;
     if manifest.document_sha256 != sha256(document.canonical_bytes())
@@ -388,6 +411,17 @@ fn validate_manifest(
         return Err(V2RenderError::DigestMismatch);
     }
     Ok(())
+}
+
+fn renderer_supports_images(renderer_version: &str) -> bool {
+    matches!(
+        renderer_version,
+        RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2
+    )
+}
+
+fn renderer_supports_metadata(renderer_version: &str) -> bool {
+    renderer_version == RENDERER_VERSION_V2
 }
 
 fn canonical_asset_records(
@@ -460,13 +494,38 @@ fn render_page(
     page_id: &PageId,
     link_mode: LinkMode<'_>,
     assets: &[AssetDigestRecord],
+    metadata_enabled: bool,
 ) -> Result<String, V2RenderError> {
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
     let profile = document.resolved_theme_profile();
     let mut html = String::with_capacity(document.canonical_bytes().len() * 2);
     html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>");
-    html.push_str(&crate::escape_html_text(page.title()));
-    html.push_str("</title><style>");
+    let title = if metadata_enabled {
+        page.head_title()
+    } else {
+        page.title()
+    };
+    html.push_str(&crate::escape_html_text(title));
+    html.push_str("</title>");
+    if metadata_enabled {
+        html.push_str(
+            "<meta property=\"og:type\" content=\"website\"><meta property=\"og:title\" content=\"",
+        );
+        html.push_str(&crate::escape_html_attribute(title));
+        html.push_str("\">");
+        if let Some(description) = page.seo_description() {
+            let escaped = crate::escape_html_attribute(description);
+            html.push_str("<meta name=\"description\" content=\"");
+            html.push_str(&escaped);
+            html.push_str("\"><meta property=\"og:description\" content=\"");
+            html.push_str(&escaped);
+            html.push_str("\">");
+        }
+        if page.noindex() {
+            html.push_str("<meta name=\"robots\" content=\"noindex\">");
+        }
+    }
+    html.push_str("<style>");
     html.push_str("html{color-scheme:light}body{margin:0}#funnel{box-sizing:border-box;min-height:100vh;background:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}#funnel *{box-sizing:inherit}.v2-main{max-width:var(--content-width);margin:0 auto}.v2-section{margin:0 auto;padding:var(--spacing-section) 1.5rem}.v2-section--hero{text-align:center}.v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}.v2-section--footer{border-top:1px solid var(--color-border);color:var(--color-muted)}.v2-section h1,.v2-section h2,.v2-section p{margin-top:0}.v2-list{padding-inline-start:1.5rem}.v2-button{display:inline-block;padding:.75rem 1.25rem;background:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}.v2-text{white-space:pre-wrap;overflow-wrap:anywhere}.v2-form{display:grid;gap:1.25rem;max-width:40rem;margin:0 auto}.v2-form fieldset{min-width:0;margin:0;padding:0;border:0}.v2-form legend{margin-bottom:1rem;font-size:1.25rem;font-weight:700}.v2-form-field{display:grid;gap:.35rem;margin-block:1rem;text-align:left}.v2-form-field label,.v2-form-consent label{font-weight:600}.v2-form input:not([type=checkbox]),.v2-form select{width:100%;min-height:2.75rem;padding:.6rem .75rem;border:1px solid var(--color-border);border-radius:var(--radius-button);background:var(--color-background);color:var(--color-text);font:inherit}.v2-form input[type=checkbox]{width:1.25rem;height:1.25rem;min-width:1.25rem;min-height:1.25rem;margin:.15rem 0;accent-color:var(--color-primary)}.v2-form :focus-visible,.v2-form-result:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-help{margin:0;color:var(--color-muted);font-size:.95rem;overflow-wrap:anywhere}.v2-form-consent{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:.75rem;margin-block:.75rem;text-align:left}.v2-section .v2-form-result{display:none;max-width:40rem;margin:1.25rem auto 0;padding:1rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface);overflow-wrap:anywhere}.v2-form-result:target{display:block}");
     html.push_str(".v2-image{display:block;max-width:100%;height:auto}");
     html.push_str("#funnel{--color-background:");

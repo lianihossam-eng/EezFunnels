@@ -176,6 +176,16 @@ pub(crate) fn validate_data(
                 "pages.title",
             ));
         }
+        page.seo_title = normalize_page_metadata(
+            page.seo_title.take(),
+            super::MAX_PAGE_SEO_TITLE_SCALARS,
+            "pages.seo_title",
+        )?;
+        page.seo_description = normalize_page_metadata(
+            page.seo_description.take(),
+            super::MAX_PAGE_SEO_DESCRIPTION_SCALARS,
+            "pages.seo_description",
+        )?;
         if page.id == data.entry_page_id {
             if !page.slug.is_empty() {
                 return Err(DocumentError::at(
@@ -583,6 +593,27 @@ fn validate_forms_and_graph(
         return Err(DocumentError::at("validation/page_graph_cycle", "pages"));
     }
     Ok(())
+}
+
+fn normalize_page_metadata(
+    value: Option<String>,
+    maximum: usize,
+    path: &'static str,
+) -> Result<Option<String>, DocumentError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value
+        .chars()
+        .any(|character| character.is_control() && !character.is_whitespace())
+    {
+        return Err(DocumentError::at("validation/page_metadata_control", path));
+    }
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() > maximum {
+        return Err(DocumentError::at("validation/page_metadata_length", path));
+    }
+    Ok((!normalized.is_empty()).then_some(normalized))
 }
 
 fn validate_consent_copy(version: &str, copy: &str) -> Result<(), DocumentError> {

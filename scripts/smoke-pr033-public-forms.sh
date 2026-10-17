@@ -70,6 +70,24 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         connection.close()
         return status, content, response_headers
 
+    def request_form_with_transport_retry(path, body, headers=None):
+        if "key=" not in path:
+            raise ValueError("form transport retries require the submission idempotency key")
+        for attempt in range(3):
+            result = request("POST", path, body, headers)
+            status, content, _ = result
+            if status != 500 or b"Network connection lost" not in content:
+                return result
+            if attempt == 2:
+                return result
+            print(
+                "PR-033 retrying the same idempotent form submission after a transient "
+                "local Worker transport failure",
+                flush=True,
+            )
+            time.sleep(0.25 * (attempt + 1))
+        raise AssertionError("bounded form transport retry exhausted unexpectedly")
+
     def wait_for_worker():
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
@@ -376,8 +394,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert status == 200, (status, content)
 
-        stale_status, stale_body, _ = request(
-            "POST",
+        stale_status, stale_body, _ = request_form_with_transport_retry(
             action_path,
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -414,8 +431,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         invalid_payload = urlencode(
             {"name": "Ada Lovelace", "email": "ada@example.test"}
         ).encode()
-        invalid_status, invalid_body, _ = request(
-            "POST",
+        invalid_status, invalid_body, _ = request_form_with_transport_retry(
             action_path,
             invalid_payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -423,8 +439,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert invalid_status == 400, (invalid_status, invalid_body)
         assert b"ada@example.test" not in invalid_body
 
-        cross_origin_status, cross_origin_body, _ = request(
-            "POST",
+        cross_origin_status, cross_origin_body, _ = request_form_with_transport_retry(
             action_path,
             bytes([0xFF]),
             {
@@ -435,8 +450,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert cross_origin_status == 403, (cross_origin_status, cross_origin_body)
         assert b"request/invalid_origin" in cross_origin_body
 
-        status, body, response_headers = request(
-            "POST",
+        status, body, response_headers = request_form_with_transport_retry(
             action_path,
             payload,
             {
@@ -449,8 +463,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert response_headers.get("cache-control") == "no-store", response_headers
         assert b"ada@example.test" not in body
 
-        duplicate_status, duplicate_body, _ = request(
-            "POST",
+        duplicate_status, duplicate_body, _ = request_form_with_transport_retry(
             action_path,
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -463,8 +476,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 "_request_consent": "on", "_marketing_opt_in": "on",
             }
         ).encode()
-        reused_key_status, reused_key_body, _ = request(
-            "POST",
+        reused_key_status, reused_key_body, _ = request_form_with_transport_retry(
             action_path,
             marketing_payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -475,8 +487,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         second_key_path = re.sub(
             r"(?<=key=)[0-9a-f-]{36}", second_action.group(1).decode(), action_path
         )
-        marketing_status, marketing_body, _ = request(
-            "POST",
+        marketing_status, marketing_body, _ = request_form_with_transport_retry(
             second_key_path,
             marketing_payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -497,8 +508,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 timeout=90,
             )
         else:
-            third_status, third_body, _ = request(
-                "POST",
+            third_status, third_body, _ = request_form_with_transport_retry(
                 re.sub(r"(?<=key=)[0-9a-f-]{36}", third_key, action_path),
                 payload,
                 {"Content-Type": "application/x-www-form-urlencoded"},
@@ -506,8 +516,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             assert third_status == 303, (third_status, third_body)
 
         rate_limit_key = "3da91eb0-7f65-49c1-9341-a28eb9d10c27"
-        rate_status, rate_body, rate_headers = request(
-            "POST",
+        rate_status, rate_body, rate_headers = request_form_with_transport_retry(
             re.sub(r"(?<=key=)[0-9a-f-]{36}", rate_limit_key, action_path),
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -519,8 +528,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "GET", action_path.split("?", 1)[0]
         )
         assert read_status == 405, (read_status, read_body)
-        unknown_form_status, unknown_form_body, _ = request(
-            "POST",
+        unknown_form_status, unknown_form_body, _ = request_form_with_transport_retry(
             re.sub(rf"/forms/{re.escape(form_id)}/", "/forms/form-unknown/", action_path),
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
