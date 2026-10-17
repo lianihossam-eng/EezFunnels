@@ -8,7 +8,8 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 ## What you can do
 
 - Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
-- Edit typed pages, sections, supported content blocks, actions, and theme settings in the dashboard; preview at mobile, tablet, and desktop widths.
+- Build multi-page funnels: add steps, edit each page title and URL slug, connect pages with buttons, and preview at mobile, tablet, and desktop widths. See [Pages and steps](docs/pages.md) for the editor behavior.
+- Edit typed sections, supported content blocks, actions, and theme settings in the dashboard.
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.

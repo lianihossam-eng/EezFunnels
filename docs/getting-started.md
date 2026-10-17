@@ -21,7 +21,7 @@ npx wrangler d1 migrations apply DB --local --env dev
 npm run dev -- --env dev
 ```
 
-Open <http://localhost:8787>. Use the **Funnels** navigation to create a funnel from one of the five blueprints. The typed editor lets you edit pages, sections, supported content blocks, actions, and theme settings; preview at three widths; and save immutable revisions. For an existing version 1 funnel, review the conversion report first. The editor lists unsupported content before it saves a typed revision.
+Open <http://localhost:8787>. Use the **Funnels** navigation to create a funnel from one of the five blueprints. The typed editor lets you add and manage pages, sections, supported content blocks, actions, and theme settings; preview at three widths; and save immutable revisions. See [Pages and steps](pages.md) for multi-page editing and deletion behavior. For an existing version 1 funnel, review the conversion report first. The editor lists unsupported content before it saves a typed revision.
 
 The local database and other Wrangler state are stored under `.wrangler/` by default. To keep local state elsewhere, pass Wrangler's `--persist-to <directory>` option to both the migration and dev commands. Keep the same directory between those commands.
 
