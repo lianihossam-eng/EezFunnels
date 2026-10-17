@@ -11,7 +11,9 @@ use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
-use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
+use eez_storage::repository::{
+    NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
+};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -109,6 +111,8 @@ pub async fn fetch(
         media_asset_response(&env, request, asset_id, correlation_id.clone()).await
     } else if request_path == "/api/v2/stage-capacity" {
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
+    } else if request_path == "/api/submissions" {
+        form_submission_list_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/funnels" {
         funnel_collection_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/funnels/v2" {
@@ -1072,6 +1076,37 @@ fn is_urlencoded_form(headers: &HeaderMap<HeaderValue>) -> bool {
     parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
 }
 
+fn public_form_submission_cursor(
+    query: Option<&str>,
+) -> Result<Option<PublicFormSubmissionCursor>, ()> {
+    let Some(query) = query.filter(|query| !query.is_empty()) else {
+        return Ok(None);
+    };
+    let mut cursor = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if name != "cursor" || cursor.is_some() {
+            return Err(());
+        }
+        let Some((submitted_at_text, submission_id)) = value.split_once('.') else {
+            return Err(());
+        };
+        let submitted_at = submitted_at_text.parse::<i64>().map_err(|_| ())?;
+        let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
+        if submitted_at <= 0
+            || submitted_at > 9_007_199_254_740_991
+            || submitted_at.to_string() != submitted_at_text
+            || parsed_id.to_string() != submission_id
+        {
+            return Err(());
+        }
+        cursor = Some(PublicFormSubmissionCursor {
+            submitted_at,
+            submission_id: submission_id.to_owned(),
+        });
+    }
+    Ok(cursor)
+}
+
 fn public_form_submission_identity(query: Option<&str>) -> Option<PublicFormSubmissionIdentity> {
     let query = query?;
     let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
@@ -1235,6 +1270,54 @@ fn funnel_slug_not_found_response(correlation_id: &str) -> Response<axum::body::
     let error = ApiError::from_code("not_found/slug");
     log_api_error(&error, correlation_id, error.code());
     error_response(&error, correlation_id.to_owned())
+}
+
+async fn form_submission_list_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        let mut response = method_not_allowed_for(&correlation_id, "GET");
+        response.headers_mut().insert(
+            "cache-control",
+            HeaderValue::from_static("private, no-store"),
+        );
+        return response;
+    }
+    let cursor = match public_form_submission_cursor(request.uri().query()) {
+        Ok(cursor) => cursor,
+        Err(()) => {
+            let error = ApiError::from_code("validation/invalid_cursor");
+            let mut response = error_response(&error, correlation_id.clone());
+            response.headers_mut().insert(
+                "cache-control",
+                HeaderValue::from_static("private, no-store"),
+            );
+            return response;
+        }
+    };
+    let parameters = serde_json::json!({ "cursor": cursor }).to_string();
+    match execute_funnel_command(env, command_ids::FORM_SUBMISSION_LIST, &parameters, None).await {
+        Ok(result) => {
+            let mut response = json_success_response(result, StatusCode::OK, &correlation_id, None);
+            response.headers_mut().insert(
+                "cache-control",
+                HeaderValue::from_static("private, no-store"),
+            );
+            response
+        }
+        Err(error) => {
+            let error = ApiError::from_code(error.code());
+            log_api_error(&error, &correlation_id, error.code());
+            let mut response = error_response(&error, correlation_id);
+            response.headers_mut().insert(
+                "cache-control",
+                HeaderValue::from_static("private, no-store"),
+            );
+            response
+        }
+    }
 }
 
 async fn funnel_collection_response(
@@ -2819,12 +2902,13 @@ mod tests {
     use super::{
         bind_public_form_submission_identity, correlation_id, editor_command_parameters,
         funnel_subroute, normalize_correlation_id, parse_public_form_body,
-        public_form_submission_identity, public_form_submission_route_from_path,
-        public_form_success_location, public_html_etag, public_route_from_path,
-        publication_command_parameters, request_if_none_match, stage_upload_token,
-        v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
-        v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
-        valid_public_slug, EditorCommandParametersError, PublicFormSubmissionIdentity,
+        public_form_submission_cursor, public_form_submission_identity,
+        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
+        public_route_from_path, publication_command_parameters, request_if_none_match,
+        stage_upload_token, v1_conversion_command_parameters, v2_document_revision_query,
+        v2_edit_command_parameters, v2_preview_command_parameters, v2_save_command_parameters,
+        v2_stage_command_parameters, valid_public_slug, EditorCommandParametersError,
+        PublicFormSubmissionCursor, PublicFormSubmissionIdentity,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
@@ -3291,6 +3375,30 @@ mod tests {
             Some("key=00000000-0000-0000-0000-000000000000&key=00000000-0000-0000-0000-000000000000&revision_id=revision-a"),
         ] {
             assert_eq!(public_form_submission_identity(query), None, "{query:?}");
+        }
+    }
+
+    #[test]
+    fn public_form_submission_cursor_accepts_one_canonical_cursor_only() {
+        let submission_id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(public_form_submission_cursor(None), Ok(None));
+        assert_eq!(public_form_submission_cursor(Some("")), Ok(None));
+        assert_eq!(
+            public_form_submission_cursor(Some(&format!("cursor=1234567890.{submission_id}"))),
+            Ok(Some(PublicFormSubmissionCursor {
+                submitted_at: 1_234_567_890,
+                submission_id: submission_id.to_owned(),
+            }))
+        );
+        for query in [
+            "other=1234567890.11111111-1111-4111-8111-111111111111",
+            "cursor=1234567890.11111111-1111-4111-8111-111111111111&cursor=1234567890.11111111-1111-4111-8111-111111111112",
+            "cursor=0.11111111-1111-4111-8111-111111111111",
+            "cursor=9007199254740992.11111111-1111-4111-8111-111111111111",
+            "cursor=1234567890.not-a-uuid",
+            "cursor=01234567890.11111111-1111-4111-8111-111111111111",
+        ] {
+            assert_eq!(public_form_submission_cursor(Some(query)), Err(()), "{query}");
         }
     }
 

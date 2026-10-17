@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
-    document_v2::{BlueprintId, DocumentV2, Edit, IdKind, IdSource},
+    document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
     DomainError, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section,
     ThemePreset,
 };
@@ -13,8 +13,9 @@ use eez_render::{
 };
 use eez_storage::media::{MediaAssetError, MediaAssetRepository};
 use eez_storage::repository::{
-    EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation,
-    Repository, RepositoryError, RevisionRecord,
+    EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision,
+    PublicFormSubmissionCursor, PublicFormSubmissionRecord, PublicationMutation, Repository,
+    RepositoryError, RevisionRecord,
 };
 use eez_storage::stage::{
     DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
@@ -637,6 +638,21 @@ impl FunnelListCommand {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct FormSubmissionListCommand {
+    #[serde(default)]
+    cursor: Option<PublicFormSubmissionCursor>,
+}
+
+impl FormSubmissionListCommand {
+    const ID: &'static str = command_ids::FORM_SUBMISSION_LIST;
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        serde_json::from_str(parameters).map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct FunnelEditorReadCommand {
     funnel_id: String,
 }
@@ -981,6 +997,39 @@ struct FunnelListResult {
 }
 
 #[derive(Serialize)]
+struct FormSubmissionListResult {
+    command_id: &'static str,
+    items: Vec<FormSubmissionListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FormSubmissionListItem {
+    submission_id: String,
+    funnel_name: String,
+    page_title: String,
+    form_purpose: String,
+    fields: Vec<FormSubmissionField>,
+    request_consent_acknowledged: bool,
+    request_consent_copy_version: String,
+    request_consent_copy: String,
+    request_consent_recorded_at_label: String,
+    marketing_opt_in: bool,
+    marketing_opt_in_copy_version: Option<String>,
+    marketing_opt_in_copy: Option<String>,
+    marketing_opt_in_recorded_at_label: Option<String>,
+    submitted_at_label: String,
+    submitted_at_datetime: String,
+    expires_at_label: String,
+}
+
+#[derive(Serialize)]
+struct FormSubmissionField {
+    label: String,
+    value: Value,
+}
+
+#[derive(Serialize)]
 struct FunnelCreateResult<'a> {
     command_id: &'static str,
     funnel: CreatedFunnel<'a>,
@@ -1108,6 +1157,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let command = resolve_command(actor, command_id, idempotency_key)?;
         match command.handler() {
             CommandHandler::List => self.execute_list(parameters).await,
+            CommandHandler::FormSubmissionList => {
+                self.execute_form_submission_list(parameters).await
+            }
             CommandHandler::PublicRead => self.execute_public_read(parameters).await,
             CommandHandler::Publish => {
                 self.execute_publish(
@@ -1212,6 +1264,63 @@ impl<'repo, 'database> Session<'repo, 'database> {
             items: self.repository.list_funnels().await?,
         };
         serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_form_submission_list(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FormSubmissionListCommand::from_json(parameters)?;
+        let page = self
+            .repository
+            .list_public_form_submissions(command.cursor.as_ref())
+            .await?;
+        let revision_ids = page
+            .items
+            .iter()
+            .map(|item| item.revision_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let revisions = self
+            .repository
+            .list_public_form_submission_revisions(&revision_ids)
+            .await?;
+        let mut documents = BTreeMap::new();
+        for revision in revisions {
+            if revision.schema_version != 2 {
+                return Err(FunnelCommandError::Internal);
+            }
+            let document = DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id)
+                .map_err(|_| FunnelCommandError::Internal)?;
+            documents.insert(revision.id, (revision.funnel_id, document));
+        }
+        let next_cursor = if page.has_more {
+            page.items
+                .last()
+                .map(|item| format!("{}.{}", item.submitted_at, item.submission_id))
+        } else {
+            None
+        };
+        let items = page
+            .items
+            .into_iter()
+            .map(|record| {
+                let (revision_funnel_id, document) = documents
+                    .get(&record.revision_id)
+                    .ok_or(FunnelCommandError::Internal)?;
+                if revision_funnel_id != &record.funnel_id {
+                    return Err(FunnelCommandError::Internal);
+                }
+                form_submission_list_item(record, document)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        serde_json::to_value(FormSubmissionListResult {
+            command_id: FormSubmissionListCommand::ID,
+            items,
+            next_cursor,
+        })
+        .map_err(|_| FunnelCommandError::Internal)
     }
 
     async fn execute_publish(
@@ -2681,6 +2790,69 @@ fn apply_command_settings(
         Some(settings) => inspector::apply_editor_changes(source, &settings.changes),
         None => Ok(source.clone()),
     }
+}
+
+fn form_submission_list_item(
+    record: PublicFormSubmissionRecord,
+    document: &DocumentV2,
+) -> Result<FormSubmissionListItem, FunnelCommandError> {
+    if record.revision_schema_version != 2
+        || record.request_consent_acknowledged != 1
+        || !matches!(record.marketing_opt_in, 0 | 1)
+        || record.marketing_opt_in_copy_version.is_some() != record.marketing_opt_in_copy.is_some()
+        || (record.marketing_opt_in == 1 && record.marketing_opt_in_copy_version.is_none())
+    {
+        return Err(FunnelCommandError::Internal);
+    }
+    let page_id =
+        PageId::parse(record.page_id.clone()).map_err(|_| FunnelCommandError::Internal)?;
+    let form_id =
+        FormId::parse(record.form_id.clone()).map_err(|_| FunnelCommandError::Internal)?;
+    let page = document
+        .page(&page_id)
+        .ok_or(FunnelCommandError::Internal)?;
+    let form = document
+        .form(&form_id)
+        .ok_or(FunnelCommandError::Internal)?;
+    let values = serde_json::from_str::<BTreeMap<String, Value>>(&record.field_values_json)
+        .map_err(|_| FunnelCommandError::Internal)?;
+    let fields = form
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            values.get(field.submission_key()).map(|value| {
+                if !matches!(value, Value::Bool(_) | Value::String(_)) {
+                    return Err(FunnelCommandError::Internal);
+                }
+                Ok(FormSubmissionField {
+                    label: field.label().to_owned(),
+                    value: value.clone(),
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if fields.len() != values.len() {
+        return Err(FunnelCommandError::Internal);
+    }
+
+    Ok(FormSubmissionListItem {
+        submission_id: record.submission_id,
+        funnel_name: record.funnel_name,
+        page_title: page.title().to_owned(),
+        form_purpose: form.purpose().to_owned(),
+        fields,
+        request_consent_acknowledged: true,
+        request_consent_copy_version: record.request_consent_copy_version,
+        request_consent_copy: record.request_consent_copy,
+        request_consent_recorded_at_label: record.request_consent_recorded_at_label,
+        marketing_opt_in: record.marketing_opt_in == 1,
+        marketing_opt_in_copy_version: record.marketing_opt_in_copy_version,
+        marketing_opt_in_copy: record.marketing_opt_in_copy,
+        marketing_opt_in_recorded_at_label: record.marketing_opt_in_recorded_at_label,
+        submitted_at_label: record.submitted_at_label,
+        submitted_at_datetime: record.submitted_at_datetime,
+        expires_at_label: record.expires_at_label,
+    })
 }
 
 #[derive(Debug)]

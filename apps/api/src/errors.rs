@@ -38,6 +38,7 @@ impl ApiError {
     pub fn from_code(code: &str) -> Self {
         let (code, category, status, message, alert) = match code {
             "validation/invalid_json"
+            | "validation/invalid_cursor"
             | "validation/missing_field"
             | "validation/order_duplicate"
             | "validation/schema_version_missing"
@@ -197,6 +198,7 @@ mod tests {
 
     const CONTRACT_CODES: &[(&str, ErrorCategory, u16)] = &[
         ("validation/invalid_json", ErrorCategory::Validation, 400),
+        ("validation/invalid_cursor", ErrorCategory::Validation, 400),
         (
             "validation/media_asset_invalid",
             ErrorCategory::Validation,
