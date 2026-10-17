@@ -1,4 +1,7 @@
-use eez_domain::document_v2::{ActionV2, BlockV2, BlueprintId, DocumentV2, Edit, IdKind, IdSource};
+use eez_domain::document_v2::{
+    validate_form_submission, ActionV2, BlockV2, BlueprintId, DocumentV2, Edit, FormId,
+    FormSubmissionValue, IdKind, IdSource,
+};
 use eez_domain::ThemePreset;
 
 const MINIMAL: &str = include_str!("fixtures/document_v2_minimal.json");
@@ -14,6 +17,114 @@ impl IdSource for TestIds {
 
 fn decode(source: &str) -> DocumentV2 {
     DocumentV2::decode(source.as_bytes(), "funnel-01").expect("fixture is a valid V2 document")
+}
+
+fn document_with_lead_form() -> DocumentV2 {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("minimal document");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-form", "kind":"form", "form_id":"form-lead"}
+    ]);
+    value["forms"] = serde_json::json!([{
+        "id":"form-lead",
+        "fields":[
+            {"id":"field-name", "kind":"text", "name":"name", "label":"Name", "required":true, "validation":{"min_length":2,"max_length":40}},
+            {"id":"field-email", "kind":"email", "name":"email", "label":"Email", "required":true},
+            {"id":"field-secondary-email", "kind":"email", "name":"secondary_email", "label":"Secondary email", "required":false},
+            {"id":"field-phone", "kind":"phone", "name":"phone", "label":"Phone", "required":false},
+            {"id":"field-topic", "kind":"select", "name":"topic", "label":"Topic", "required":true, "options":["Demo","Pricing"]},
+            {"id":"field-follow-up", "kind":"checkbox", "name":"follow_up", "label":"May I follow up?", "required":false}
+        ],
+        "purpose":"Contact request",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to be contacted about this request."},
+        "marketing_opt_in":{"copy_version":"marketing-v1", "copy":"Send me occasional product news."},
+        "result":{"kind":"inline", "message":"Thanks for getting in touch."}
+    }]);
+    let encoded = serde_json::to_vec(&value).expect("form document serialization");
+    DocumentV2::decode(&encoded, "funnel-01").expect("valid lead form document")
+}
+
+#[test]
+fn public_form_submission_validation_keeps_request_and_marketing_choices_separate() {
+    let document = document_with_lead_form();
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+    let fields = std::collections::BTreeMap::from([
+        ("name".to_owned(), "Ada Lovelace".to_owned()),
+        ("email".to_owned(), "ada@example.test".to_owned()),
+        ("topic".to_owned(), "Demo".to_owned()),
+        ("follow_up".to_owned(), "on".to_owned()),
+    ]);
+
+    let submission = validate_form_submission(form, &fields, true, false)
+        .expect("valid request without marketing opt-in");
+
+    assert!(!submission.marketing_opt_in());
+    assert_eq!(
+        submission.values().get("name"),
+        Some(&FormSubmissionValue::Text("Ada Lovelace".to_owned()))
+    );
+    assert_eq!(
+        submission.values().get("follow_up"),
+        Some(&FormSubmissionValue::Checkbox(true))
+    );
+    assert!(!submission.values().contains_key("phone"));
+}
+
+#[test]
+fn public_form_submission_accepts_empty_optional_email_and_phone_values() {
+    let document = document_with_lead_form();
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+    let required_fields = std::collections::BTreeMap::from([
+        ("name".to_owned(), "Ada Lovelace".to_owned()),
+        ("email".to_owned(), "ada@example.test".to_owned()),
+        ("topic".to_owned(), "Demo".to_owned()),
+    ]);
+
+    for name in ["secondary_email", "phone"] {
+        let mut submitted = required_fields.clone();
+        submitted.insert(name.to_owned(), String::new());
+        let result = validate_form_submission(form, &submitted, true, false)
+            .expect("empty optional contact value is valid");
+        assert_eq!(
+            result.values().get(name),
+            Some(&FormSubmissionValue::Text(String::new()))
+        );
+    }
+}
+
+#[test]
+fn public_form_submission_validation_rejects_bad_consent_fields_and_values() {
+    let document = document_with_lead_form();
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+    let valid_fields = std::collections::BTreeMap::from([
+        ("name".to_owned(), "Ada Lovelace".to_owned()),
+        ("email".to_owned(), "ada@example.test".to_owned()),
+        ("topic".to_owned(), "Demo".to_owned()),
+    ]);
+
+    assert!(validate_form_submission(form, &valid_fields, false, false).is_err());
+    assert!(validate_form_submission(form, &valid_fields, true, true).is_ok());
+
+    let mut unknown = valid_fields.clone();
+    unknown.insert("unexpected".to_owned(), "value".to_owned());
+    assert!(validate_form_submission(form, &unknown, true, false).is_err());
+
+    let mut injected_option = valid_fields.clone();
+    injected_option.insert("topic".to_owned(), "<script>".to_owned());
+    assert!(validate_form_submission(form, &injected_option, true, false).is_err());
+
+    let mut malformed_email = valid_fields.clone();
+    malformed_email.insert("email".to_owned(), "ada at example.test".to_owned());
+    assert!(validate_form_submission(form, &malformed_email, true, false).is_err());
+
+    let mut short_name = valid_fields;
+    short_name.insert("name".to_owned(), "A".to_owned());
+    assert!(validate_form_submission(form, &short_name, true, false).is_err());
 }
 
 #[test]

@@ -4,10 +4,9 @@ use serde_json::{json, Value};
 use super::{
     authorized, bounded_response_value, command_error_tool_result, command_parameters_bytes,
     has_json_content_type, has_streamable_http_accept, list_commands_result, mcp_http_error_parts,
-    negotiate_protocol_version, origin_matches_host, parse_message, protocol_version_header,
-    response_protocol_version, tools_list_result, ClientMessage, JsonRpcId, McpHttpError,
-    ParseError, MAX_BATCH_MESSAGES, MAX_COMMAND_PARAMETERS_BYTES, MAX_RESPONSE_BYTES,
-    MCP_PROTOCOL_VERSION, TOOL_SPECS,
+    negotiate_protocol_version, parse_message, protocol_version_header, response_protocol_version,
+    tools_list_result, ClientMessage, JsonRpcId, McpHttpError, ParseError, MAX_BATCH_MESSAGES,
+    MAX_COMMAND_PARAMETERS_BYTES, MAX_RESPONSE_BYTES, MCP_PROTOCOL_VERSION, TOOL_SPECS,
 };
 use crate::errors::{ApiError, ErrorCategory};
 use axum::http::StatusCode;
@@ -269,50 +268,6 @@ fn authorization_and_content_type_require_single_valid_headers() {
         HeaderValue::from_static("application/json; charset=utf-8, text/plain"),
     );
     assert!(!has_json_content_type(&content_type));
-}
-
-#[test]
-fn supplied_origins_must_be_single_http_origins_for_the_allowed_host() {
-    let mut headers = HeaderMap::new();
-    headers.insert("host", HeaderValue::from_static("eezfunnel.workers.dev"));
-    assert!(origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("https://eezfunnel.workers.dev"),
-    );
-    assert!(origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("https://attacker.example"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("https://attacker.example,eezfunnel.workers.dev"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("https:// eezfunnel.workers.dev"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("https://eezfunnel.workers.dev/path"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.insert("origin", HeaderValue::from_static("null"));
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.insert(
-        "origin",
-        HeaderValue::from_static("http://eezfunnel.workers.dev"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
-    headers.append(
-        "origin",
-        HeaderValue::from_static("https://eezfunnel.workers.dev"),
-    );
-    assert!(!origin_matches_host(&headers, Some("https")));
 }
 
 #[test]

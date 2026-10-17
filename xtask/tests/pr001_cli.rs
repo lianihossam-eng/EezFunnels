@@ -38,6 +38,8 @@ mod unix {
                 .expect("write smoke placeholder");
             fs::write(workspace.join("scripts/smoke-pr017.sh"), "")
                 .expect("write MCP smoke placeholder");
+            fs::write(workspace.join("scripts/smoke-pr033-public-forms.sh"), "")
+                .expect("write public forms smoke placeholder");
             fs::write(
                 workspace.join("crates/dashboard-presentation/assets/bootstrap.js"),
                 "export {};\n",
@@ -267,7 +269,7 @@ mod unix {
     }
 
     #[test]
-    fn ci_runs_funnel_then_mcp_smoke_before_audit() {
+    fn ci_runs_funnel_forms_and_mcp_smokes_before_audit() {
         let fixture = Fixture::new();
         fs::write(
             fixture.workspace().join("scripts/smoke-pr009.sh"),
@@ -279,6 +281,13 @@ mod unix {
             "printf 'mcp-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
         )
         .expect("write MCP smoke fixture");
+        fs::write(
+            fixture
+                .workspace()
+                .join("scripts/smoke-pr033-public-forms.sh"),
+            "printf 'forms-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
+        )
+        .expect("write public forms smoke fixture");
         let output = run_ci_with_cargo(
             &fixture,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\n",
@@ -296,6 +305,10 @@ mod unix {
             .iter()
             .position(|line| *line == "funnel-smoke")
             .expect("funnel smoke gate");
+        let forms_smoke_position = lines
+            .iter()
+            .position(|line| *line == "forms-smoke")
+            .expect("public forms smoke gate");
         let mcp_smoke_position = lines
             .iter()
             .position(|line| *line == "mcp-smoke")
@@ -305,6 +318,8 @@ mod unix {
             .position(|line| *line == "audit")
             .expect("audit gate");
         assert!(smoke_position < mcp_smoke_position, "{actual}");
+        assert!(smoke_position < forms_smoke_position, "{actual}");
+        assert!(forms_smoke_position < mcp_smoke_position, "{actual}");
         assert!(mcp_smoke_position < audit_position, "{actual}");
     }
 

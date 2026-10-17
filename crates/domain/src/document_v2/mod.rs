@@ -5,15 +5,16 @@ mod validate;
 
 pub use edit::{Edit, EditOutcome, FocusTarget, IdKind, IdSource, NewBlock};
 pub use model::{
-    ActionV2, AssetId, BlockId, BlockKind, BlockV2, BlueprintId, DocumentError, DocumentV2,
-    FieldId, FormField, FormId, FormResult, FormV2, ImageAlt, PageId, PageV2, RevisionIdV2,
-    SectionId, SectionKind, SectionV2, StableDocumentId, V2FunnelId, ValidationRange,
+    ActionV2, AssetId, BlockId, BlockKind, BlockV2, BlueprintId, ConsentCopy, DocumentError,
+    DocumentV2, FieldId, FormField, FormId, FormResult, FormSubmissionError, FormSubmissionValue,
+    FormV2, ImageAlt, PageId, PageV2, RevisionIdV2, SectionId, SectionKind, SectionV2,
+    StableDocumentId, V2FunnelId, ValidatedFormSubmission, ValidationRange,
 };
 pub use theme::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
     ThemeColors, ThemeOverrides, ThemePartialOverrides, ThemeResponsive, ThemeV2, TypeScale,
 };
-pub use validate::is_valid_page_slug;
+pub use validate::{is_valid_page_slug, validate_form_submission};
 
 pub const STRUCTURAL_SCHEMA_VERSION_V2: u32 = 2;
 pub const DOCUMENT_VERSION_V2: u32 = 2;

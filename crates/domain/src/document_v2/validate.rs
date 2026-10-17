@@ -6,7 +6,7 @@ use url::Url;
 
 use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
-    PageId,
+    FormSubmissionError, FormSubmissionValue, FormV2, PageId, ValidatedFormSubmission,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -634,6 +634,189 @@ pub fn is_valid_page_slug(value: &str) -> bool {
         }
     }
     !previous_hyphen
+}
+
+pub fn validate_form_submission(
+    form: &FormV2,
+    submitted_fields: &BTreeMap<String, String>,
+    request_consent_accepted: bool,
+    marketing_opt_in: bool,
+) -> Result<ValidatedFormSubmission, FormSubmissionError> {
+    if !request_consent_accepted {
+        return Err(FormSubmissionError::RequestConsentRequired);
+    }
+    if marketing_opt_in && form.marketing_opt_in.is_none() {
+        return Err(FormSubmissionError::MarketingConsentUnavailable);
+    }
+
+    if submitted_fields
+        .keys()
+        .any(|name| !form.fields.iter().any(|field| field.values().0 == name))
+    {
+        return Err(FormSubmissionError::InvalidFieldValues);
+    }
+
+    let mut values = BTreeMap::new();
+    for field in &form.fields {
+        let (name, _, _, validation, options) = field.values();
+        match field {
+            FormField::Text { required, .. }
+            | FormField::Email { required, .. }
+            | FormField::Phone { required, .. } => {
+                let Some(value) = submitted_fields.get(name) else {
+                    if *required {
+                        return Err(FormSubmissionError::InvalidFieldValues);
+                    }
+                    continue;
+                };
+                if !valid_form_text_value(value, *required, validation, field.max_value_length()) {
+                    return Err(FormSubmissionError::InvalidFieldValues);
+                }
+                if !value.is_empty() {
+                    if matches!(field, FormField::Email { .. }) && !valid_submitted_email(value) {
+                        return Err(FormSubmissionError::InvalidFieldValues);
+                    }
+                    if matches!(field, FormField::Phone { .. }) && !valid_submitted_phone(value) {
+                        return Err(FormSubmissionError::InvalidFieldValues);
+                    }
+                }
+                values.insert(name.to_owned(), FormSubmissionValue::Text(value.clone()));
+            }
+            FormField::Checkbox { required, .. } => {
+                let checked = match submitted_fields.get(name).map(String::as_str) {
+                    None => false,
+                    Some("on") => true,
+                    Some(_) => return Err(FormSubmissionError::InvalidFieldValues),
+                };
+                if *required && !checked {
+                    return Err(FormSubmissionError::InvalidFieldValues);
+                }
+                values.insert(name.to_owned(), FormSubmissionValue::Checkbox(checked));
+            }
+            FormField::Select { required, .. } => {
+                let selected = submitted_fields.get(name).map(String::as_str);
+                let Some(selected) = selected else {
+                    if *required {
+                        return Err(FormSubmissionError::InvalidFieldValues);
+                    }
+                    continue;
+                };
+                if !selected.is_empty()
+                    && !options.is_some_and(|allowed| allowed.contains(&selected.to_owned()))
+                {
+                    return Err(FormSubmissionError::InvalidFieldValues);
+                }
+                if *required && selected.is_empty() {
+                    return Err(FormSubmissionError::InvalidFieldValues);
+                }
+                values.insert(
+                    name.to_owned(),
+                    FormSubmissionValue::Select(selected.to_owned()),
+                );
+            }
+        }
+    }
+
+    Ok(ValidatedFormSubmission {
+        values,
+        marketing_opt_in,
+    })
+}
+
+fn valid_form_text_value(
+    value: &str,
+    required: bool,
+    validation: Option<&super::ValidationRange>,
+    maximum: u32,
+) -> bool {
+    if value.chars().any(char::is_control) {
+        return false;
+    }
+    if required && value.trim().is_empty() {
+        return false;
+    }
+    if value.is_empty() && !required {
+        return true;
+    }
+    let length = value.chars().count();
+    if length > maximum as usize {
+        return false;
+    }
+    validation.is_none_or(|range| {
+        range
+            .min_length
+            .is_none_or(|minimum| length >= minimum as usize)
+            && range
+                .max_length
+                .is_none_or(|maximum| length <= maximum as usize)
+    })
+}
+
+fn valid_submitted_email(value: &str) -> bool {
+    let mut parts = value.split('@');
+    let Some(local) = parts.next() else {
+        return false;
+    };
+    let Some(domain) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some()
+        || local.is_empty()
+        || local.len() > 64
+        || domain.is_empty()
+        || value.len() > 320
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+        || value.chars().any(char::is_whitespace)
+        || !local.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'!'
+                        | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'/'
+                        | b'='
+                        | b'?'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'{'
+                        | b'|'
+                        | b'}'
+                        | b'~'
+                )
+        })
+    {
+        return false;
+    }
+
+    let labels = domain.split('.').collect::<Vec<_>>();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn valid_submitted_phone(value: &str) -> bool {
+    let digits = value.bytes().filter(u8::is_ascii_digit).count();
+    digits >= 3
+        && value.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '+' | '-' | '(' | ')' | '.' | ' ')
+        })
 }
 
 fn valid_field_name(value: &str) -> bool {

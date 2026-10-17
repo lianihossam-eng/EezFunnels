@@ -1016,11 +1016,14 @@ dependencies = [
  "axum",
  "eez-commands",
  "eez-dashboard-presentation",
+ "eez-domain",
+ "eez-render",
  "eez-storage",
  "serde",
  "serde_json",
  "sha2",
  "tower-service",
+ "url",
  "uuid",
  "worker",
 ]
@@ -1106,6 +1109,7 @@ dependencies = [
  "eez-domain",
  "serde",
  "serde_json",
+ "serde_json_canonicalizer",
  "sha2",
  "worker",
 ]
