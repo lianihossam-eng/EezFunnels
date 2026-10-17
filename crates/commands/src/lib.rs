@@ -10,12 +10,14 @@ mod funnel;
 mod registry;
 
 pub use eez_domain::FunnelBlueprint;
+#[cfg(test)]
+pub(crate) use funnel::{render_published_revision, v2_page_projection};
 pub use funnel::{
-    FunnelCommandError, FunnelCreateCommand, FunnelDeleteCommand, FunnelListCommand,
-    InitialRevisionSummary, PreparedFunnel, Session,
+    FunnelCommandError, FunnelCreateCommand, FunnelCreateCommandV2, FunnelDeleteCommand,
+    FunnelListCommand, InitialRevisionSummary, PreparedFunnel, PreparedFunnelV2, Session,
 };
 pub use registry::{
-    command_ids, command_registry, CommandActor, CommandDefinition, IdempotencyPolicy,
+    command_ids, command_registry, CommandActor, CommandDefinition, IdempotencyPolicy, McpExposure,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

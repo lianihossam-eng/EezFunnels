@@ -63,6 +63,7 @@ pub struct StageFinalizeMutation<'a> {
     pub funnel_id: &'a str,
     pub base_revision_id: &'a str,
     pub stage_id: &'a str,
+    pub staged_document_bytes: &'a [u8],
     pub expected_length: usize,
     pub expected_sha256: &'a str,
     pub command_id: &'a str,
@@ -279,7 +280,7 @@ impl<'a> DocumentStageRepository<'a> {
         let insert_receipt = self
             .database
             .prepare(
-                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM v2_document_stages WHERE slot_held = 1) < ? AND NOT EXISTS (SELECT 1 FROM v2_document_stages WHERE funnel_id = ? AND state IN ('issued', 'uploaded')) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = 2) AND (SELECT COUNT(*) FROM v2_document_stages WHERE slot_held = 1) < ? AND NOT EXISTS (SELECT 1 FROM v2_document_stages WHERE funnel_id = ? AND state IN ('issued', 'uploaded')) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
             )
             .bind_refs([
                 &idempotency_key,
@@ -288,13 +289,15 @@ impl<'a> DocumentStageRepository<'a> {
                 &result_json_value,
                 &funnel_id,
                 &base_revision_id,
+                &base_revision_id,
+                &funnel_id,
                 &stage_slots,
                 &funnel_id,
             ])?;
         let insert_stage = self
             .database
             .prepare(
-                "INSERT INTO v2_document_stages (stage_id_hash, funnel_id, base_revision_id, purpose, document_type, document_version, schema_version, manifest_version, maximum_bytes, expected_length, expected_sha256, expires_at, state) SELECT ?, ?, ?, 'full_snapshot', 'eezfunnel.document', ?, ?, ?, ?, ?, ?, ?, 'issued' WHERE EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM v2_document_stages WHERE slot_held = 1) < ? AND NOT EXISTS (SELECT 1 FROM v2_document_stages WHERE funnel_id = ? AND state IN ('issued', 'uploaded'))",
+                "INSERT INTO v2_document_stages (stage_id_hash, funnel_id, base_revision_id, purpose, document_type, document_version, schema_version, manifest_version, maximum_bytes, expected_length, expected_sha256, expires_at, state) SELECT ?, ?, ?, 'full_snapshot', 'eezfunnel.document', ?, ?, ?, ?, ?, ?, ?, 'issued' WHERE EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = 2) AND (SELECT COUNT(*) FROM v2_document_stages WHERE slot_held = 1) < ? AND NOT EXISTS (SELECT 1 FROM v2_document_stages WHERE funnel_id = ? AND state IN ('issued', 'uploaded'))",
             )
             .bind_refs([
                 &stage_id_hash,
@@ -313,6 +316,8 @@ impl<'a> DocumentStageRepository<'a> {
                 &result_json_value,
                 &funnel_id,
                 &base_revision_id,
+                &base_revision_id,
+                &funnel_id,
                 &stage_slots,
                 &funnel_id,
             ])?;
@@ -669,6 +674,13 @@ impl<'a> DocumentStageRepository<'a> {
             self.expire_stage(&stage.stage_id_hash).await?;
             return Err(RepositoryError::StaleEditorRevision);
         }
+        if self
+            .revision_schema_version(funnel_id, base_revision_id)
+            .await?
+            != Some(2)
+        {
+            return Err(RepositoryError::StageUnavailable);
+        }
         let object_key = stage
             .object_key
             .as_deref()
@@ -739,7 +751,7 @@ impl<'a> DocumentStageRepository<'a> {
         let insert_receipt = self
             .database
             .prepare(
-                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND funnel_id = ? AND base_revision_id = ? AND purpose = 'full_snapshot' AND document_type = 'eezfunnel.document' AND document_version = 2 AND schema_version = 2 AND manifest_version = 2 AND maximum_bytes = 1048576 AND expected_length = ? AND expected_sha256 = ? AND state = 'uploaded' AND uploaded_length = ? AND uploaded_sha256 = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER) AND slot_held = 1)",
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = 2) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND funnel_id = ? AND base_revision_id = ? AND purpose = 'full_snapshot' AND document_type = 'eezfunnel.document' AND document_version = 2 AND schema_version = 2 AND manifest_version = 2 AND maximum_bytes = 1048576 AND expected_length = ? AND expected_sha256 = ? AND state = 'uploaded' AND uploaded_length = ? AND uploaded_sha256 = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER) AND slot_held = 1)",
             )
             .bind_refs([
                 &key,
@@ -748,6 +760,8 @@ impl<'a> DocumentStageRepository<'a> {
                 &result,
                 &funnel_id,
                 &base_revision_id,
+                &base_revision_id,
+                &funnel_id,
                 &funnel_id,
                 &revision_limit,
                 &stage_hash,
@@ -762,7 +776,7 @@ impl<'a> DocumentStageRepository<'a> {
         let insert_revision = self
             .database
             .prepare(format!(
-                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND funnel_id = ? AND base_revision_id = ? AND expected_length = ? AND expected_sha256 = ? AND state = 'uploaded' AND uploaded_length = ? AND uploaded_sha256 = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER) AND slot_held = 1) AND {receipt_matches}"
+                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = 2) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND funnel_id = ? AND base_revision_id = ? AND expected_length = ? AND expected_sha256 = ? AND state = 'uploaded' AND uploaded_length = ? AND uploaded_sha256 = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER) AND slot_held = 1) AND {receipt_matches}"
             ))
             .bind_refs([
                 &revision_id,
@@ -772,6 +786,8 @@ impl<'a> DocumentStageRepository<'a> {
                 &manifest_json,
                 &funnel_id,
                 &base_revision_id,
+                &base_revision_id,
+                &funnel_id,
                 &funnel_id,
                 &revision_limit,
                 &stage_hash,
@@ -965,6 +981,13 @@ impl<'a> DocumentStageRepository<'a> {
             None => return Err(RepositoryError::FunnelNotFound),
             Some(_) => {}
         }
+        if self
+            .revision_schema_version(mutation.funnel_id, mutation.base_revision_id)
+            .await?
+            != Some(2)
+        {
+            return Err(RepositoryError::StageUnavailable);
+        }
         let funnel_id = D1Type::Text(mutation.funnel_id);
         let revisions = self
             .database
@@ -998,6 +1021,21 @@ impl<'a> DocumentStageRepository<'a> {
             .prepare("SELECT revision_id FROM funnel_editor_heads WHERE funnel_id = ?")
             .bind_refs([&funnel_id])?
             .first::<String>(Some("revision_id"))
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn revision_schema_version(
+        &self,
+        funnel_id: &str,
+        revision_id: &str,
+    ) -> RepositoryResult<Option<i64>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        let revision_id = D1Type::Text(revision_id);
+        self.database
+            .prepare("SELECT schema_version FROM revisions WHERE funnel_id = ? AND id = ?")
+            .bind_refs([&funnel_id, &revision_id])?
+            .first::<i64>(Some("schema_version"))
             .await
             .map_err(Into::into)
     }
@@ -1424,6 +1462,13 @@ impl<'a> DocumentStageRepository<'a> {
         if state.base_matches == 0 {
             return Err(RepositoryError::StaleEditorRevision);
         }
+        if self
+            .revision_schema_version(mutation.funnel_id, mutation.base_revision_id)
+            .await?
+            != Some(2)
+        {
+            return Err(RepositoryError::StageUnavailable);
+        }
         if state.active_stage_exists != 0 {
             return Err(RepositoryError::ActiveStageExists);
         }
@@ -1448,8 +1493,8 @@ fn validate_mint(mutation: &StageMintMutation<'_>) -> RepositoryResult<()> {
 }
 
 fn validate_finalize(mutation: &StageFinalizeMutation<'_>) -> RepositoryResult<()> {
-    if mutation.revision.data_json.len() != mutation.expected_length
-        || sha256_hex(mutation.revision.data_json.as_bytes()) != mutation.expected_sha256
+    if mutation.staged_document_bytes.len() != mutation.expected_length
+        || sha256_hex(mutation.staged_document_bytes) != mutation.expected_sha256
     {
         return Err(RepositoryError::StageDigestMismatch);
     }
@@ -1475,6 +1520,14 @@ fn validate_finalize(mutation: &StageFinalizeMutation<'_>) -> RepositoryResult<(
         || serde_json::from_str::<Value>(mutation.result_json).is_err()
     {
         return Err(RepositoryError::InvalidField("v2_finalize"));
+    }
+    let staged_document = eez_domain::document_v2::DocumentV2::decode(
+        mutation.staged_document_bytes,
+        mutation.funnel_id,
+    )
+    .map_err(|_| RepositoryError::StageDigestMismatch)?;
+    if staged_document.canonical_bytes() != mutation.revision.data_json.as_bytes() {
+        return Err(RepositoryError::StageDigestMismatch);
     }
     Ok(())
 }
@@ -1830,13 +1883,20 @@ mod tests {
 
     #[test]
     fn staged_revision_bytes_must_match_the_uploaded_digest() {
-        let data_json = r#"{"format_version":2}"#;
-        let expected_sha256 = sha256_hex(data_json.as_bytes());
+        let raw_document = include_str!("../../domain/tests/fixtures/document_v2_minimal.json")
+            .replace("funnel-01", "funnel-a");
+        let document =
+            eez_domain::document_v2::DocumentV2::decode(raw_document.as_bytes(), "funnel-a")
+                .expect("fixture document is valid");
+        let data_json = String::from_utf8(document.canonical_bytes().to_vec())
+            .expect("canonical document is UTF-8");
+        assert_ne!(data_json, raw_document);
+        let expected_sha256 = sha256_hex(raw_document.as_bytes());
         let revision = NewRevision {
             id: "revision-v2".to_owned(),
             funnel_id: "funnel-a".to_owned(),
             schema_version: 2,
-            data_json: data_json.to_owned(),
+            data_json,
             render_manifest_json: "{}".to_owned(),
         };
         let stage_id = "a".repeat(64);
@@ -1844,7 +1904,8 @@ mod tests {
             funnel_id: "funnel-a",
             base_revision_id: "revision-a",
             stage_id: &stage_id,
-            expected_length: data_json.len(),
+            staged_document_bytes: raw_document.as_bytes(),
+            expected_length: raw_document.len(),
             expected_sha256: &expected_sha256,
             command_id: "funnel.revision.save.v2",
             idempotency_key: "finalize-v2",
@@ -1858,6 +1919,18 @@ mod tests {
         let wrong_digest = "b".repeat(64);
         let mismatched = StageFinalizeMutation {
             expected_sha256: &wrong_digest,
+            ..mutation
+        };
+        assert!(matches!(
+            validate_finalize(&mismatched),
+            Err(RepositoryError::StageDigestMismatch)
+        ));
+
+        let wrong_document = br#"{"funnel_id":"funnel-a"}"#;
+        let mismatched = StageFinalizeMutation {
+            staged_document_bytes: wrong_document,
+            expected_length: wrong_document.len(),
+            expected_sha256: &sha256_hex(wrong_document),
             ..mutation
         };
         assert!(matches!(

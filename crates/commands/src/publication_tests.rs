@@ -94,7 +94,7 @@ fn public_read_missing_slug_is_classified_before_typed_deserialization() {
 #[test]
 fn public_unsupported_schema_is_a_validation_error() {
     assert_eq!(
-        FunnelCommandError::Storage(RepositoryError::UnsupportedSchemaVersion(2)).code(),
+        FunnelCommandError::Storage(RepositoryError::UnsupportedSchemaVersion(3)).code(),
         "validation/schema_version_unsupported"
     );
 }
