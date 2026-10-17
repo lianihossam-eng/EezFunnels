@@ -40,6 +40,20 @@ fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
 }
 
 #[test]
+fn page_theme_background_spans_full_width_with_bounded_inner_content() {
+    let document = DocumentV2::starter(
+        "funnel-01",
+        BlueprintId::LeadGen,
+        eez_domain::ThemePreset::Bold,
+    )
+    .expect("valid V2 starter");
+    let html = render_owner_preview(&document, document.entry_page_id()).expect("owner preview");
+
+    assert!(html.contains("<main id=\"funnel\"><div class=\"v2-main\">"));
+    assert!(html.contains(".v2-main{max-width:var(--content-width);margin:0 auto}"));
+}
+
+#[test]
 fn owner_read_validates_the_stored_v2_row_and_manifest_without_public_render_gates() {
     let document = document();
     let prepared = prepare_revision(&document, "revision-owner-read").expect("manifest");
@@ -150,6 +164,21 @@ fn owner_preview_escapes_text_and_never_follows_external_links() {
     let html = render_owner_preview(&edited.document, &page_id).expect("owner preview");
     assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
     assert!(!html.contains("<img src=x"));
+}
+
+#[test]
+fn v2_text_blocks_preserve_line_breaks_and_tabs() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("canonical document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-copy", "kind":"text", "text":"First line\nSecond\tcolumn"}
+    ]);
+    let encoded = serde_json::to_vec(&value).expect("document serialization");
+    let document = DocumentV2::decode(&encoded, "funnel-01").expect("multiline text block");
+    let html = render_owner_preview(&document, document.entry_page_id()).expect("owner preview");
+
+    assert!(html.contains("<p class=\"v2-text\">First line\nSecond\tcolumn</p>"));
+    assert!(!html.contains("&#xfffd;"));
 }
 
 #[test]

@@ -858,12 +858,21 @@ fn escape_html_attribute(value: &str) -> String {
 }
 
 fn escape_html_text(value: &str) -> String {
+    escape_html_text_with_policy(value, false)
+}
+
+pub(crate) fn escape_html_text_preserving_whitespace(value: &str) -> String {
+    escape_html_text_with_policy(value, true)
+}
+
+fn escape_html_text_with_policy(value: &str, preserve_whitespace: bool) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
             '&' => escaped.push_str("&amp;"),
             '<' => escaped.push_str("&lt;"),
             '>' => escaped.push_str("&gt;"),
+            '\n' | '\r' | '\t' if preserve_whitespace => escaped.push(character),
             control if control.is_control() => escaped.push_str("&#xfffd;"),
             other => escaped.push(other),
         }

@@ -289,7 +289,7 @@ fn render_page(
     push_profile_variables(&mut html, &profile.tablet);
     html.push_str("}}@media (max-width:639px){#funnel{");
     push_profile_variables(&mut html, &profile.mobile);
-    html.push_str("}}</style></head><body><main id=\"funnel\" class=\"v2-main\">");
+    html.push_str("}}</style></head><body><main id=\"funnel\"><div class=\"v2-main\">");
     for section in page.sections() {
         html.push_str("<section class=\"v2-section v2-section--");
         html.push_str(section_kind_name(section.section_type()));
@@ -309,7 +309,7 @@ fn render_page(
                 }
                 BlockV2::Text { text, .. } => {
                     html.push_str("<p class=\"v2-text\">");
-                    html.push_str(&crate::escape_html_text(text));
+                    html.push_str(&crate::escape_html_text_preserving_whitespace(text));
                     html.push_str("</p>");
                 }
                 BlockV2::List { items, .. } => {
@@ -341,7 +341,7 @@ fn render_page(
         }
         html.push_str("</section>");
     }
-    html.push_str("</main></body></html>");
+    html.push_str("</div></main></body></html>");
     Ok(html)
 }
 

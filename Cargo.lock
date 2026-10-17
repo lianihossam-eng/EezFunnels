@@ -1092,6 +1092,8 @@ version = "0.1.0"
 dependencies = [
  "eez-domain",
  "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
  "sha2",
  "url",
 ]
