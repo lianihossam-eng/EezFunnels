@@ -229,6 +229,7 @@ test_worker_group_cleanup_regression() {
   local fixture_file="$state_dir/worker-group-fixture.sh"
   local ready_file="$state_dir/worker-group-ready"
   local group_leader_file="$state_dir/worker-group-leader"
+  local child_ready_file="$state_dir/worker-group-child-ready"
   local test_group test_launcher
 
   cat > "$fixture_file" <<'FIXTURE'
@@ -238,10 +239,19 @@ import subprocess
 import sys
 import time
 
-ready_file, group_leader_file = sys.argv[1:]
+ready_file, group_leader_file, child_ready_file = sys.argv[1:]
 signal.signal(signal.SIGINT, signal.SIG_DFL)
-child_code = "import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN); exec('while True: time.sleep(1)')"
-child = subprocess.Popen([sys.executable, "-c", child_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+child_code = "import signal,sys,time; signal.signal(signal.SIGINT, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN); open(sys.argv[1], 'w', encoding='utf-8').close(); exec('while True: time.sleep(1)')"
+child = subprocess.Popen([sys.executable, "-c", child_code, child_ready_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for _ in range(100):
+    if os.path.exists(child_ready_file):
+        break
+    if child.poll() is not None:
+        sys.exit("The cleanup fixture child exited before becoming ready")
+    time.sleep(0.02)
+else:
+    child.terminate()
+    sys.exit("The cleanup fixture child did not become ready")
 with open(group_leader_file, "w", encoding="utf-8") as handle:
     handle.write(str(os.getpid()))
 with open(ready_file, "w", encoding="utf-8") as handle:
@@ -250,7 +260,7 @@ while True:
     time.sleep(1)
 FIXTURE
 
-  setsid --fork --wait python3 "$fixture_file" "$ready_file" "$group_leader_file" > "$state_dir/worker-group-fixture.log" 2>&1 &
+  setsid --fork --wait python3 "$fixture_file" "$ready_file" "$group_leader_file" "$child_ready_file" > "$state_dir/worker-group-fixture.log" 2>&1 &
   worker_launcher_pid=$!
   for attempt in $(seq 1 100); do
     if [ -s "$group_leader_file" ] && [ -s "$ready_file" ]; then
