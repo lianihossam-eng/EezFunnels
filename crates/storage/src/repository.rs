@@ -259,6 +259,8 @@ struct PublicFormSubmissionState {
 pub struct PublicFormSubmissionCursor {
     pub submitted_at: i64,
     pub submission_id: String,
+    pub status: Option<FormSubmissionStatus>,
+    pub funnel_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1431,7 +1433,20 @@ impl<'a> Repository<'a> {
         &self,
         cursor: Option<&PublicFormSubmissionCursor>,
         status: Option<FormSubmissionStatus>,
+        funnel_id: Option<&str>,
     ) -> RepositoryResult<PublicFormSubmissionPage> {
+        if cursor.is_some_and(|cursor| {
+            cursor.status != status || cursor.funnel_id.as_deref() != funnel_id
+        }) {
+            return Err(RepositoryError::InvalidField("submission_cursor"));
+        }
+        if funnel_id.is_some_and(|funnel_id| {
+            uuid::Uuid::parse_str(funnel_id)
+                .map(|parsed| parsed.to_string() != funnel_id)
+                .unwrap_or(true)
+        }) {
+            return Err(RepositoryError::InvalidField("funnel_id"));
+        }
         if let Some(cursor) = cursor {
             if cursor.submitted_at <= 0
                 || cursor.submitted_at > 9_007_199_254_740_991
@@ -1460,11 +1475,19 @@ impl<'a> Repository<'a> {
         } else {
             ""
         };
+        let funnel_predicate = if funnel_id.is_some() {
+            " AND public_form_submissions.funnel_id = ?"
+        } else {
+            ""
+        };
         let limit = D1Type::Integer((PUBLIC_FORM_SUBMISSION_PAGE_SIZE + 1) as i32);
         let query = format!(
-            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
+            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2{funnel_predicate}{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
         );
-        let mut bindings = Vec::with_capacity(6);
+        let mut bindings = Vec::with_capacity(7);
+        if let Some(funnel_id) = funnel_id {
+            bindings.push(D1Type::Text(funnel_id));
+        }
         if let Some(status) = status {
             bindings.push(D1Type::Text(status.as_str()));
         }

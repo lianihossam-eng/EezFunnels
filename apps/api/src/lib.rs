@@ -1187,6 +1187,54 @@ fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, (
 struct PublicFormSubmissionQuery {
     cursor: Option<PublicFormSubmissionCursor>,
     status: Option<FormSubmissionStatus>,
+    funnel_id: Option<String>,
+}
+
+fn public_form_submission_cursor(value: &str) -> Result<PublicFormSubmissionCursor, ()> {
+    let mut parts = value.split('.');
+    let submitted_at_text = parts.next().ok_or(())?;
+    let submission_id = parts.next().ok_or(())?;
+    let submitted_at = submitted_at_text.parse::<i64>().map_err(|_| ())?;
+    let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
+    if submitted_at <= 0
+        || submitted_at > 9_007_199_254_740_991
+        || submitted_at.to_string() != submitted_at_text
+        || parsed_id.to_string() != submission_id
+    {
+        return Err(());
+    }
+
+    let (status, funnel_id) = match parts.next() {
+        None => (None, None), // Accept legacy cursors only for an unfiltered inbox.
+        Some(status_filter) => {
+            let status = if status_filter == "all" {
+                None
+            } else {
+                Some(FormSubmissionStatus::from_wire_value(status_filter).ok_or(())?)
+            };
+            let funnel_filter = parts.next().ok_or(())?;
+            let funnel_id = if funnel_filter == "all" {
+                None
+            } else {
+                let parsed_funnel_id = uuid::Uuid::parse_str(funnel_filter).map_err(|_| ())?;
+                if parsed_funnel_id.to_string() != funnel_filter {
+                    return Err(());
+                }
+                Some(funnel_filter.to_owned())
+            };
+            if parts.next().is_some() {
+                return Err(());
+            }
+            (status, funnel_id)
+        }
+    };
+
+    Ok(PublicFormSubmissionCursor {
+        submitted_at,
+        submission_id: submission_id.to_owned(),
+        status,
+        funnel_id,
+    })
 }
 
 fn public_form_submission_query(query: Option<&str>) -> Result<PublicFormSubmissionQuery, ()> {
@@ -1194,37 +1242,40 @@ fn public_form_submission_query(query: Option<&str>) -> Result<PublicFormSubmiss
         return Ok(PublicFormSubmissionQuery {
             cursor: None,
             status: None,
+            funnel_id: None,
         });
     };
     let mut cursor = None;
     let mut status = None;
+    let mut funnel_id = None;
     for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
         match name.as_ref() {
             "cursor" if cursor.is_none() => {
-                let Some((submitted_at_text, submission_id)) = value.split_once('.') else {
-                    return Err(());
-                };
-                let submitted_at = submitted_at_text.parse::<i64>().map_err(|_| ())?;
-                let parsed_id = uuid::Uuid::parse_str(submission_id).map_err(|_| ())?;
-                if submitted_at <= 0
-                    || submitted_at > 9_007_199_254_740_991
-                    || submitted_at.to_string() != submitted_at_text
-                    || parsed_id.to_string() != submission_id
-                {
-                    return Err(());
-                }
-                cursor = Some(PublicFormSubmissionCursor {
-                    submitted_at,
-                    submission_id: submission_id.to_owned(),
-                });
+                cursor = Some(public_form_submission_cursor(&value)?);
             }
             "status" if status.is_none() => {
                 status = Some(FormSubmissionStatus::from_wire_value(&value).ok_or(())?);
             }
+            "funnel_id" if funnel_id.is_none() => {
+                let parsed_id = uuid::Uuid::parse_str(&value).map_err(|_| ())?;
+                if parsed_id.to_string() != value {
+                    return Err(());
+                }
+                funnel_id = Some(value.into_owned());
+            }
             _ => return Err(()),
         }
     }
-    Ok(PublicFormSubmissionQuery { cursor, status })
+    if cursor.as_ref().is_some_and(|cursor| {
+        cursor.status != status || cursor.funnel_id.as_deref() != funnel_id.as_deref()
+    }) {
+        return Err(());
+    }
+    Ok(PublicFormSubmissionQuery {
+        cursor,
+        status,
+        funnel_id,
+    })
 }
 
 fn form_submission_status_id_from_path(path: &str) -> Option<&str> {
@@ -1460,6 +1511,7 @@ async fn form_submission_list_response(
     let parameters = serde_json::json!({
         "cursor": submission_query.cursor,
         "status": submission_query.status,
+        "funnel_id": submission_query.funnel_id,
     })
     .to_string();
     match execute_funnel_command(env, command_ids::FORM_SUBMISSION_LIST, &parameters, None).await {
@@ -3697,13 +3749,15 @@ mod tests {
     }
 
     #[test]
-    fn public_form_submission_query_accepts_one_canonical_cursor_and_status() {
+    fn public_form_submission_query_accepts_one_canonical_cursor_status_and_funnel() {
         let submission_id = "11111111-1111-4111-8111-111111111111";
+        let funnel_id = "22222222-2222-4222-8222-222222222222";
         assert_eq!(
             public_form_submission_query(None),
             Ok(super::PublicFormSubmissionQuery {
                 cursor: None,
                 status: None,
+                funnel_id: None,
             })
         );
         assert_eq!(
@@ -3711,18 +3765,35 @@ mod tests {
             Ok(super::PublicFormSubmissionQuery {
                 cursor: None,
                 status: None,
+                funnel_id: None,
+            })
+        );
+        assert_eq!(
+            public_form_submission_query(Some(&format!("cursor=1234567890.{submission_id}"))),
+            Ok(super::PublicFormSubmissionQuery {
+                cursor: Some(PublicFormSubmissionCursor {
+                    submitted_at: 1_234_567_890,
+                    submission_id: submission_id.to_owned(),
+                    status: None,
+                    funnel_id: None,
+                }),
+                status: None,
+                funnel_id: None,
             })
         );
         assert_eq!(
             public_form_submission_query(Some(&format!(
-                "cursor=1234567890.{submission_id}&status=contacted"
+                "cursor=1234567890.{submission_id}.contacted.{funnel_id}&status=contacted&funnel_id={funnel_id}"
             ))),
             Ok(super::PublicFormSubmissionQuery {
                 cursor: Some(PublicFormSubmissionCursor {
                     submitted_at: 1_234_567_890,
                     submission_id: submission_id.to_owned(),
+                    status: Some(FormSubmissionStatus::Contacted),
+                    funnel_id: Some(funnel_id.to_owned()),
                 }),
                 status: Some(FormSubmissionStatus::Contacted),
+                funnel_id: Some(funnel_id.to_owned()),
             })
         );
         for query in [
@@ -3736,6 +3807,14 @@ mod tests {
             "status=new&status=closed",
             "status=NEW",
             "status=new&other=value",
+            "funnel_id=",
+            "funnel_id=not-a-uuid",
+            "funnel_id=22222222-2222-4222-8222-22222222222A",
+            "funnel_id=22222222-2222-4222-8222-222222222222&funnel_id=22222222-2222-4222-8222-222222222222",
+            &format!("cursor=1234567890.{submission_id}&status=contacted"),
+            &format!("cursor=1234567890.{submission_id}.new.{funnel_id}&status=contacted&funnel_id={funnel_id}"),
+            &format!("cursor=1234567890.{submission_id}.contacted.all&status=contacted&funnel_id={funnel_id}"),
+            &format!("cursor=1234567890.{submission_id}.contacted.{funnel_id}.extra&status=contacted&funnel_id={funnel_id}"),
         ] {
             assert_eq!(public_form_submission_query(Some(query)), Err(()), "{query}");
         }

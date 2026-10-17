@@ -299,6 +299,7 @@ struct SubmissionInboxState {
     #[cfg(any(feature = "browser", test))]
     latest: SubmissionRequestVersion,
     status: Option<FormSubmissionStatus>,
+    funnel_id: Option<String>,
     response: Option<Result<FormSubmissionListResponse, ()>>,
     loading_more: bool,
     load_more_error: bool,
@@ -329,6 +330,19 @@ impl SubmissionInboxState {
     }
 
     #[cfg(any(feature = "browser", test))]
+    fn set_funnel_id(&mut self, funnel_id: Option<String>) -> bool {
+        if self.funnel_id == funnel_id {
+            return false;
+        }
+        self.latest = self.latest.next();
+        self.funnel_id = funnel_id;
+        self.response = None;
+        self.loading_more = false;
+        self.load_more_error = false;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
     fn complete(
         &mut self,
         request: SubmissionRequestVersion,
@@ -348,6 +362,7 @@ impl SubmissionInboxState {
         SubmissionRequestVersion,
         String,
         Option<FormSubmissionStatus>,
+        Option<String>,
     )> {
         if self.loading_more {
             return None;
@@ -356,7 +371,7 @@ impl SubmissionInboxState {
         let request = self.latest.next();
         self.latest = request;
         self.loading_more = true;
-        Some((request, cursor, self.status))
+        Some((request, cursor, self.status, self.funnel_id.clone()))
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -385,6 +400,7 @@ impl SubmissionInboxState {
 #[component]
 fn Submissions() -> Element {
     let load_state = use_signal(SubmissionInboxState::default);
+    let funnel_list_state = use_signal(FunnelListLoad::default);
 
     #[cfg(feature = "browser")]
     {
@@ -394,41 +410,98 @@ fn Submissions() -> Element {
                 refresh_submission_list(page_state).await;
             });
         });
+        let list_state = funnel_list_state;
+        use_effect(move || {
+            spawn(async move {
+                refresh_funnel_list(list_state).await;
+            });
+        });
     }
 
     let snapshot = load_state();
+    let funnel_snapshot = funnel_list_state();
     rsx! {
         section { class: "page-heading",
             h1 { "Submissions" }
             p { class: "page-description", "Review form responses alongside the consent and retention record captured at submission time." }
         }
         div { class: "submission-toolbar",
-            label { r#for: "submission-status-filter", "Filter submissions by status" }
-            select {
-                id: "submission-status-filter",
-                "aria-label": "Filter submissions by status",
-                value: snapshot.status.map(FormSubmissionStatus::as_str).unwrap_or("all"),
-                onchange: move |event| {
-                    let selected = match event.value().as_str() {
-                        "all" => Some(None),
-                        "new" => Some(Some(FormSubmissionStatus::New)),
-                        "contacted" => Some(Some(FormSubmissionStatus::Contacted)),
-                        "qualified" => Some(Some(FormSubmissionStatus::Qualified)),
-                        "closed" => Some(Some(FormSubmissionStatus::Closed)),
-                        _ => None,
-                    };
-                    #[cfg(feature = "browser")]
-                    if let Some(selected) = selected {
-                        let mut load_state = load_state;
-                        load_state.with_mut(|state| state.set_status(selected));
-                        spawn(async move { refresh_submission_list(load_state).await; });
+            div { class: "submission-filter-group",
+                label { r#for: "submission-status-filter", "Filter submissions by status" }
+                select {
+                    id: "submission-status-filter",
+                    "aria-label": "Filter submissions by status",
+                    value: snapshot.status.map(FormSubmissionStatus::as_str).unwrap_or("all"),
+                    onchange: move |event| {
+                        let selected = match event.value().as_str() {
+                            "all" => Some(None),
+                            "new" => Some(Some(FormSubmissionStatus::New)),
+                            "contacted" => Some(Some(FormSubmissionStatus::Contacted)),
+                            "qualified" => Some(Some(FormSubmissionStatus::Qualified)),
+                            "closed" => Some(Some(FormSubmissionStatus::Closed)),
+                            _ => None,
+                        };
+                        #[cfg(feature = "browser")]
+                        if let Some(selected) = selected {
+                            let mut load_state = load_state;
+                            load_state.with_mut(|state| state.set_status(selected));
+                            spawn(async move { refresh_submission_list(load_state).await; });
+                        }
+                        #[cfg(not(feature = "browser"))]
+                        let _ = selected;
+                    },
+                    option { value: "all", "All statuses" }
+                    for status in FormSubmissionStatus::ALL {
+                        option { value: status.as_str(), "{status.label()}" }
                     }
-                    #[cfg(not(feature = "browser"))]
-                    let _ = selected;
-                },
-                option { value: "all", "All statuses" }
-                for status in FormSubmissionStatus::ALL {
-                    option { value: status.as_str(), "{status.label()}" }
+                }
+            }
+            div { class: "submission-filter-group",
+                label { r#for: "submission-funnel-filter", "Filter submissions by funnel" }
+                select {
+                    id: "submission-funnel-filter",
+                    "aria-label": "Filter submissions by funnel",
+                    value: snapshot.funnel_id.as_deref().unwrap_or("all"),
+                    disabled: !matches!(funnel_snapshot.response.as_ref(), Some(Ok(_))),
+                    onchange: move |event| {
+                        let selected = match event.value().as_str() {
+                            "all" => Some(None),
+                            value if uuid::Uuid::parse_str(value).is_ok() => Some(Some(value.to_owned())),
+                            _ => None,
+                        };
+                        #[cfg(feature = "browser")]
+                        if let Some(selected) = selected {
+                            let mut load_state = load_state;
+                            load_state.with_mut(|state| state.set_funnel_id(selected));
+                            spawn(async move { refresh_submission_list(load_state).await; });
+                        }
+                        #[cfg(not(feature = "browser"))]
+                        let _ = selected;
+                    },
+                    option { value: "all", "All funnels" }
+                    match funnel_snapshot.response.as_ref() {
+                        Some(Ok(funnels)) => rsx! {
+                            for funnel in funnels.iter() {
+                                option { value: "{funnel.id}", "{funnel.name} — /{funnel.slug}" }
+                            }
+                        },
+                        Some(Err(())) => rsx! { option { value: "unavailable", "Funnel filters unavailable" } },
+                        None => rsx! { option { value: "loading", "Loading funnels…" } },
+                    }
+                }
+            }
+        }
+        if matches!(funnel_snapshot.response.as_ref(), Some(Err(()))) {
+            div { class: "submission-filter-error", role: "status",
+                p { "Funnel filters could not be loaded. The inbox is showing submissions from all funnels." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        spawn(async move { refresh_funnel_list(funnel_list_state).await; });
+                    },
+                    "Retry funnel filters"
                 }
             }
         }
@@ -455,16 +528,25 @@ fn Submissions() -> Element {
                     }
                 }
             },
-            Some(Ok(response)) if response.items.is_empty() => rsx! {
+            Some(Ok(response)) if response.items.is_empty() && (snapshot.status.is_some() || snapshot.funnel_id.is_some()) => rsx! {
                 section { class: "empty-state submission-empty", "aria-label": "No matching submissions",
-                    if let Some(status) = snapshot.status {
+                    if snapshot.status.is_some() && snapshot.funnel_id.is_some() {
+                        h2 { "No matching submissions" }
+                        p { "No retained submissions currently match the selected funnel and status." }
+                    } else if snapshot.funnel_id.is_some() {
+                        h2 { "No submissions for this funnel" }
+                        p { "No retained submissions currently match this funnel." }
+                    } else if let Some(status) = snapshot.status {
                         h2 { "No {status.label().to_lowercase()} submissions" }
                         p { "No retained submissions currently match this status." }
-                    } else {
-                        h2 { "No form submissions yet" }
-                        p { "Responses from published funnels will appear here while they remain within the configured retention period." }
-                        Link { to: RouteView::Funnels {}, class: "secondary-button", "View funnels" }
                     }
+                }
+            },
+            Some(Ok(response)) if response.items.is_empty() => rsx! {
+                section { class: "empty-state submission-empty", "aria-label": "No form submissions",
+                    h2 { "No form submissions yet" }
+                    p { "Responses from published funnels will appear here while they remain within the configured retention period." }
+                    Link { to: RouteView::Funnels {}, class: "secondary-button", "View funnels" }
                 }
             },
             Some(Ok(response)) => rsx! {
@@ -1385,10 +1467,14 @@ async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
 async fn load_submission_page(
     cursor: Option<&str>,
     status: Option<FormSubmissionStatus>,
+    funnel_id: Option<&str>,
 ) -> Result<FormSubmissionListResponse, ()> {
     let mut parameters = Vec::new();
     if let Some(status) = status {
         parameters.push(format!("status={}", status.as_str()));
+    }
+    if let Some(funnel_id) = funnel_id {
+        parameters.push(format!("funnel_id={funnel_id}"));
     }
     if let Some(cursor) = cursor {
         parameters.push(format!("cursor={cursor}"));
@@ -1452,11 +1538,11 @@ async fn load_form_completion_report(
 
 #[cfg(feature = "browser")]
 async fn refresh_submission_list(mut load_state: Signal<SubmissionInboxState>) {
-    let (request_version, status) = load_state.with_mut(|state| {
+    let (request_version, status, funnel_id) = load_state.with_mut(|state| {
         let request_version = state.begin();
-        (request_version, state.status)
+        (request_version, state.status, state.funnel_id.clone())
     });
-    let result = load_submission_page(None, status).await;
+    let result = load_submission_page(None, status, funnel_id.as_deref()).await;
     if load_state.try_peek().is_err() {
         return;
     }
@@ -1479,12 +1565,12 @@ async fn refresh_form_completion_report(
 
 #[cfg(feature = "browser")]
 async fn load_more_submissions(mut load_state: Signal<SubmissionInboxState>) {
-    let Some((request_version, cursor, status)) =
+    let Some((request_version, cursor, status, funnel_id)) =
         load_state.with_mut(SubmissionInboxState::begin_more)
     else {
         return;
     };
-    let result = load_submission_page(Some(&cursor), status).await;
+    let result = load_submission_page(Some(&cursor), status, funnel_id.as_deref()).await;
     if load_state.try_peek().is_err() {
         return;
     }
@@ -1931,9 +2017,11 @@ mod tests {
             Ok(submission_page(&["newest"], Some("cursor-one"))),
         );
 
-        let (older_load, cursor, status) = state.begin_more().expect("next page can load");
+        let (older_load, cursor, status, funnel_id) =
+            state.begin_more().expect("next page can load");
         assert_eq!(cursor, "cursor-one");
         assert_eq!(status, None);
+        assert_eq!(funnel_id, None);
         state.complete_more(
             older_load,
             Ok(submission_page(&["older"], Some("cursor-two"))),
@@ -1958,7 +2046,7 @@ mod tests {
             initial_load,
             Ok(submission_page(&["newest"], Some("cursor-one"))),
         );
-        let (failed_load, _, _) = state.begin_more().expect("next page can load");
+        let (failed_load, _, _, _) = state.begin_more().expect("next page can load");
         state.complete_more(failed_load, Err(()));
 
         assert!(state.load_more_error);
@@ -1966,7 +2054,7 @@ mod tests {
             state.response.as_ref().unwrap().as_ref().unwrap().items[0].submission_id,
             "newest"
         );
-        let (retry, cursor, _) = state.begin_more().expect("failed page can be retried");
+        let (retry, cursor, _, _) = state.begin_more().expect("failed page can be retried");
         assert_eq!(cursor, "cursor-one");
         state.complete_more(retry, Ok(submission_page(&["older"], None)));
         assert!(!state.load_more_error);
@@ -1991,7 +2079,7 @@ mod tests {
             unfiltered,
             Ok(submission_page(&["newest"], Some("cursor-one"))),
         );
-        let (older, _, _) = state.begin_more().expect("older page starts");
+        let (older, _, _, _) = state.begin_more().expect("older page starts");
 
         assert!(state.set_status(Some(FormSubmissionStatus::Contacted)));
         assert_eq!(state.status, Some(FormSubmissionStatus::Contacted));
@@ -2003,6 +2091,31 @@ mod tests {
         assert!(state.response.is_none());
         assert!(state.set_status(None));
         assert!(!state.set_status(None));
+    }
+
+    #[test]
+    fn changing_submission_funnel_filter_clears_pages_and_keeps_filters_on_pagination() {
+        let funnel_id = "11111111-1111-4111-8111-111111111111".to_owned();
+        let mut state = SubmissionInboxState::default();
+        assert!(state.set_status(Some(FormSubmissionStatus::Qualified)));
+        assert!(state.set_funnel_id(Some(funnel_id.clone())));
+        let first_page = state.begin();
+        state.complete(
+            first_page,
+            Ok(submission_page(&["matching"], Some("cursor-one"))),
+        );
+
+        let (older, cursor, status, selected_funnel) =
+            state.begin_more().expect("older page starts");
+        assert_eq!(cursor, "cursor-one");
+        assert_eq!(status, Some(FormSubmissionStatus::Qualified));
+        assert_eq!(selected_funnel.as_deref(), Some(funnel_id.as_str()));
+
+        assert!(state.set_funnel_id(None));
+        assert!(state.response.is_none());
+        assert!(!state.loading_more);
+        state.complete_more(older, Ok(submission_page(&["stale"], None)));
+        assert!(state.response.is_none());
     }
 
     #[test]
