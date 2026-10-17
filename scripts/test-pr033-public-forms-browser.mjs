@@ -20,6 +20,9 @@ try {
   const name = page.getByLabel("Name");
   const email = page.getByLabel("Email");
   const form = page.locator("form.v2-form");
+  const actionUrl = new URL(await form.getAttribute("action"), pageUrl);
+  const formId = actionUrl.pathname.match(/\/forms\/([^/]+)\/submissions$/)?.[1];
+  assert.ok(formId, actionUrl.pathname);
   const marketingOptIn = page.locator('input[name="_marketing_opt_in"]');
 
   assert.equal(await name.count(), 1);
@@ -38,7 +41,7 @@ try {
   assert.equal(await form.evaluate((element) => element.checkValidity()), true);
 
   await page.getByRole("button", { name: "Send" }).click();
-  await page.waitForURL((url) => url.hash === "#form-success-form-lead");
+  await page.waitForURL((url) => url.hash === `#form-success-${formId}`);
   const status = page.getByRole("status");
   await status.waitFor({ state: "visible" });
   assert.equal(await status.evaluate((element) => element === document.activeElement), true);

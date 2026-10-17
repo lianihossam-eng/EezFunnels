@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::model::{
-    BlockV2, DocumentData, DocumentError, DocumentV2, FieldId, FormField, FormId, FormV2, PageId,
-    PageV2, SectionId, SectionKind, SectionV2,
+    BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FieldId, FormField,
+    FormId, FormResult, FormV2, PageId, PageV2, SectionId, SectionKind, SectionV2, ValidationRange,
 };
 use crate::ThemePreset;
 
@@ -14,6 +14,7 @@ pub enum IdKind {
     Block,
     Form,
     Field,
+    ConsentCopy,
 }
 
 pub trait IdSource {
@@ -43,6 +44,45 @@ pub enum NewBlock {
     },
     Form {
         form_id: FormId,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NewFormField {
+    Text {
+        name: String,
+        label: String,
+        help: Option<String>,
+        required: bool,
+        validation: Option<ValidationRange>,
+    },
+    Email {
+        name: String,
+        label: String,
+        help: Option<String>,
+        required: bool,
+        validation: Option<ValidationRange>,
+    },
+    Phone {
+        name: String,
+        label: String,
+        help: Option<String>,
+        required: bool,
+        validation: Option<ValidationRange>,
+    },
+    Checkbox {
+        name: String,
+        label: String,
+        help: Option<String>,
+        required: bool,
+    },
+    Select {
+        name: String,
+        label: String,
+        help: Option<String>,
+        required: bool,
+        options: Vec<String>,
     },
 }
 
@@ -89,6 +129,44 @@ pub enum Edit {
     SetBlock {
         block: super::BlockId,
         value: NewBlock,
+    },
+    CreateForm {
+        section: SectionId,
+        after: Option<super::BlockId>,
+    },
+    SetFormPurpose {
+        form: FormId,
+        purpose: String,
+    },
+    SetFormResult {
+        form: FormId,
+        result: FormResult,
+    },
+    SetFormRequestConsent {
+        form: FormId,
+        copy: String,
+    },
+    SetFormMarketingOptIn {
+        form: FormId,
+        copy: Option<String>,
+    },
+    AddFormField {
+        form: FormId,
+        after: Option<FieldId>,
+        field: NewFormField,
+    },
+    SetFormField {
+        form: FormId,
+        field: FieldId,
+        value: NewFormField,
+    },
+    DeleteFormField {
+        form: FormId,
+        field: FieldId,
+    },
+    ReorderFormFields {
+        form: FormId,
+        ordered: Vec<FieldId>,
     },
 }
 
@@ -276,6 +354,134 @@ impl DocumentV2 {
                 prune_unplaced_forms(&mut data);
                 FocusTarget::Block(block)
             }
+            Edit::CreateForm { section, after } => {
+                let block_id =
+                    BlockId::from_validated(allocate_id(ids, IdKind::Block, block_ids(&data))?);
+                let form = new_form(&data, ids)?;
+                let form_id = form.id.clone();
+                data.forms.push(form);
+                let blocks = &mut section_mut(&mut data, &section)?.blocks;
+                let insertion = insertion_index(blocks, after.as_ref(), BlockV2::id)?;
+                blocks.insert(
+                    insertion,
+                    BlockV2::Form {
+                        id: block_id.clone(),
+                        form_id,
+                    },
+                );
+                FocusTarget::Block(block_id)
+            }
+            Edit::SetFormPurpose { form, purpose } => {
+                form_mut(&mut data, &form)?.purpose = purpose;
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetFormResult { form, result } => {
+                form_mut(&mut data, &form)?.result = result;
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetFormRequestConsent { form, copy } => {
+                let unchanged = form_ref(&data, &form)?.request_consent.copy == copy;
+                if !unchanged {
+                    let version = allocate_consent_version(ids, &data)?;
+                    form_mut(&mut data, &form)?.request_consent = ConsentCopy {
+                        copy_version: super::StableDocumentId::from_validated(version),
+                        copy,
+                    };
+                }
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetFormMarketingOptIn { form, copy } => {
+                let current = data
+                    .forms
+                    .iter()
+                    .find(|candidate| candidate.id == form)
+                    .ok_or_else(|| DocumentError::at("validation/form_missing", "form_id"))?;
+                let unchanged = copy.as_deref()
+                    == current
+                        .marketing_opt_in
+                        .as_ref()
+                        .map(|consent| consent.copy.as_str());
+                let updated = if unchanged {
+                    current.marketing_opt_in.clone()
+                } else if let Some(copy) = copy {
+                    let version = allocate_consent_version(ids, &data)?;
+                    Some(ConsentCopy {
+                        copy_version: super::StableDocumentId::from_validated(version),
+                        copy,
+                    })
+                } else {
+                    None
+                };
+                form_mut(&mut data, &form)?.marketing_opt_in = updated;
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::AddFormField { form, after, field } => {
+                let existing = form_ref(&data, &form)?.fields.len();
+                if existing >= 50 {
+                    return Err(DocumentError::at(
+                        "validation/form_field_count",
+                        "forms.fields",
+                    ));
+                }
+                let id =
+                    FieldId::from_validated(allocate_id(ids, IdKind::Field, field_ids(&data))?);
+                let target = form_mut(&mut data, &form)?;
+                let insertion = insertion_index(&target.fields, after.as_ref(), FormField::id)?;
+                target.fields.insert(insertion, field.with_id(id));
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::SetFormField { form, field, value } => {
+                let target = form_mut(&mut data, &form)?;
+                let existing = target
+                    .fields
+                    .iter()
+                    .position(|candidate| candidate.id() == &field)
+                    .ok_or_else(|| {
+                        DocumentError::at("validation/form_field_missing", "field_id")
+                    })?;
+                target.fields[existing] = value.with_id(field);
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::DeleteFormField { form, field } => {
+                let target = form_mut(&mut data, &form)?;
+                if target.fields.len() <= 1 {
+                    return Err(DocumentError::at(
+                        "validation/form_field_count",
+                        "forms.fields",
+                    ));
+                }
+                let index = target
+                    .fields
+                    .iter()
+                    .position(|candidate| candidate.id() == &field)
+                    .ok_or_else(|| {
+                        DocumentError::at("validation/form_field_missing", "field_id")
+                    })?;
+                target.fields.remove(index);
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
+            Edit::ReorderFormFields { form, ordered } => {
+                let target = form_mut(&mut data, &form)?;
+                if !is_exact_permutation(target.fields.iter().map(FormField::id), &ordered) {
+                    return Err(DocumentError::at(
+                        "validation/form_field_order_invalid",
+                        "forms.fields",
+                    ));
+                }
+                let mut prior = std::mem::take(&mut target.fields);
+                let mut reordered = Vec::with_capacity(ordered.len());
+                for id in &ordered {
+                    let index = prior
+                        .iter()
+                        .position(|candidate| candidate.id() == id)
+                        .ok_or_else(|| {
+                            DocumentError::at("validation/form_field_order_invalid", "forms.fields")
+                        })?;
+                    reordered.push(prior.remove(index));
+                }
+                target.fields = reordered;
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
         };
 
         let expected_funnel_id = data.funnel_id.as_str().to_owned();
@@ -296,6 +502,138 @@ impl NewBlock {
             Self::Form { form_id } => BlockV2::Form { id, form_id },
         }
     }
+}
+
+impl NewFormField {
+    fn with_id(self, id: FieldId) -> FormField {
+        match self {
+            Self::Text {
+                name,
+                label,
+                help,
+                required,
+                validation,
+            } => FormField::Text {
+                id,
+                name,
+                label,
+                help,
+                required,
+                validation,
+            },
+            Self::Email {
+                name,
+                label,
+                help,
+                required,
+                validation,
+            } => FormField::Email {
+                id,
+                name,
+                label,
+                help,
+                required,
+                validation,
+            },
+            Self::Phone {
+                name,
+                label,
+                help,
+                required,
+                validation,
+            } => FormField::Phone {
+                id,
+                name,
+                label,
+                help,
+                required,
+                validation,
+            },
+            Self::Checkbox {
+                name,
+                label,
+                help,
+                required,
+            } => FormField::Checkbox {
+                id,
+                name,
+                label,
+                help,
+                required,
+            },
+            Self::Select {
+                name,
+                label,
+                help,
+                required,
+                options,
+            } => FormField::Select {
+                id,
+                name,
+                label,
+                help,
+                required,
+                options,
+            },
+        }
+    }
+}
+
+fn new_form(data: &DocumentData, ids: &mut impl IdSource) -> Result<FormV2, DocumentError> {
+    let form_id = FormId::from_validated(allocate_id(ids, IdKind::Form, form_ids(data))?);
+    let mut used_fields = field_ids(data);
+    let name_id = allocate_id(ids, IdKind::Field, used_fields.clone())?;
+    used_fields.insert(name_id.clone());
+    let email_id = allocate_id(ids, IdKind::Field, used_fields)?;
+    let copy_version = allocate_consent_version(ids, data)?;
+    Ok(FormV2 {
+        id: form_id,
+        fields: vec![
+            FormField::Text {
+                id: FieldId::from_validated(name_id),
+                name: "name".to_owned(),
+                label: "Your name".to_owned(),
+                help: None,
+                required: false,
+                validation: None,
+            },
+            FormField::Email {
+                id: FieldId::from_validated(email_id),
+                name: "email".to_owned(),
+                label: "Email address".to_owned(),
+                help: None,
+                required: true,
+                validation: None,
+            },
+        ],
+        purpose: "Respond to this request.".to_owned(),
+        request_consent: ConsentCopy {
+            copy_version: super::StableDocumentId::from_validated(copy_version),
+            copy: "I agree to be contacted about this request.".to_owned(),
+        },
+        marketing_opt_in: None,
+        result: FormResult::Inline {
+            message: "Thanks — your request has been received.".to_owned(),
+        },
+    })
+}
+
+fn allocate_consent_version(
+    ids: &mut impl IdSource,
+    data: &DocumentData,
+) -> Result<String, DocumentError> {
+    let used = data
+        .forms
+        .iter()
+        .flat_map(|form| {
+            std::iter::once(form.request_consent.copy_version.as_str().to_owned()).chain(
+                form.marketing_opt_in
+                    .iter()
+                    .map(|consent| consent.copy_version.as_str().to_owned()),
+            )
+        })
+        .collect();
+    allocate_id(ids, IdKind::ConsentCopy, used)
 }
 
 fn duplicate_section(
@@ -465,6 +803,20 @@ fn form_ids(data: &DocumentData) -> BTreeSet<String> {
         .collect()
 }
 
+fn form_ref<'a>(data: &'a DocumentData, id: &FormId) -> Result<&'a FormV2, DocumentError> {
+    data.forms
+        .iter()
+        .find(|form| &form.id == id)
+        .ok_or_else(|| DocumentError::at("validation/form_missing", "form_id"))
+}
+
+fn form_mut<'a>(data: &'a mut DocumentData, id: &FormId) -> Result<&'a mut FormV2, DocumentError> {
+    data.forms
+        .iter_mut()
+        .find(|form| &form.id == id)
+        .ok_or_else(|| DocumentError::at("validation/form_missing", "form_id"))
+}
+
 fn field_ids(data: &DocumentData) -> BTreeSet<String> {
     data.forms
         .iter()
@@ -522,7 +874,7 @@ fn insertion_index<T, Id: Ord>(
 }
 
 impl FormField {
-    fn id(&self) -> &FieldId {
+    pub fn id(&self) -> &FieldId {
         match self {
             Self::Text { id, .. }
             | Self::Email { id, .. }
@@ -540,5 +892,296 @@ impl FormField {
             | Self::Checkbox { id, .. }
             | Self::Select { id, .. } => *id = new_id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{document_v2::BlueprintId, ThemePreset};
+
+    struct TestIds(u32);
+
+    impl IdSource for TestIds {
+        fn next_id(&mut self, _kind: IdKind) -> Result<String, DocumentError> {
+            self.0 += 1;
+            Ok(format!("edit-test-{}", self.0))
+        }
+    }
+
+    struct OperationIds {
+        operation_id: String,
+        next: u32,
+    }
+
+    impl IdSource for OperationIds {
+        fn next_id(&mut self, _kind: IdKind) -> Result<String, DocumentError> {
+            self.next += 1;
+            Ok(format!("{}-{}", self.operation_id, self.next))
+        }
+    }
+
+    fn starter() -> DocumentV2 {
+        DocumentV2::starter(
+            "funnel-edit-test",
+            BlueprintId::LeadGen,
+            ThemePreset::Minimal,
+        )
+        .expect("valid starter document")
+    }
+
+    #[test]
+    fn form_creation_works_with_worker_operation_ids_and_existing_block_anchor() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/document_v2_minimal.json"
+        ))
+        .expect("minimal fixture");
+        value["funnel_id"] = serde_json::json!("funnel-worker-edit-test");
+        let raw = serde_json::to_vec(&value).expect("fixture JSON");
+        let document = DocumentV2::decode(&raw, "funnel-worker-edit-test").expect("valid fixture");
+        let mut ids = OperationIds {
+            operation_id: "a".repeat(32),
+            next: 0,
+        };
+        let outcome = document.apply(
+            Edit::CreateForm {
+                section: SectionId::parse("section-hero").unwrap(),
+                after: Some(BlockId::parse("block-copy").unwrap()),
+            },
+            &mut ids,
+        );
+        assert!(outcome.is_ok(), "{}", outcome.err().unwrap());
+    }
+
+    fn apply(document: &DocumentV2, edit: Edit, ids: &mut TestIds) -> DocumentV2 {
+        document
+            .apply(edit, ids)
+            .expect("valid typed edit")
+            .document
+    }
+
+    #[test]
+    fn form_creation_and_configuration_preserve_valid_typed_definitions() {
+        let mut ids = TestIds(0);
+        let original = starter();
+        let page = original.pages()[0].id().clone();
+        let section = original.pages()[0].sections()[0].id().clone();
+        let original_block_count = original.pages()[0].sections()[0].blocks().len();
+        let created = apply(
+            &original,
+            Edit::CreateForm {
+                section: section.clone(),
+                after: None,
+            },
+            &mut ids,
+        );
+        assert_eq!(created.forms().len(), 1);
+        assert_eq!(
+            created.pages()[0].sections()[0].blocks().len(),
+            original_block_count + 1
+        );
+        let form = created.forms()[0].clone();
+        assert_eq!(form.fields().len(), 2);
+        assert!(form
+            .fields()
+            .iter()
+            .any(|field| matches!(field, FormField::Email { required: true, .. })));
+
+        let updated = apply(
+            &created,
+            Edit::SetFormPurpose {
+                form: form.id().clone(),
+                purpose: "Answer the visitor's question.".to_owned(),
+            },
+            &mut ids,
+        );
+        let updated = apply(
+            &updated,
+            Edit::SetFormRequestConsent {
+                form: form.id().clone(),
+                copy: "I agree to receive a response.".to_owned(),
+            },
+            &mut ids,
+        );
+        let consent_version = updated
+            .form(form.id())
+            .unwrap()
+            .request_consent()
+            .copy_version()
+            .clone();
+        assert_ne!(
+            consent_version,
+            form.request_consent().copy_version().clone()
+        );
+
+        let updated = apply(
+            &updated,
+            Edit::SetFormMarketingOptIn {
+                form: form.id().clone(),
+                copy: Some("Send me occasional product updates.".to_owned()),
+            },
+            &mut ids,
+        );
+        assert!(updated
+            .form(form.id())
+            .unwrap()
+            .marketing_opt_in()
+            .is_some());
+
+        let new_field = NewFormField::Select {
+            name: "interest".to_owned(),
+            label: "What are you interested in?".to_owned(),
+            help: Some("Choose one option.".to_owned()),
+            required: false,
+            options: vec!["Consulting".to_owned(), "Training".to_owned()],
+        };
+        let after = form.fields().last().unwrap().id().clone();
+        let updated = apply(
+            &updated,
+            Edit::AddFormField {
+                form: form.id().clone(),
+                after: Some(after),
+                field: new_field,
+            },
+            &mut ids,
+        );
+        let added_id = updated.form(form.id()).unwrap().fields()[2].id().clone();
+        let updated = apply(
+            &updated,
+            Edit::ReorderFormFields {
+                form: form.id().clone(),
+                ordered: vec![
+                    added_id.clone(),
+                    form.fields()[0].id().clone(),
+                    form.fields()[1].id().clone(),
+                ],
+            },
+            &mut ids,
+        );
+        assert_eq!(updated.form(form.id()).unwrap().fields()[0].id(), &added_id);
+
+        let round_trip = DocumentV2::decode(updated.canonical_bytes(), "funnel-edit-test")
+            .expect("edited form remains decodable");
+        assert_eq!(round_trip.canonical_bytes(), updated.canonical_bytes());
+
+        let deleted = apply(
+            &updated,
+            Edit::DeleteFormField {
+                form: form.id().clone(),
+                field: added_id,
+            },
+            &mut ids,
+        );
+        assert_eq!(deleted.form(form.id()).unwrap().fields().len(), 2);
+        assert_eq!(deleted.pages()[0].id(), &page);
+    }
+
+    #[test]
+    fn changing_required_consent_copy_creates_a_fresh_evidence_version() {
+        let mut ids = TestIds(0);
+        let original = starter();
+        let section = original.pages()[0].sections()[0].id().clone();
+        let created = apply(
+            &original,
+            Edit::CreateForm {
+                section,
+                after: None,
+            },
+            &mut ids,
+        );
+        let form = created.forms()[0].clone();
+        let updated = apply(
+            &created,
+            Edit::SetFormRequestConsent {
+                form: form.id().clone(),
+                copy: "Updated request consent wording.".to_owned(),
+            },
+            &mut ids,
+        );
+        assert_ne!(
+            form.request_consent().copy_version(),
+            updated
+                .form(form.id())
+                .unwrap()
+                .request_consent()
+                .copy_version()
+        );
+    }
+
+    #[test]
+    fn setting_identical_request_consent_preserves_its_evidence_version() {
+        let mut create_ids = TestIds(0);
+        let original = starter();
+        let section = original.pages()[0].sections()[0].id().clone();
+        let created = apply(
+            &original,
+            Edit::CreateForm {
+                section,
+                after: None,
+            },
+            &mut create_ids,
+        );
+        let form = created.forms()[0].clone();
+        let before = created.canonical_bytes();
+        let consent_version = form.request_consent().copy_version().clone();
+        let mut update_ids = TestIds(100);
+
+        let updated = created
+            .apply(
+                Edit::SetFormRequestConsent {
+                    form: form.id().clone(),
+                    copy: form.request_consent().copy().to_owned(),
+                },
+                &mut update_ids,
+            )
+            .expect("setting the same copy remains valid")
+            .document;
+
+        assert_eq!(updated.canonical_bytes(), before);
+        assert_eq!(
+            update_ids.0, 100,
+            "no new evidence version should be allocated"
+        );
+        assert_eq!(
+            updated
+                .form(form.id())
+                .unwrap()
+                .request_consent()
+                .copy_version(),
+            &consent_version
+        );
+    }
+
+    #[test]
+    fn form_field_cannot_be_deleted_below_the_required_minimum() {
+        let mut ids = TestIds(0);
+        let original = starter();
+        let section = original.pages()[0].sections()[0].id().clone();
+        let created = apply(
+            &original,
+            Edit::CreateForm {
+                section,
+                after: None,
+            },
+            &mut ids,
+        );
+        let form = created.forms()[0].clone();
+        let first = apply(
+            &created,
+            Edit::DeleteFormField {
+                form: form.id().clone(),
+                field: form.fields()[0].id().clone(),
+            },
+            &mut ids,
+        );
+        assert!(first
+            .apply(
+                Edit::DeleteFormField {
+                    form: form.id().clone(),
+                    field: first.form(form.id()).unwrap().fields()[0].id().clone(),
+                },
+                &mut ids,
+            )
+            .is_err());
     }
 }

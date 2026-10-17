@@ -3,7 +3,7 @@ mod model;
 mod theme;
 mod validate;
 
-pub use edit::{Edit, EditOutcome, FocusTarget, IdKind, IdSource, NewBlock};
+pub use edit::{Edit, EditOutcome, FocusTarget, IdKind, IdSource, NewBlock, NewFormField};
 pub use model::{
     ActionV2, AssetId, BlockId, BlockKind, BlockV2, BlueprintId, ConsentCopy, DocumentError,
     DocumentV2, FieldId, FormField, FormId, FormResult, FormSubmissionError, FormSubmissionValue,
