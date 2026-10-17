@@ -30,6 +30,7 @@ pub mod host;
 mod json;
 mod mcp;
 mod origin;
+mod sitemap;
 
 pub use host::HostAllowlist;
 
@@ -105,6 +106,10 @@ pub async fn fetch(
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
+    } else if request_path == "/robots.txt" {
+        robots_response(&env, request, correlation_id.clone())
+    } else if request_path == "/sitemap.xml" {
+        sitemap_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/mcp" {
         mcp::handle(&env, request, &correlation_id).await
     } else if request_path == "/api/media" {
@@ -427,6 +432,114 @@ fn media_error_response(code: &str, correlation_id: &str) -> Response<axum::body
     let error = ApiError::from_code(code);
     log_api_error(&error, correlation_id, error.code());
     error_response(&error, correlation_id.to_owned())
+}
+
+fn robots_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
+    }
+    let configured_origin = env.var("PUBLIC_BASE_URL").ok();
+    let configured_origin = configured_origin.as_ref().map(|value| value.to_string());
+    let origin = crate::canonical::public_origin_url(configured_origin.as_deref());
+    let body = sitemap::build_robots(origin.as_ref());
+    let is_head = request.method() == Method::HEAD;
+    let mut response = Response::new(if is_head {
+        axum::body::Body::empty()
+    } else {
+        axum::body::Body::from(body)
+    });
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    response
+}
+
+async fn sitemap_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
+    }
+    let configured_origin = env.var("PUBLIC_BASE_URL").ok();
+    let configured_origin = configured_origin.as_ref().map(|value| value.to_string());
+    let origin = crate::canonical::public_origin_url(configured_origin.as_deref());
+    let body = if let Some(origin) = origin.as_ref() {
+        let bindings = match eez_storage::Bindings::from_env(env) {
+            Ok(bindings) => bindings,
+            Err(_) => {
+                let error = ApiError::from_code("external/unavailable");
+                log_api_error(
+                    &error,
+                    &correlation_id,
+                    "sitemap storage bindings unavailable",
+                );
+                return error_response(&error, correlation_id);
+            }
+        };
+        let published_revisions = match bindings.repository().list_published_revisions().await {
+            Ok(revisions) => revisions,
+            Err(_) => {
+                let error = ApiError::from_code("external/unavailable");
+                log_api_error(
+                    &error,
+                    &correlation_id,
+                    "published sitemap rows unavailable",
+                );
+                return error_response(&error, correlation_id);
+            }
+        };
+        match sitemap::build_sitemap(origin, &published_revisions) {
+            Ok(sitemap) => sitemap,
+            Err(()) => {
+                let error = ApiError::from_code("internal/unexpected");
+                log_api_error(&error, &correlation_id, "published sitemap data is invalid");
+                return error_response(&error, correlation_id);
+            }
+        }
+    } else {
+        sitemap::empty_sitemap()
+    };
+
+    let is_head = request.method() == Method::HEAD;
+    let mut response = Response::new(if is_head {
+        axum::body::Body::empty()
+    } else {
+        axum::body::Body::from(body)
+    });
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    response
 }
 
 fn dashboard_response(document: String) -> Response<axum::body::Body> {

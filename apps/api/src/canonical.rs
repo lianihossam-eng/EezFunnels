@@ -8,11 +8,22 @@ pub(crate) fn public_page_url(
     if !valid_slug(funnel_slug) || page_slug.is_some_and(|slug| !valid_slug(slug)) {
         return None;
     }
+    let mut url = public_origin_url(configured_origin)?;
+    let mut segments = url.path_segments_mut().ok()?;
+    segments.pop_if_empty().push("f").push(funnel_slug);
+    if let Some(page_slug) = page_slug {
+        segments.push(page_slug);
+    }
+    drop(segments);
+    Some(url.to_string())
+}
+
+pub(crate) fn public_origin_url(configured_origin: Option<&str>) -> Option<Url> {
     let raw_origin = configured_origin?;
     if raw_origin.trim() != raw_origin {
         return None;
     }
-    let mut url = Url::parse(raw_origin).ok()?;
+    let url = Url::parse(raw_origin).ok()?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -32,14 +43,7 @@ pub(crate) fn public_page_url(
     if !suffix.is_empty() && suffix != "/" {
         return None;
     }
-
-    let mut segments = url.path_segments_mut().ok()?;
-    segments.pop_if_empty().push("f").push(funnel_slug);
-    if let Some(page_slug) = page_slug {
-        segments.push(page_slug);
-    }
-    drop(segments);
-    Some(url.to_string())
+    Some(url)
 }
 
 pub(crate) fn insert_public_canonical(html: &str, canonical_url: &str) -> Option<String> {
