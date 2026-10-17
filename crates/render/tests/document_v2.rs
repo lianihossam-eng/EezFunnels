@@ -14,7 +14,12 @@ fn document() -> DocumentV2 {
 
 #[test]
 fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
-    let document = document();
+    let document = DocumentV2::starter(
+        "funnel-01",
+        BlueprintId::Launch,
+        eez_domain::ThemePreset::Minimal,
+    )
+    .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
     assert_eq!(prepared.manifest.renderer_version(), "renderer-v3");
@@ -37,6 +42,16 @@ fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
     assert!(html.contains("Welcome to your new funnel"));
     assert!(html.contains("--color-background:#f8fafc"));
     assert!(html.contains("--font-family:system-ui, sans-serif"));
+    for section in ["hero", "features", "testimonials", "cta", "footer"] {
+        assert!(html.contains(&format!("class=\"v2-section v2-section--{section}\"")));
+    }
+    assert!(html.contains("<h1>Welcome to your new funnel</h1>"));
+    assert!(html.contains(
+        "<ul class=\"v2-list\"><li>A clear outcome for your customers</li><li>A simple next step to take action</li></ul>"
+    ));
+    assert!(html.contains(
+        "<a class=\"v2-button\" href=\"https://example.com/\" target=\"_blank\" rel=\"noopener noreferrer\">Get started</a>"
+    ));
 }
 
 #[test]
@@ -164,6 +179,8 @@ fn owner_preview_escapes_text_and_never_follows_external_links() {
     let html = render_owner_preview(&edited.document, &page_id).expect("owner preview");
     assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
     assert!(!html.contains("<img src=x"));
+    assert!(html.contains("<span class=\"v2-button\" aria-disabled=\"true\">Get started</span>"));
+    assert!(!html.contains("<a class=\"v2-button\""));
 }
 
 #[test]
