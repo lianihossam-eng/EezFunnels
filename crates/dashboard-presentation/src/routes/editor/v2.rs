@@ -105,6 +105,7 @@ struct V2EditorState {
     publication_pending: bool,
     publication_retryable: bool,
     publication_refreshing: bool,
+    publication_state_unknown: bool,
     #[cfg(any(feature = "browser", test))]
     publication_attempt: Option<PublicationAction>,
     publication_error: Option<String>,
@@ -166,6 +167,7 @@ impl Default for V2EditorState {
             publication_pending: false,
             publication_retryable: false,
             publication_refreshing: false,
+            publication_state_unknown: false,
             #[cfg(any(feature = "browser", test))]
             publication_attempt: None,
             publication_error: None,
@@ -397,6 +399,7 @@ impl V2EditorState {
             && !self.stale
             && !self.publication_pending
             && !self.publication_refreshing
+            && !self.publication_state_unknown
             && !self.has_unsaved_changes()
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
@@ -407,6 +410,7 @@ impl V2EditorState {
         self.published_revision_id.is_some()
             && !self.publication_pending
             && !self.publication_refreshing
+            && !self.publication_state_unknown
             && !self.loading
             && self.can_retry_publication_as(false)
     }
@@ -635,7 +639,8 @@ impl V2EditorState {
 
     #[cfg(any(feature = "browser", test))]
     fn begin_publication(&mut self, publish: bool) -> Option<V2PublicationCapture> {
-        if self.publication_pending || self.publication_refreshing {
+        if self.publication_pending || self.publication_refreshing || self.publication_state_unknown
+        {
             return None;
         }
         let action = match (
@@ -708,6 +713,7 @@ impl V2EditorState {
         self.publication_retryable = false;
         self.publication_attempt = None;
         self.published_revision_id = published_revision_id;
+        self.publication_state_unknown = false;
         self.publication_status = Some(
             if capture.action.resulting_revision_id().is_some() {
                 "Revision published."
@@ -729,6 +735,7 @@ impl V2EditorState {
         self.publication_retryable = false;
         self.publication_attempt = None;
         self.publication_refreshing = true;
+        self.publication_state_unknown = true;
         self.publication_status =
             Some("Publication changed elsewhere; refreshing its current state…".to_owned());
         self.publication_error = None;
@@ -748,6 +755,7 @@ impl V2EditorState {
         match published_revision_id {
             Ok(published_revision_id) => {
                 self.published_revision_id = published_revision_id;
+                self.publication_state_unknown = false;
                 self.publication_status = Some(
                     "Publication changed in another session. The current state has been refreshed."
                         .to_owned(),
@@ -755,6 +763,7 @@ impl V2EditorState {
                 self.publication_error = None;
             }
             Err(()) => {
+                self.publication_state_unknown = true;
                 self.publication_status = None;
                 self.publication_error = Some(
                     "Publication changed in another session, but its current state could not be loaded. Reload the editor before trying again.".to_owned(),
@@ -2954,7 +2963,31 @@ mod tests {
             Some("revision-live-elsewhere")
         );
         assert!(!state.publication_refreshing);
+        assert!(!state.publication_state_unknown);
         assert!(!state.publication_retryable);
+    }
+
+    #[test]
+    fn failed_publication_refresh_keeps_actions_disabled_until_reload() {
+        let document = document();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.loading = false;
+        state.base_revision_id = "revision-current".to_owned();
+        state.saved_document_json = document.canonical_json();
+        state.document = Some(document);
+        state.published_revision_id = Some("revision-old".to_owned());
+        let capture = state
+            .begin_publication(true)
+            .expect("current revision can be published");
+
+        assert!(state.begin_publication_refresh(&capture));
+        state.finish_publication_refresh(&capture, Err(()));
+
+        assert!(!state.publication_refreshing);
+        assert!(state.publication_state_unknown);
+        assert!(!state.can_publish());
+        assert!(!state.can_unpublish());
+        assert!(state.begin_publication(false).is_none());
     }
 
     #[test]
