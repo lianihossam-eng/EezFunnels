@@ -722,7 +722,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 while active_group_members(worker.pid) and time.monotonic() < deadline:
                     time.sleep(0.1)
                 active_members = active_group_members(worker.pid)
+        port_closed = port_is_closed()
+        port_deadline = time.monotonic() + 5
+        while not port_closed and time.monotonic() < port_deadline:
+            time.sleep(0.1)
+            port_closed = port_is_closed()
         clean_shutdown_status = worker.returncode in (0, -signal.SIGINT, 130, 143)
-        if not clean_shutdown_status or active_members or not port_is_closed():
+        if not clean_shutdown_status or active_members or not port_closed:
+            print(
+                f"worker-cleanup status={worker.returncode} active-members={active_members} "
+                f"port-closed={port_closed}",
+                file=sys.stderr,
+            )
             raise RuntimeError(f"Local Worker exited with status {worker.returncode}")
 PY
