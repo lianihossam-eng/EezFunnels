@@ -798,7 +798,7 @@ impl<'a> Repository<'a> {
         if self.get_funnel(&input.funnel_id).await?.is_none() {
             return Err(RepositoryError::FunnelNotFound);
         }
-        validate_schema_version(input.schema_version)?;
+        validate_legacy_revision_schema_version(input.schema_version)?;
         validate_payload_size(&input.data_json)?;
         self.validate_json(&input.data_json).await?;
         self.validate_json(&input.render_manifest_json).await?;
@@ -1186,6 +1186,14 @@ pub fn validate_schema_version(version: i64) -> RepositoryResult<()> {
     }
 }
 
+fn validate_legacy_revision_schema_version(version: i64) -> RepositoryResult<()> {
+    if version == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::UnsupportedSchemaVersion(version))
+    }
+}
+
 fn classify_receipt(
     receipt: CommandReceipt,
     command_id: &str,
@@ -1229,13 +1237,23 @@ fn validate_payload_size(value: &str) -> RepositoryResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_payload_size, validate_required_field, validate_schema_version, RepositoryError,
+        validate_legacy_revision_schema_version, validate_payload_size, validate_required_field,
+        validate_schema_version, RepositoryError,
     };
 
     #[test]
     fn schema_versions_one_and_two_are_supported_for_storage_dispatch() {
         assert!(validate_schema_version(1).is_ok());
         assert!(validate_schema_version(2).is_ok());
+    }
+
+    #[test]
+    fn legacy_revision_creation_rejects_v2_instead_of_relabeling_it_as_v1() {
+        assert!(validate_legacy_revision_schema_version(1).is_ok());
+        assert!(matches!(
+            validate_legacy_revision_schema_version(2),
+            Err(RepositoryError::UnsupportedSchemaVersion(2))
+        ));
     }
 
     #[test]

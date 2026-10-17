@@ -188,12 +188,6 @@ pub async fn scheduled(
         }
     };
     let repository = bindings.document_stage_repository();
-    if let Err(error) = repository.initialize_sequence_control().await {
-        worker::console_error!(
-            "V2 document stage cleanup could not initialize R2 control: {error:?}"
-        );
-        return;
-    }
     match repository.cleanup_one_page().await {
         Ok(progress) => worker::console_log!(
             "V2 document stage cleanup completed: listed={}, deleted={}, pass_completed={}",

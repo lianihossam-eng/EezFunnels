@@ -229,10 +229,10 @@ impl<'a> DocumentStageRepository<'a> {
 
     pub async fn mint(&self, mutation: &StageMintMutation<'_>) -> RepositoryResult<MutationResult> {
         validate_mint(mutation)?;
-        self.ensure_sequence_control().await?;
         if let Some(receipt) = self.active_receipt(mutation.idempotency_key).await? {
             return Ok(classify_receipt(receipt, mutation));
         }
+        self.ensure_sequence_control().await?;
 
         let now = self
             .database
@@ -425,10 +425,6 @@ impl<'a> DocumentStageRepository<'a> {
         }
     }
 
-    pub async fn initialize_sequence_control(&self) -> RepositoryResult<()> {
-        self.ensure_sequence_control().await
-    }
-
     pub async fn capacity_snapshot(&self) -> RepositoryResult<StageCapacitySnapshot> {
         self.ensure_sequence_control().await?;
         let capacity = self
@@ -522,7 +518,10 @@ impl<'a> DocumentStageRepository<'a> {
         let (high_water, cursor) = match current_state.high_water_sequence {
             Some(high_water) if is_sequence(&high_water) => (high_water, current_state.cursor),
             Some(_) => return Err(RepositoryError::StageControlUnavailable),
-            None => (self.read_sequence_control().await?.0.sequence, None),
+            None => {
+                self.ensure_sequence_control().await?;
+                (self.read_sequence_control().await?.0.sequence, None)
+            }
         };
         if start_new_pass {
             self.write_sweep_state(Some(&high_water), None).await?;
