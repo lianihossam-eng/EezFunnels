@@ -24,6 +24,7 @@ use worker::{event, Context, Env, HttpRequest};
 use crate::errors::ApiError;
 use crate::json::{validate_unique_json, JsonValidationError};
 
+mod canonical;
 pub mod errors;
 pub mod host;
 mod json;
@@ -756,11 +757,28 @@ async fn public_funnel_response(
             Ok(result) => result,
             Err(error) => return funnel_command_error_response(error, &correlation_id),
         };
-    let Some(html) = result.get("html").and_then(Value::as_str) else {
+    let Some(mut html) = result
+        .get("html")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
         let error = ApiError::from_code("internal/unexpected");
         log_api_error(&error, &correlation_id, error.code());
         return error_response(&error, correlation_id);
     };
+    let configured_origin = env.var("PUBLIC_BASE_URL").ok();
+    let configured_origin = configured_origin.as_ref().map(|value| value.to_string());
+    if let Some(canonical_url) = crate::canonical::public_page_url(
+        configured_origin.as_deref(),
+        route.funnel_slug,
+        route.page_slug,
+    ) {
+        if let Some(canonical_html) =
+            crate::canonical::insert_public_canonical(&html, &canonical_url)
+        {
+            html = canonical_html;
+        }
+    }
     let submission_key_placeholder = format!(
         "?key={}",
         eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER
@@ -778,7 +796,7 @@ async fn public_funnel_response(
         }
         let submission_key = uuid::Uuid::new_v4().to_string();
         let html = bind_public_form_submission_identity(
-            html,
+            &html,
             &submission_key,
             revision_id,
             submission_channel,
@@ -796,7 +814,7 @@ async fn public_funnel_response(
         }
         return response;
     }
-    let etag = public_html_etag(html);
+    let etag = public_html_etag(&html);
     let etag_header = match HeaderValue::from_str(&etag) {
         Ok(etag_header) => etag_header,
         Err(_) => {
@@ -819,7 +837,7 @@ async fn public_funnel_response(
         *response.status_mut() = StatusCode::NOT_MODIFIED;
         return response;
     }
-    *response.body_mut() = axum::body::Body::from(html.to_owned());
+    *response.body_mut() = axum::body::Body::from(html);
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),

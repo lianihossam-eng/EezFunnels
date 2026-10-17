@@ -12,6 +12,8 @@ Save a revision, then publish it to update the public page. The owner preview us
 
 `noindex` is an indexing preference for cooperating search engines. It does not restrict access: anyone with a public page URL can still open the page. Use an access perimeter when content must be protected; see [Security and Cloudflare Access](security.md).
 
+Published pages also emit a self-referencing canonical link when `PUBLIC_BASE_URL` is configured as an HTTPS origin, such as `https://funnels.example`. The value must contain only the origin (an optional trailing slash is accepted); a missing or invalid value omits the canonical link. The link uses the public funnel/page route and excludes request query parameters. It never trusts `Host` or forwarded-host request headers. When several hosts serve the same Worker, this one configured origin is canonical for all of them. A page marked `noindex` remains excluded by its robots directive.
+
 Earlier revisions keep their renderer behavior. Renderer v4 and v5 revisions have title-only metadata; v6 also supports images. Existing revisions remain renderable, while newly saved revisions use renderer v7. Metadata is tied to the saved document and validated against its render manifest.
 
-Canonical URL and social-image tags are not emitted. The renderer does not infer a trusted canonical origin from request headers.
+Social-image tags are not emitted. Canonical links are added by the public API edge from the operator-configured `PUBLIC_BASE_URL`; the renderer does not infer a trusted canonical origin from request headers.
