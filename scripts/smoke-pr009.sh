@@ -572,25 +572,6 @@ funnel_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], enco
 funnel_slug="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["slug"])' "$state_dir/create.json")"
 revision_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["initial_revision"]["id"])' "$state_dir/create.json")"
 
-./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
-  --command "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES ('pr029-v2-publish-revision', '$funnel_id', 2, '{}', '{}');" >/dev/null
-v2_publish_status="$(request POST "/api/funnels/$funnel_id/publish" "$state_dir/v2-publish.json" "$state_dir/v2-publish.headers" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr029-reject-v2-publish' \
-  --data '{"revision_id":"pr029-v2-publish-revision","expected_published_revision_id":null}')"
-assert_error_response "$state_dir/v2-publish.json" "$v2_publish_status" 400 validation/schema_version_unsupported
-./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
-  --command "SELECT published_revision_id FROM funnels WHERE id = '$funnel_id';" > "$state_dir/v2-publish-pointer.json"
-python3 - "$state_dir/v2-publish-pointer.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as result_file:
-    result = json.load(result_file)
-assert result[-1]["results"][0]["published_revision_id"] is None, result
-PY
-./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
-  --command "DELETE FROM revisions WHERE id = 'pr029-v2-publish-revision';" >/dev/null
-
 expired_stage_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 expired_attempt_id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 expired_receiving_attempt_id="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -1024,6 +1005,46 @@ with open(sys.argv[2], encoding="utf-8") as create_file:
     created_id = json.load(create_file)["funnel"]["id"]
 assert len(listed) == 5, listed
 assert created_id in [item["id"] for item in listed], listed
+PY
+
+v2_create_status="$(request POST /api/funnels/v2 "$state_dir/v2-create.json" "$state_dir/v2-create.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr029-v2-create' \
+  --data '{"name":"Typed offer","blueprint":"lead_gen"}')"
+test "$v2_create_status" = 201
+v2_funnel_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["id"])' "$state_dir/v2-create.json")"
+printf '%s\n' "$v2_funnel_id" >> "$funnel_ids_file"
+v2_funnel_slug="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["funnel"]["slug"])' "$state_dir/v2-create.json")"
+v2_revision_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["initial_revision"]["id"])' "$state_dir/v2-create.json")"
+v2_publish_status="$(request POST "/api/funnels/$v2_funnel_id/publish" "$state_dir/v2-publish.json" "$state_dir/v2-publish.headers" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pr029-v2-publish' \
+  --data "{\"revision_id\":\"$v2_revision_id\",\"expected_published_revision_id\":null}")"
+test "$v2_publish_status" = 200
+v2_public_status="$(request GET "/f/$v2_funnel_slug" "$state_dir/v2-published.html" "$state_dir/v2-published.headers")"
+test "$v2_public_status" = 200
+python3 - "$state_dir/v2-publish.json" "$state_dir/v2-published.html" "$state_dir/v2-published.headers" "$v2_revision_id" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response_file:
+    response = json.load(response_file)
+with open(sys.argv[2], encoding="utf-8") as html_file:
+    html = html_file.read()
+with open(sys.argv[3], encoding="utf-8") as headers_file:
+    headers = headers_file.read().lower()
+assert response["published_revision_id"] == sys.argv[4], response
+assert "<h1>" in html, html
+assert "etag: \"" in headers, headers
+assert "cache-control: public" in headers, headers
+PY
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
+  --command "SELECT published_revision_id FROM funnels WHERE id = '$v2_funnel_id';" > "$state_dir/v2-publish-pointer.json"
+python3 - "$state_dir/v2-publish-pointer.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as result_file:
+    result = json.load(result_file)
+assert result[-1]["results"][0]["published_revision_id"], result
 PY
 
 seed_expired_receipt pr009-expired-before-create

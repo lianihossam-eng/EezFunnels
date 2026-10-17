@@ -17,6 +17,7 @@ use eez_storage::repository::{
 };
 use eez_storage::stage::{
     DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1463,7 +1464,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         .map_err(|_| FunnelCommandError::Internal)?;
         let result = self
             .repository
-            .save_editor_revision(&EditorSaveMutation {
+            .save_v1_conversion_revision(&EditorSaveMutation {
                 command_id: command_ids::FUNNEL_DOCUMENT_CONVERSION_COMMIT_V2,
                 funnel_id: &command.funnel_id,
                 expected_revision_id: &command.base_revision_id,
@@ -1666,6 +1667,19 @@ impl<'repo, 'database> Session<'repo, 'database> {
         };
         let canonical_parameters =
             serde_json::to_string(&command).map_err(|_| FunnelCommandError::Internal)?;
+        if let Some(result) = self
+            .repository
+            .classify_active_receipt(
+                idempotency_key,
+                command_ids::FUNNEL_DOCUMENT_STAGE_V2,
+                Some(&canonical_parameters),
+            )
+            .await?
+        {
+            return mutation_result_to_value(result);
+        }
+        self.require_v2_editor_head(&command.funnel_id, &command.base_revision_id)
+            .await?;
         let Some(document_stages) = self.document_stages else {
             return Err(FunnelCommandError::Internal);
         };
@@ -1725,6 +1739,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
         {
             return mutation_result_to_value(result);
         }
+        self.require_v2_editor_head(&command.funnel_id, &command.base_revision_id)
+            .await?;
         let Some(document_stages) = self.document_stages else {
             return Err(FunnelCommandError::Internal);
         };
@@ -1764,6 +1780,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 funnel_id: &command.funnel_id,
                 base_revision_id: &command.base_revision_id,
                 stage_id: &command.stage_id,
+                staged_document_bytes: &document_bytes,
                 expected_length: usize::try_from(command.expected_length)
                     .map_err(|_| FunnelCommandError::InvalidParameters)?,
                 expected_sha256: &command.expected_sha256,
@@ -1775,6 +1792,25 @@ impl<'repo, 'database> Session<'repo, 'database> {
             })
             .await?;
         mutation_result_to_value(result)
+    }
+
+    async fn require_v2_editor_head(
+        &self,
+        funnel_id: &str,
+        base_revision_id: &str,
+    ) -> Result<(), FunnelCommandError> {
+        let current = self
+            .repository
+            .get_editor_revision(funnel_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        if current.head_revision_id != base_revision_id {
+            return Err(FunnelCommandError::StaleEditorRevision);
+        }
+        if current.revision.schema_version != 2 {
+            return Err(FunnelCommandError::V2ConversionBlocked);
+        }
+        Ok(())
     }
 
     async fn execute_editor_preview(&self, parameters: &str) -> Result<Value, FunnelCommandError> {
@@ -2039,7 +2075,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         .map_err(|_| FunnelCommandError::Internal)?;
         let result = self
             .repository
-            .create_funnel_with_revision(
+            .create_funnel_with_v2_revision(
                 &prepared.funnel,
                 &prepared.revision,
                 FunnelCreateCommandV2::ID,

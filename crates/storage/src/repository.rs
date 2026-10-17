@@ -278,6 +278,50 @@ impl<'a> Repository<'a> {
         payload_json: &str,
         result_json: &str,
     ) -> RepositoryResult<MutationResult> {
+        validate_legacy_revision_schema_version(revision.schema_version)?;
+        self.create_funnel_with_revision_inner(
+            funnel,
+            revision,
+            command_id,
+            idempotency_key,
+            payload_json,
+            result_json,
+        )
+        .await
+    }
+
+    pub async fn create_funnel_with_v2_revision(
+        &self,
+        funnel: &NewFunnel,
+        revision: &NewRevision,
+        command_id: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
+        if revision.schema_version != 2 || command_id != "funnel.create.v2" {
+            return Err(RepositoryError::InvalidField("v2_initial_revision"));
+        }
+        self.create_funnel_with_revision_inner(
+            funnel,
+            revision,
+            command_id,
+            idempotency_key,
+            payload_json,
+            result_json,
+        )
+        .await
+    }
+
+    async fn create_funnel_with_revision_inner(
+        &self,
+        funnel: &NewFunnel,
+        revision: &NewRevision,
+        command_id: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
         validate_required_field(&funnel.id, "id")?;
         validate_required_field(&funnel.name, "name")?;
         validate_required_field(&funnel.slug, "slug")?;
@@ -287,7 +331,6 @@ impl<'a> Repository<'a> {
         if revision.funnel_id != funnel.id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
@@ -463,6 +506,26 @@ impl<'a> Repository<'a> {
         &self,
         mutation: &EditorSaveMutation<'_>,
     ) -> RepositoryResult<MutationResult> {
+        validate_legacy_revision_schema_version(mutation.revision.schema_version)?;
+        self.save_editor_revision_from_v1_head(mutation).await
+    }
+
+    pub async fn save_v1_conversion_revision(
+        &self,
+        mutation: &EditorSaveMutation<'_>,
+    ) -> RepositoryResult<MutationResult> {
+        if mutation.revision.schema_version != 2
+            || mutation.command_id != "funnel.document.conversion.commit.v2"
+        {
+            return Err(RepositoryError::InvalidField("v1_conversion_revision"));
+        }
+        self.save_editor_revision_from_v1_head(mutation).await
+    }
+
+    async fn save_editor_revision_from_v1_head(
+        &self,
+        mutation: &EditorSaveMutation<'_>,
+    ) -> RepositoryResult<MutationResult> {
         let command_id = mutation.command_id;
         let funnel_id = mutation.funnel_id;
         let expected_revision_id = mutation.expected_revision_id;
@@ -478,7 +541,6 @@ impl<'a> Repository<'a> {
         if revision.funnel_id != funnel_id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
@@ -500,6 +562,7 @@ impl<'a> Repository<'a> {
         let data_json = D1Type::Text(&revision.data_json);
         let manifest_json = D1Type::Text(&revision.render_manifest_json);
         let retained_limit = D1Type::Integer(MAX_REVISIONS_RETAINED);
+        let base_schema_version = D1Type::Integer(1);
         let key = D1Type::Text(idempotency_key);
         let command = D1Type::Text(command_id);
         let payload = D1Type::Text(payload_json);
@@ -510,7 +573,7 @@ impl<'a> Repository<'a> {
         let insert_receipt = self
             .database
             .prepare(
-                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnel_editor_heads AS head JOIN revisions AS base ON base.id = head.revision_id AND base.funnel_id = head.funnel_id WHERE head.funnel_id = ? AND head.revision_id = ? AND base.schema_version = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
             )
             .bind_refs([
                 &key,
@@ -519,6 +582,7 @@ impl<'a> Repository<'a> {
                 &result,
                 &funnel_id_value,
                 &expected_id_value,
+                &base_schema_version,
                 &funnel_id_value,
                 &retained_limit,
             ])?;
@@ -527,7 +591,7 @@ impl<'a> Repository<'a> {
         let insert_revision = self
             .database
             .prepare(format!(
-                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = ? AND revision_id = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND {owns_receipt}"
+                "INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM funnel_editor_heads AS head JOIN revisions AS base ON base.id = head.revision_id AND base.funnel_id = head.funnel_id WHERE head.funnel_id = ? AND head.revision_id = ? AND base.schema_version = ?) AND (SELECT COUNT(*) FROM revisions WHERE funnel_id = ?) < ? AND {owns_receipt}"
             ))
             .bind_refs([
                 &revision_id_value,
@@ -537,6 +601,7 @@ impl<'a> Repository<'a> {
                 &manifest_json,
                 &funnel_id_value,
                 &expected_id_value,
+                &base_schema_version,
                 &funnel_id_value,
                 &retained_limit,
                 &key,

@@ -170,8 +170,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         status, content = request("GET", "/api/v2/stage-capacity")
         assert status == 200, (status, content)
         initial_capacity = json.loads(content)
-        assert initial_capacity["orphan_bytes_spent"] == 0, initial_capacity
-        assert initial_capacity["orphan_keys_spent"] == 0, initial_capacity
+        assert initial_capacity["orphan_bytes_held"] == 0, initial_capacity
+        assert initial_capacity["orphan_keys_held"] == 0, initial_capacity
 
         legacy_create_status, legacy_create_content = post_json(
             "/api/funnels",
@@ -250,6 +250,31 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         assert ready_preview["blockers"] == [], ready_preview
         assert ready_preview["warnings"], ready_preview
         assert "PR-024 conversion" in ready_preview["preview_html"], ready_preview
+
+        legacy_stage_data = (
+            root / "crates/domain/tests/fixtures/document_v2_minimal.json"
+        ).read_bytes().replace(b'"funnel-01"', f'"{legacy_funnel}"'.encode())
+        legacy_stage_status, legacy_stage_content = post_json(
+            f"/api/funnels/{legacy_funnel}/stages-v2",
+            {
+                "base_revision_id": legacy_revision,
+                "expected_length": len(legacy_stage_data),
+                "expected_sha256": hashlib.sha256(legacy_stage_data).hexdigest(),
+            },
+            "stage-legacy-v2-stage-rejected",
+        )
+        assert legacy_stage_status == 409, (legacy_stage_status, legacy_stage_content)
+        legacy_save_status, legacy_save_content = post_json(
+            f"/api/funnels/{legacy_funnel}/revisions-v2",
+            {
+                "base_revision_id": legacy_revision,
+                "stage_id": "0" * 64,
+                "expected_length": len(legacy_stage_data),
+                "expected_sha256": hashlib.sha256(legacy_stage_data).hexdigest(),
+            },
+            "stage-legacy-v2-save-rejected",
+        )
+        assert legacy_save_status == 409, (legacy_save_status, legacy_save_content)
 
         conversion_body = {"base_revision_id": legacy_revision}
         conversion_status, conversion_content = post_json(
@@ -447,9 +472,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         status, content = request("GET", "/api/v2/stage-capacity")
         assert status == 200, (status, content)
         capacity = json.loads(content)
-        expected_spent = len(first_data) + len(edited_data) + len(second_data)
-        assert capacity["orphan_bytes_spent"] == expected_spent, capacity
-        assert capacity["orphan_keys_spent"] == 3, capacity
+        assert capacity["orphan_bytes_held"] == len(second_data), capacity
+        assert capacity["orphan_keys_held"] == 1, capacity
         assert capacity["worst_case_orphan_bytes"] == capacity["orphan_byte_budget"], capacity
         assert capacity["worst_case_orphan_keys"] == capacity["orphan_key_budget"], capacity
         print("PR-024 local D1/R2 stage, permanent orphan budget, and immutable save flow passed")

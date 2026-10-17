@@ -1625,7 +1625,7 @@ async fn local_stage_control_bootstrap(
     };
     match bindings
         .document_stage_repository()
-        .initialize_sequence_control()
+        .ensure_sequence_control()
         .await
     {
         Ok(()) => {
@@ -1668,9 +1668,9 @@ async fn v2_stage_capacity_response(
             let mut response = json_success_response(
                 serde_json::json!({
                     "orphan_byte_budget": capacity.orphan_byte_budget,
-                    "orphan_bytes_spent": capacity.orphan_bytes_spent,
+                    "orphan_bytes_held": capacity.orphan_bytes_held,
                     "orphan_key_budget": capacity.orphan_key_budget,
-                    "orphan_keys_spent": capacity.orphan_keys_spent,
+                    "orphan_keys_held": capacity.orphan_keys_held,
                     "worst_case_orphan_bytes": capacity.worst_case_orphan_bytes,
                     "worst_case_orphan_keys": capacity.worst_case_orphan_keys,
                 }),
@@ -2140,26 +2140,6 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
             "correlation_id": correlation_id,
         })
     );
-}
-
-#[event(scheduled)]
-pub async fn scheduled(
-    _event: worker::ScheduledEvent,
-    env: Env,
-    _context: worker::ScheduleContext,
-) {
-    let result = async {
-        let bindings = eez_storage::Bindings::from_env(&env)?;
-        bindings
-            .document_stage_repository()
-            .cleanup_one_page()
-            .await
-            .map_err(worker::Error::from)
-    }
-    .await;
-    if result.is_err() {
-        worker::console_error!("temporary stage cleanup failed");
-    }
 }
 
 #[cfg(test)]
