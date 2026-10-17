@@ -31,6 +31,8 @@ The dashboard, HTTP API, CLI, and MCP endpoint use the same funnel command sessi
 | `GET /api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `GET /f/:slug` | Render the published entry page (`funnel.public.read`) |
 | `GET /f/:slug/:page_slug` | Render a published V2 page (`funnel.public.read`) |
+| `GET /sitemap.xml` | List indexable routes from current published revisions |
+| `GET /robots.txt` | Return crawler guidance for public pages and owner routes |
 
 JSON mutation requests use JSON bodies. The `PUT` staged upload uses `application/octet-stream` and a short-lived bearer capability. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks; [Deploy](deploy.md) describes the required staged-save capacity settings.
 
