@@ -1275,6 +1275,26 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .repository
             .list_public_form_submissions(command.cursor.as_ref())
             .await?;
+        let revision_ids = page
+            .items
+            .iter()
+            .map(|item| item.revision_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let revisions = self
+            .repository
+            .list_public_form_submission_revisions(&revision_ids)
+            .await?;
+        let mut documents = BTreeMap::new();
+        for revision in revisions {
+            if revision.schema_version != 2 {
+                return Err(FunnelCommandError::Internal);
+            }
+            let document = DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id)
+                .map_err(|_| FunnelCommandError::Internal)?;
+            documents.insert(revision.id, (revision.funnel_id, document));
+        }
         let next_cursor = if page.has_more {
             page.items
                 .last()
@@ -1285,7 +1305,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let items = page
             .items
             .into_iter()
-            .map(form_submission_list_item)
+            .map(|record| {
+                let (revision_funnel_id, document) = documents
+                    .get(&record.revision_id)
+                    .ok_or(FunnelCommandError::Internal)?;
+                if revision_funnel_id != &record.funnel_id {
+                    return Err(FunnelCommandError::Internal);
+                }
+                form_submission_list_item(record, document)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         serde_json::to_value(FormSubmissionListResult {
             command_id: FormSubmissionListCommand::ID,
@@ -2766,6 +2794,7 @@ fn apply_command_settings(
 
 fn form_submission_list_item(
     record: PublicFormSubmissionRecord,
+    document: &DocumentV2,
 ) -> Result<FormSubmissionListItem, FunnelCommandError> {
     if record.revision_schema_version != 2
         || record.request_consent_acknowledged != 1
@@ -2775,8 +2804,6 @@ fn form_submission_list_item(
     {
         return Err(FunnelCommandError::Internal);
     }
-    let document = DocumentV2::decode(record.revision_data_json.as_bytes(), &record.funnel_id)
-        .map_err(|_| FunnelCommandError::Internal)?;
     let page_id =
         PageId::parse(record.page_id.clone()).map_err(|_| FunnelCommandError::Internal)?;
     let form_id =

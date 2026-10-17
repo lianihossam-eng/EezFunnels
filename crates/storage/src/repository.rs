@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
@@ -266,7 +267,6 @@ pub struct PublicFormSubmissionRecord {
     pub funnel_slug: String,
     pub revision_id: String,
     pub revision_schema_version: i64,
-    pub revision_data_json: String,
     pub page_id: String,
     pub form_id: String,
     pub field_values_json: String,
@@ -285,6 +285,14 @@ pub struct PublicFormSubmissionRecord {
     pub submitted_at_datetime: String,
     pub expires_at: i64,
     pub expires_at_label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PublicFormSubmissionRevision {
+    pub id: String,
+    pub funnel_id: String,
+    pub schema_version: i64,
+    pub data_json: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1427,7 +1435,7 @@ impl<'a> Repository<'a> {
         let mut items = self
             .database
             .prepare(
-                "SELECT public_form_submissions.submission_id, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, revisions.data_json AS revision_data_json, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?",
+                "SELECT public_form_submissions.submission_id, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?",
             )
             .bind_refs([
                 &cursor_timestamp,
@@ -1442,6 +1450,39 @@ impl<'a> Repository<'a> {
         let has_more = items.len() > PUBLIC_FORM_SUBMISSION_PAGE_SIZE;
         items.truncate(PUBLIC_FORM_SUBMISSION_PAGE_SIZE);
         Ok(PublicFormSubmissionPage { items, has_more })
+    }
+
+    pub async fn list_public_form_submission_revisions(
+        &self,
+        revision_ids: &[String],
+    ) -> RepositoryResult<Vec<PublicFormSubmissionRevision>> {
+        let revision_ids = revision_ids.iter().cloned().collect::<BTreeSet<_>>();
+        if revision_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(revision_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            "SELECT id, funnel_id, schema_version, data_json FROM revisions WHERE schema_version = 2 AND id IN ({placeholders})"
+        );
+        let bindings = revision_ids
+            .iter()
+            .map(|revision_id| D1Type::Text(revision_id.as_str()))
+            .collect::<Vec<_>>();
+        let binding_refs = bindings.iter().collect::<Vec<_>>();
+        let revisions = self
+            .database
+            .prepare(&query)
+            .bind_refs(binding_refs)?
+            .all()
+            .await?
+            .results::<PublicFormSubmissionRevision>()?;
+        if revisions.len() != revision_ids.len() {
+            return Err(RepositoryError::InvalidField("submission_revision"));
+        }
+        Ok(revisions)
     }
 
     pub async fn get_published_revision_by_slug(
