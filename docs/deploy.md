@@ -29,7 +29,7 @@ npx wrangler r2 bucket create eezfunnel-assets
 npx wrangler kv namespace create eezfunnel-kv
 ```
 
-Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top-level `DB` and `KV` entries in `wrangler.toml`. Keep the R2 bucket name aligned with the configured `R2` binding. The Worker currently requires all three bindings; image upload is not implemented.
+Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top-level `DB` and `KV` entries in `wrangler.toml`. Keep the R2 bucket name aligned with the configured `R2` binding. The Worker requires all three bindings. The media library stores validated PNG, JPEG, and WebP uploads in R2; uploaded images are publicly retrievable at immutable content-addressed URLs, so do not upload private images.
 
 Edit the top-level `[vars]` entry in `wrangler.toml` and set `ALLOWED_HOSTS` to the exact hostname that will receive requests. For the default workers.dev route, this is the Worker name and your account's workers.dev subdomain, for example `eezfunnel.<account-subdomain>.workers.dev`. The Worker rejects hosts that are not listed exactly. Multiple hosts can be comma-separated. If you use another hostname, configure its Cloudflare Worker route separately and list that exact host.
 

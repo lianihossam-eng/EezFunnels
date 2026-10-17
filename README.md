@@ -10,13 +10,14 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
 - Build multi-page funnels: add steps, edit each page title and URL slug, connect pages with buttons, and preview at mobile, tablet, and desktop widths. See [Pages and steps](docs/pages.md) for the editor behavior.
 - Edit typed sections, supported content blocks, actions, and theme settings in the dashboard.
+- Upload PNG, JPEG, and WebP images to the R2-backed media library, add them to typed pages, and set meaningful or decorative alternative text. Uploaded images have public, content-addressed URLs; do not upload private images.
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, image uploads, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
 
 ## Scope
 
@@ -71,6 +72,8 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/funnels/:id/revisions` | Save an editor revision |
 | `/api/funnels/:id/publish` and `/unpublish` | Change the published revision pointer |
 | `/api/v2/stage-capacity` | Read the configured staged-save capacity |
+| `/api/media` | List and upload images in the R2-backed media library |
+| `/media/:sha256` | Read a public, content-addressed image |
 | `/f/:slug` | Render a published funnel |
 | `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |

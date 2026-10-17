@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
 use eez_domain::document_v2::{
@@ -6,9 +7,10 @@ use eez_domain::document_v2::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v5";
-const PREVIOUS_RENDERER_VERSION_V2: &str = "renderer-v4";
-const EARLIER_RENDERER_VERSION_V2: &str = "renderer-v3";
+pub const RENDERER_VERSION_V2: &str = "renderer-v6";
+const PREVIOUS_RENDERER_VERSION_V2: &str = "renderer-v5";
+const EARLIER_RENDERER_VERSION_V2: &str = "renderer-v4";
+const OLDEST_RENDERER_VERSION_V2: &str = "renderer-v3";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -91,19 +93,40 @@ pub struct PreparedV2Revision {
     pub manifest: RenderManifestV2,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AssetDigestRecord {
+    pub asset_id: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PublishedRevisionInput<'a> {
+    pub schema_version: i64,
+    pub funnel_id: &'a str,
+    pub revision_id: &'a str,
+    pub data_json: &'a str,
+    pub render_manifest_json: &'a str,
+}
+
 pub fn prepare_revision(
     document: &DocumentV2,
     revision_id: &str,
 ) -> Result<PreparedV2Revision, V2RenderError> {
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
+    prepare_revision_with_assets(document, revision_id, &[])
+}
+
+pub fn prepare_revision_with_assets(
+    document: &DocumentV2,
+    revision_id: &str,
+    assets: &[AssetDigestRecord],
+) -> Result<PreparedV2Revision, V2RenderError> {
+    let assets = canonical_asset_records(document, assets)?;
     let revision_id = eez_domain::document_v2::RevisionIdV2::parse(revision_id.to_owned())
         .map_err(|_| V2RenderError::IdentityMismatch)?;
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let document_bytes = document.canonical_bytes();
-    let assets_bytes = serde_json_canonicalizer::to_vec(&Vec::<AssetDigestRecord>::new())
+    let assets_bytes = serde_json_canonicalizer::to_vec(&assets)
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let manifest = RenderManifestV2 {
         manifest_type: "eezfunnel.render-manifest".to_owned(),
@@ -138,7 +161,16 @@ pub fn render_owner_preview(
     document: &DocumentV2,
     page_id: &PageId,
 ) -> Result<String, V2RenderError> {
-    render_page(document, page_id, LinkMode::Inert)
+    render_owner_preview_with_assets(document, page_id, &[])
+}
+
+pub fn render_owner_preview_with_assets(
+    document: &DocumentV2,
+    page_id: &PageId,
+    assets: &[AssetDigestRecord],
+) -> Result<String, V2RenderError> {
+    let assets = canonical_asset_records(document, assets)?;
+    render_page(document, page_id, LinkMode::Inert, &assets)
 }
 
 pub fn render_published(
@@ -149,13 +181,16 @@ pub fn render_published(
     render_manifest_json: &str,
 ) -> Result<String, V2RenderError> {
     render_published_route_with_slug(
-        row_schema_version,
-        row_funnel_id,
-        row_revision_id,
-        data_json,
-        render_manifest_json,
+        PublishedRevisionInput {
+            schema_version: row_schema_version,
+            funnel_id: row_funnel_id,
+            revision_id: row_revision_id,
+            data_json,
+            render_manifest_json,
+        },
         None,
         None,
+        &[],
     )
 }
 
@@ -169,40 +204,52 @@ pub fn render_published_route(
     page_slug: Option<&str>,
 ) -> Result<String, V2RenderError> {
     render_published_route_with_slug(
-        row_schema_version,
-        row_funnel_id,
-        row_revision_id,
-        data_json,
-        render_manifest_json,
+        PublishedRevisionInput {
+            schema_version: row_schema_version,
+            funnel_id: row_funnel_id,
+            revision_id: row_revision_id,
+            data_json,
+            render_manifest_json,
+        },
         Some(public_funnel_slug),
         page_slug,
+        &[],
     )
 }
 
+pub fn render_published_route_with_assets(
+    revision: PublishedRevisionInput<'_>,
+    public_funnel_slug: &str,
+    page_slug: Option<&str>,
+    assets: &[AssetDigestRecord],
+) -> Result<String, V2RenderError> {
+    render_published_route_with_slug(revision, Some(public_funnel_slug), page_slug, assets)
+}
+
 fn render_published_route_with_slug(
-    row_schema_version: i64,
-    row_funnel_id: &str,
-    row_revision_id: &str,
-    data_json: &str,
-    render_manifest_json: &str,
+    revision: PublishedRevisionInput<'_>,
     public_funnel_slug: Option<&str>,
     page_slug: Option<&str>,
+    assets: &[AssetDigestRecord],
 ) -> Result<String, V2RenderError> {
     let (document, manifest) = validate_revision_v2_with_manifest(
-        row_schema_version,
-        row_funnel_id,
-        row_revision_id,
-        data_json,
-        render_manifest_json,
+        revision.schema_version,
+        revision.funnel_id,
+        revision.revision_id,
+        revision.data_json,
+        revision.render_manifest_json,
+        assets,
     )?;
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
-    if document.has_forms() && manifest.renderer_version() != RENDERER_VERSION_V2 {
+    if document.has_forms()
+        && !matches!(
+            manifest.renderer_version(),
+            RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2
+        )
+    {
         return Err(V2RenderError::FormsNotEnabled);
     }
     let (page, link_mode) = match manifest.renderer_version() {
-        EARLIER_RENDERER_VERSION_V2 => {
+        OLDEST_RENDERER_VERSION_V2 => {
             if page_slug.is_some() {
                 return Err(V2RenderError::PageMissing);
             }
@@ -213,7 +260,7 @@ fn render_published_route_with_slug(
                 LinkMode::PublishedV3,
             )
         }
-        PREVIOUS_RENDERER_VERSION_V2 | RENDERER_VERSION_V2 => {
+        EARLIER_RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2 | RENDERER_VERSION_V2 => {
             let page = match page_slug {
                 Some(slug) => document
                     .pages()
@@ -233,7 +280,8 @@ fn render_published_route_with_slug(
         }
         _ => return Err(V2RenderError::UnsupportedRenderer),
     };
-    render_page(&document, page.id(), link_mode)
+    let assets = canonical_asset_records(&document, assets)?;
+    render_page(&document, page.id(), link_mode, &assets)
 }
 
 pub fn validate_revision_v2(
@@ -243,12 +291,31 @@ pub fn validate_revision_v2(
     data_json: &str,
     render_manifest_json: &str,
 ) -> Result<DocumentV2, V2RenderError> {
+    validate_revision_v2_with_assets(
+        row_schema_version,
+        row_funnel_id,
+        row_revision_id,
+        data_json,
+        render_manifest_json,
+        &[],
+    )
+}
+
+pub fn validate_revision_v2_with_assets(
+    row_schema_version: i64,
+    row_funnel_id: &str,
+    row_revision_id: &str,
+    data_json: &str,
+    render_manifest_json: &str,
+    assets: &[AssetDigestRecord],
+) -> Result<DocumentV2, V2RenderError> {
     validate_revision_v2_with_manifest(
         row_schema_version,
         row_funnel_id,
         row_revision_id,
         data_json,
         render_manifest_json,
+        assets,
     )
     .map(|(document, _manifest)| document)
 }
@@ -259,6 +326,7 @@ fn validate_revision_v2_with_manifest(
     row_revision_id: &str,
     data_json: &str,
     render_manifest_json: &str,
+    assets: &[AssetDigestRecord],
 ) -> Result<(DocumentV2, RenderManifestV2), V2RenderError> {
     if row_schema_version != 2
         || eez_domain::document_v2::RevisionIdV2::parse(row_revision_id.to_owned()).is_err()
@@ -277,7 +345,7 @@ fn validate_revision_v2_with_manifest(
     if canonical_manifest != render_manifest_json.as_bytes() {
         return Err(V2RenderError::InvalidManifest);
     }
-    validate_manifest(&document, &manifest, row_funnel_id, row_revision_id)?;
+    validate_manifest(&document, &manifest, row_funnel_id, row_revision_id, assets)?;
     Ok((document, manifest))
 }
 
@@ -286,6 +354,7 @@ fn validate_manifest(
     manifest: &RenderManifestV2,
     row_funnel_id: &str,
     row_revision_id: &str,
+    assets: &[AssetDigestRecord],
 ) -> Result<(), V2RenderError> {
     if manifest.manifest_type != "eezfunnel.render-manifest"
         || manifest.manifest_version != 2
@@ -297,7 +366,10 @@ fn validate_manifest(
     }
     if !matches!(
         manifest.renderer_version.as_str(),
-        RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2 | EARLIER_RENDERER_VERSION_V2
+        RENDERER_VERSION_V2
+            | PREVIOUS_RENDERER_VERSION_V2
+            | EARLIER_RENDERER_VERSION_V2
+            | OLDEST_RENDERER_VERSION_V2
     ) || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
         || manifest.canonicalizer_profile != CANONICALIZER_PROFILE_V2
         || manifest.theme_profile_version != THEME_PROFILE_VERSION_V2
@@ -306,7 +378,8 @@ fn validate_manifest(
     }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
-    let assets_bytes = serde_json_canonicalizer::to_vec(&Vec::<AssetDigestRecord>::new())
+    let assets = canonical_asset_records(document, assets)?;
+    let assets_bytes = serde_json_canonicalizer::to_vec(&assets)
         .map_err(|_| V2RenderError::SerializationFailed)?;
     if manifest.document_sha256 != sha256(document.canonical_bytes())
         || manifest.theme_tokens_sha256 != prefixed_sha256(THEME_DIGEST_DOMAIN, &theme_bytes)
@@ -317,10 +390,55 @@ fn validate_manifest(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct AssetDigestRecord {
-    asset_id: String,
-    sha256: String,
+fn canonical_asset_records(
+    document: &DocumentV2,
+    assets: &[AssetDigestRecord],
+) -> Result<Vec<AssetDigestRecord>, V2RenderError> {
+    let mut expected = BTreeSet::new();
+    for page in document.pages() {
+        for section in page.sections() {
+            for block in section.blocks() {
+                if let BlockV2::Image { asset_id, .. } = block {
+                    expected.insert(asset_id.as_str().to_owned());
+                }
+            }
+        }
+    }
+    if expected.is_empty() && assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !expected.is_empty() && assets.is_empty() {
+        return Err(V2RenderError::ImagesNotEnabled);
+    }
+    let mut actual = BTreeMap::new();
+    for asset in assets {
+        if !is_lower_sha256(&asset.asset_id)
+            || !is_lower_sha256(&asset.sha256)
+            || asset.asset_id != asset.sha256
+            || actual
+                .insert(asset.asset_id.as_str(), asset.sha256.as_str())
+                .is_some()
+        {
+            return Err(V2RenderError::InvalidManifest);
+        }
+    }
+    if expected.len() != actual.len()
+        || expected
+            .iter()
+            .any(|asset_id| !actual.contains_key(asset_id.as_str()))
+    {
+        return Err(V2RenderError::ImagesNotEnabled);
+    }
+    let mut records = assets.to_vec();
+    records.sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
+    Ok(records)
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Clone, Copy)]
@@ -334,10 +452,8 @@ fn render_page(
     document: &DocumentV2,
     page_id: &PageId,
     link_mode: LinkMode<'_>,
+    assets: &[AssetDigestRecord],
 ) -> Result<String, V2RenderError> {
-    if document.has_images() {
-        return Err(V2RenderError::ImagesNotEnabled);
-    }
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
     let profile = document.resolved_theme_profile();
     let mut html = String::with_capacity(document.canonical_bytes().len() * 2);
@@ -345,6 +461,7 @@ fn render_page(
     html.push_str(&crate::escape_html_text(page.title()));
     html.push_str("</title><style>");
     html.push_str("html{color-scheme:light}body{margin:0}#funnel{box-sizing:border-box;min-height:100vh;background:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}#funnel *{box-sizing:inherit}.v2-main{max-width:var(--content-width);margin:0 auto}.v2-section{margin:0 auto;padding:var(--spacing-section) 1.5rem}.v2-section--hero{text-align:center}.v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}.v2-section--footer{border-top:1px solid var(--color-border);color:var(--color-muted)}.v2-section h1,.v2-section h2,.v2-section p{margin-top:0}.v2-list{padding-inline-start:1.5rem}.v2-button{display:inline-block;padding:.75rem 1.25rem;background:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}.v2-text{white-space:pre-wrap;overflow-wrap:anywhere}.v2-form{display:grid;gap:1.25rem;max-width:40rem;margin:0 auto}.v2-form fieldset{min-width:0;margin:0;padding:0;border:0}.v2-form legend{margin-bottom:1rem;font-size:1.25rem;font-weight:700}.v2-form-field{display:grid;gap:.35rem;margin-block:1rem;text-align:left}.v2-form-field label,.v2-form-consent label{font-weight:600}.v2-form input:not([type=checkbox]),.v2-form select{width:100%;min-height:2.75rem;padding:.6rem .75rem;border:1px solid var(--color-border);border-radius:var(--radius-button);background:var(--color-background);color:var(--color-text);font:inherit}.v2-form input[type=checkbox]{width:1.25rem;height:1.25rem;min-width:1.25rem;min-height:1.25rem;margin:.15rem 0;accent-color:var(--color-primary)}.v2-form :focus-visible,.v2-form-result:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-help{margin:0;color:var(--color-muted);font-size:.95rem;overflow-wrap:anywhere}.v2-form-consent{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:.75rem;margin-block:.75rem;text-align:left}.v2-section .v2-form-result{display:none;max-width:40rem;margin:1.25rem auto 0;padding:1rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface);overflow-wrap:anywhere}.v2-form-result:target{display:block}");
+    html.push_str(".v2-image{display:block;max-width:100%;height:auto}");
     html.push_str("#funnel{--color-background:");
     html.push_str(&profile.desktop["color-background"]);
     html.push_str(";--color-border:");
@@ -451,7 +568,19 @@ fn render_page(
                         html.push_str("</span>");
                     }
                 },
-                BlockV2::Image { .. } => return Err(V2RenderError::ImagesNotEnabled),
+                BlockV2::Image { asset_id, alt, .. } => {
+                    let asset_id = asset_id.as_str();
+                    if !assets.iter().any(|asset| asset.asset_id == asset_id) {
+                        return Err(V2RenderError::ImagesNotEnabled);
+                    }
+                    html.push_str("<img class=\"v2-image\" src=\"/media/");
+                    html.push_str(&crate::escape_html_attribute(asset_id));
+                    html.push_str("\" alt=\"");
+                    if let eez_domain::document_v2::ImageAlt::Text { value } = alt {
+                        html.push_str(&crate::escape_html_attribute(value));
+                    }
+                    html.push_str("\" loading=\"lazy\" decoding=\"async\">");
+                }
                 BlockV2::Form { form_id, .. } => match link_mode {
                     LinkMode::Published {
                         funnel_slug: Some(funnel_slug),

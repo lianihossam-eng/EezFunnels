@@ -14,6 +14,7 @@
     "test:pr019:fuzz": "cargo test -p eez-api --locked deterministic_",
     "test:pr019:browser": "node scripts/test-pr019-browser.mjs",
     "test:pr022:browser": "node scripts/test-pr022-browser.mjs",
+    "test:pr047:media-library": "node scripts/test-pr047-media-library.mjs",
     "test:pr035:pages": "node scripts/test-pr035-pages.mjs",
     "test:pr024:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr019:load": "node scripts/test-pr019-load.mjs",

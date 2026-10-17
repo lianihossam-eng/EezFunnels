@@ -7,6 +7,7 @@ use repository::{
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
+pub mod media;
 pub mod repository;
 pub mod stage;
 
@@ -56,6 +57,10 @@ impl Bindings {
 
     pub fn document_stage_repository(&self) -> stage::DocumentStageRepository<'_> {
         stage::DocumentStageRepository::new(&self.database, &self.bucket, self.stage_capacity)
+    }
+
+    pub fn media_asset_repository(&self) -> media::MediaAssetRepository<'_> {
+        media::MediaAssetRepository::new(&self.database, &self.bucket)
     }
 
     pub async fn verify_product_repository_round_trip(
