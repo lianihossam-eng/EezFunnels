@@ -4,7 +4,7 @@ Eez Funnel v0.1 is a single-user application and does not include a login, user 
 
 ## Protect administrative routes
 
-Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*` (including funnel completion reports), `/submissions`, `/api/submissions`, `/api/funnels` (including its subroutes, such as `/api/funnels/:funnel_id/completions`), and `/api/media`. Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
+Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*` (including funnel completion reports), `/submissions`, `/api/submissions` and `/api/submissions/*` (including status updates), `/api/funnels` (including its subroutes, such as `/api/funnels/:funnel_id/completions`), and `/api/media`. Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
 
 Published entry pages use `GET /f/:slug`; additional V2 pages use `GET /f/:slug/:page_slug`. Add an Access bypass/public policy for those published-page paths only if those funnels should be public. If the bypass is omitted, visitors will also need to authenticate before seeing a published funnel.
 

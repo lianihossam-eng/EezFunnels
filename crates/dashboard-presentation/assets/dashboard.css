@@ -1538,16 +1538,40 @@ h1 {
 
 .submission-toolbar {
   display: flex;
-  align-items: center;
+  align-items: end;
   justify-content: flex-end;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 16px;
   color: #44516a;
   font-size: 13px;
 }
 
+.submission-filter-group {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.submission-filter-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: -4px 0 16px;
+  color: #7f1d1d;
+  font-size: 13px;
+}
+
+.submission-filter-error p {
+  margin: 0;
+}
+
 .submission-toolbar select,
 .submission-status-control select {
+  min-width: 0;
   min-height: 40px;
   padding: 8px 34px 8px 11px;
   border: 1px solid #cbd4e4;
@@ -2077,5 +2101,23 @@ h1 {
 
   .submission-entry-content {
     padding: 4px 15px 16px;
+  }
+}
+
+@media (max-width: 680px) {
+  .submission-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .submission-filter-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .submission-toolbar select {
+    width: 100%;
+    max-width: none;
   }
 }

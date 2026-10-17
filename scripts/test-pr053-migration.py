@@ -21,6 +21,7 @@ def main() -> int:
         if migration.name in {
             "0012_public_form_submission_channel.sql",
             "0013_public_form_submission_status.sql",
+            "0014_public_form_submission_funnel_inbox.sql",
         }:
             continue
         connection.executescript(migration.read_text(encoding="utf-8"))
@@ -56,6 +57,7 @@ def main() -> int:
     assert legacy_channel == ("unattributed",), legacy_channel
 
     apply(connection, "0013_public_form_submission_status.sql")
+    apply(connection, "0014_public_form_submission_funnel_inbox.sql")
     legacy_status = connection.execute(
         "SELECT triage_status FROM public_form_submissions"
     ).fetchone()
