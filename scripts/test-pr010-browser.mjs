@@ -1126,13 +1126,61 @@ try {
   await page.frameLocator(".editor-conversion-preview iframe")
     .getByText("PR-024 browser conversion", { exact: true }).waitFor();
 
-  const commitConversionResponse = page.waitForResponse(
+  const conversionCommitRoute = `**/api/funnels/${conversionFunnel.funnel.id}/convert-v2`;
+  let conversionCommitCount = 0;
+  let firstConversionRequest;
+  let retryConversionRequest;
+  let signalConversionCommitStarted;
+  let releaseConversionCommit;
+  const conversionCommitStarted = new Promise((resolve) => (signalConversionCommitStarted = resolve));
+  const conversionCommitGate = new Promise((resolve) => (releaseConversionCommit = resolve));
+  await page.route(conversionCommitRoute, async (route) => {
+    conversionCommitCount += 1;
+    const request = {
+      key: (await route.request().allHeaders())["idempotency-key"],
+      body: route.request().postData(),
+    };
+    if (conversionCommitCount === 1) {
+      firstConversionRequest = request;
+      signalConversionCommitStarted();
+      await conversionCommitGate;
+      const committedResponse = await route.fetch();
+      assert.equal(committedResponse.status(), 201, await committedResponse.text());
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "service/temporarily_unavailable" }),
+      });
+      return;
+    }
+    retryConversionRequest = request;
+    assert.deepEqual(retryConversionRequest, firstConversionRequest);
+    await route.continue();
+  });
+  const startConversion = page.getByRole("button", { name: "Save as a new typed revision" }).click();
+  await conversionCommitStarted;
+  const conversionTitle = page.locator('[id="setting-section.cta.cta_url"]');
+  assert.equal(await conversionTitle.isDisabled(), true, "V1 settings stay locked while conversion commits");
+  assert.equal(
+    await page.getByRole("button", { name: "Move down Hero" }).isDisabled(),
+    true,
+    "V1 section reordering stays locked while conversion commits",
+  );
+  releaseConversionCommit();
+  await startConversion;
+  await page.getByRole("button", { name: "Retry typed conversion" }).waitFor();
+  assert.equal(await conversionTitle.isDisabled(), true, "V1 settings stay locked while conversion is uncertain");
+  assert.equal(await page.getByRole("button", { name: "Retry typed conversion" }).isDisabled(), false);
+  const retryConversionResponse = page.waitForResponse(
     (response) => response.request().method() === "POST"
       && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2`),
   );
-  await page.getByRole("button", { name: "Save as a new typed revision" }).click();
-  const commitConversion = await commitConversionResponse;
-  assert.equal(commitConversion.status(), 201, await commitConversion.text());
+  await page.getByRole("button", { name: "Retry typed conversion" }).click();
+  const retriedConversion = await retryConversionResponse;
+  assert.equal(retriedConversion.status(), 201, await retriedConversion.text());
+  assert.deepEqual(retryConversionRequest, firstConversionRequest);
+  assert.equal(await conversionTitle.isDisabled(), false, "V1 settings unlock after conversion is confirmed");
+  await page.unroute(conversionCommitRoute);
   await page.getByRole("link", { name: "Open typed editor" }).waitFor();
 
   let failedSchemaProbe = false;
@@ -1210,8 +1258,10 @@ try {
   });
   await page.getByRole("button", { name: "Save revision" }).click();
   await page.getByRole("button", { name: "Retry save" }).waitFor();
+  assert.equal(await buttonUrl.isDisabled(), true, "V2 controls stay locked while the final save receipt is uncertain");
   await page.getByRole("button", { name: "Retry save" }).click();
   await page.getByText("All changes saved").waitFor();
+  assert.equal(await buttonUrl.isDisabled(), false, "V2 controls unlock after the final save receipt is confirmed");
   assert.equal(finalizationCount, 2, "retry replays the final save receipt");
   assert.equal(stageCreateCount, 1, "retry does not mint another stage");
   assert.equal(stageUploadCount, 1, "retry does not upload to the consumed stage");

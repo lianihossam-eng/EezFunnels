@@ -349,6 +349,7 @@ struct EditorState {
     announcement: String,
     announcement_revision: u64,
     saving: bool,
+    conversion_locked: bool,
     retryable: bool,
     stale: bool,
     save_error: Option<String>,
@@ -434,6 +435,14 @@ impl EditorState {
         self.document.as_ref().is_some_and(|document| {
             document.order != document.saved_order || !document.settings_changes.is_empty()
         })
+    }
+
+    fn edits_locked(&self) -> bool {
+        self.saving
+            || self.conversion_locked
+            || self.retryable
+            || self.stale
+            || self.publication.retryable
     }
 
     fn can_publish(&self) -> bool {
@@ -648,7 +657,7 @@ impl EditorState {
     }
 
     fn move_section(&mut self, from: usize, to: usize) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale || self.publication.retryable {
+        if self.edits_locked() {
             return None;
         }
         let before = if self.keyboard_section.is_some() || self.keyboard_original_order.is_some() {
@@ -755,10 +764,7 @@ impl EditorState {
         };
         if self.keyboard_section.is_some()
             || !document.order.iter().any(|id| id == section_id)
-            || self.saving
-            || self.retryable
-            || self.publication.retryable
-            || self.stale
+            || self.edits_locked()
         {
             return false;
         }
@@ -803,7 +809,7 @@ impl EditorState {
     }
 
     fn cancel_keyboard_drag(&mut self) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale || self.publication.retryable {
+        if self.edits_locked() {
             return None;
         }
         let original = self.keyboard_original_order.take()?;
@@ -826,6 +832,7 @@ impl EditorState {
 
     fn can_save(&self) -> bool {
         !self.saving
+            && !self.conversion_locked
             && !self.publication.pending
             && !self.publication.retryable
             && !self.stale
@@ -988,6 +995,7 @@ impl EditorState {
     fn history_locked(&self) -> bool {
         self.loading
             || self.saving
+            || self.conversion_locked
             || self.retryable
             || self.publication.retryable
             || self.stale
@@ -1192,12 +1200,17 @@ async fn commit_v1_conversion(
     mut conversion_state: Signal<EditorConversionState>,
     mut idempotency_key: Signal<Option<PreparedIdempotencyKey>>,
     mut idempotency_body: Signal<Option<String>>,
-    editor_state: Signal<EditorState>,
+    mut editor_state: Signal<EditorState>,
     capture: EditorConversionCapture,
     funnel_id: String,
     base_revision_id: String,
 ) {
-    if capture.funnel_id != funnel_id || !is_current_conversion_route(editor_state, &capture) {
+    if capture.funnel_id != funnel_id
+        || !is_current_conversion_route(editor_state, &capture)
+        || conversion_state
+            .try_peek()
+            .is_ok_and(|state| state.committing)
+    {
         return;
     }
     let path = format!("/api/funnels/{funnel_id}/convert-v2");
@@ -1226,6 +1239,7 @@ async fn commit_v1_conversion(
         state.error = None;
         state.committed_revision_id = None;
     });
+    editor_state.with_mut(|state| state.conversion_locked = true);
     let response = api_request("POST", &path, Some(body), Some(key.clone())).await;
     if !is_current_conversion_route(editor_state, &capture) {
         return;
@@ -1237,6 +1251,7 @@ async fn commit_v1_conversion(
                     let _ = clear_idempotency_storage(&key);
                     idempotency_key.set(None);
                     idempotency_body.set(None);
+                    editor_state.with_mut(|state| state.conversion_locked = false);
                     conversion_state.with_mut(|state| {
                         state.committing = false;
                         state.retryable = false;
@@ -1245,8 +1260,9 @@ async fn commit_v1_conversion(
                 }
                 _ => conversion_state.with_mut(|state| {
                     state.committing = false;
+                    state.retryable = true;
                     state.error = Some(
-                        "The conversion result was invalid. The V1 revision is still preserved."
+                        "The conversion result could not be verified. Retry the same action to confirm it."
                             .to_owned(),
                     );
                 }),
@@ -1264,6 +1280,9 @@ async fn commit_v1_conversion(
                 state.retryable = retryable;
                 state.error = Some(error_message(&response.body));
             });
+            if !retryable {
+                editor_state.with_mut(|state| state.conversion_locked = false);
+            }
         }
         Err(()) => conversion_state.with_mut(|state| {
             state.committing = false;
@@ -1943,7 +1962,11 @@ fn FunnelDetailV1(id: String) -> Element {
                     button {
                         class: "secondary-button",
                         r#type: "button",
-                        disabled: view.has_unsaved_changes() || view.saving || conversion_view.loading || conversion_view.committing,
+                        disabled: view.has_unsaved_changes()
+                            || view.saving
+                            || view.conversion_locked
+                            || conversion_view.loading
+                            || conversion_view.committing,
                         onclick: move |_| {
                             let funnel_id = conversion_review_funnel_id.clone();
                             let base_revision_id = conversion_review_base_revision_id.clone();
@@ -2019,6 +2042,9 @@ fn FunnelDetailV1(id: String) -> Element {
                                     || view.saving
                                     || conversion_view.loading
                                     || conversion_view.committing
+                                    || (view.conversion_locked && !conversion_view.retryable)
+                                    || view.keyboard_section.is_some()
+                                    || view.keyboard_original_order.is_some()
                                     || preview.base_revision_id != document.base_revision_id,
                                 onclick: move |_| {
                                     let funnel_id = conversion_commit_funnel_id.clone();
@@ -2251,10 +2277,10 @@ fn FunnelDetailV1(id: String) -> Element {
 #[component]
 fn EditorSortableList(state: Signal<EditorState>) -> Element {
     let view = state();
+    let rows_locked = view.edits_locked();
     let Some(document) = view.document else {
         return rsx! { div {} };
     };
-    let rows_locked = view.saving || view.retryable || view.stale || view.publication.retryable;
     let sections = document.sections;
     let order = document.order;
     let mut editor_state = state;
@@ -2763,6 +2789,48 @@ mod tests {
 
         state.begin_route("funnel-a".to_owned());
         assert!(!state.is_current_conversion(&capture));
+    }
+
+    #[test]
+    fn conversion_commit_locks_v1_content_edits_until_resolved() {
+        let mut state = loaded_editor_state();
+        state.conversion_locked = true;
+        let original_order = state
+            .document
+            .as_ref()
+            .expect("loaded V1 document")
+            .order
+            .clone();
+
+        assert!(state.edits_locked());
+        assert!(state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Edit during conversion"),
+                    effective_value: None,
+                },
+            )
+            .is_none());
+        assert!(state.move_section(0, 1).is_none());
+        assert_eq!(
+            state.document.as_ref().expect("V1 document remains").order,
+            original_order
+        );
+
+        state.conversion_locked = false;
+        assert!(!state.edits_locked());
+        assert!(state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Edit after conversion resolves"),
+                    effective_value: None,
+                },
+            )
+            .is_some());
     }
 
     fn editor_response(

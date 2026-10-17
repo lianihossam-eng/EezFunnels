@@ -50,7 +50,7 @@ impl EditorState {
         field_id: &str,
         value: EditorSettingValue,
     ) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale || self.publication.retryable {
+        if self.edits_locked() {
             return None;
         }
         let before = self.history_snapshot()?;
@@ -197,7 +197,7 @@ pub(super) fn EditorInspector(state: Signal<EditorState>) -> Element {
         .as_deref()
         .map(|section_id| view.section_name(section_id))
         .unwrap_or_else(|| "Section".to_owned());
-    let locked = view.saving || view.retryable || view.stale || view.publication.retryable;
+    let locked = view.edits_locked();
     let theme_fields = document
         .settings_schema
         .fields

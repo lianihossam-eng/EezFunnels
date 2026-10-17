@@ -377,7 +377,12 @@ impl V2EditorState {
     }
 
     fn can_edit(&self) -> bool {
-        self.document.is_some() && !self.loading && !self.pending && !self.saving && !self.stale
+        !(self.document.is_none()
+            || self.loading
+            || self.pending
+            || self.saving
+            || self.stale
+            || self.save_retryable && self.save_phase == V2SavePhase::Finalizing)
     }
 
     fn can_undo(&self) -> bool {
@@ -3006,6 +3011,29 @@ mod tests {
         state.document = Some(document);
         state.save_phase = V2SavePhase::Finalizing;
         state.save_retryable = true;
+
+        assert!(!state.can_edit());
+        let unresolved_document = state
+            .document
+            .as_ref()
+            .expect("typed document exists")
+            .canonical_json();
+        assert!(state
+            .apply_local_edit(
+                Edit::SetThemePreset {
+                    preset: ThemePreset::Bold,
+                },
+                "edit-during-uncertain-final-save".to_owned(),
+            )
+            .is_none());
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .expect("typed document remains")
+                .canonical_json(),
+            unresolved_document
+        );
 
         let capture = state.begin_save().expect("retryable save can be resumed");
 
