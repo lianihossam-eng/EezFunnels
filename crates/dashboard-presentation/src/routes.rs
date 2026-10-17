@@ -192,6 +192,7 @@ struct FormCompletionReportResponse {
     total_completions: u64,
     days: Vec<DailyFormCompletionCountResponse>,
     forms: Vec<FormCompletionCountResponse>,
+    channels: Vec<FormSubmissionChannelCountResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -204,6 +205,13 @@ struct DailyFormCompletionCountResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct FormCompletionCountResponse {
     form_id: String,
+    completions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct FormSubmissionChannelCountResponse {
+    channel: String,
+    label: String,
     completions: u64,
 }
 
@@ -553,6 +561,28 @@ fn FunnelCompletions(id: String) -> Element {
                                                     tr {
                                                         th { scope: "row", code { "Form ID {form.form_id}" } }
                                                         td { class: "completion-number", "{form.completions}" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            section { class: "completion-form-section completion-channel-section",
+                                h2 { "By campaign channel" }
+                                p { class: "completion-channel-note", "Categories come from utm_medium on the page containing the form. They are self-reported and do not verify a visitor’s identity or path." }
+                                if report.channels.is_empty() {
+                                    p { class: "completion-empty-forms", "No retained form submissions in this period." }
+                                } else {
+                                    div { class: "completion-table-wrap", role: "region", "aria-label": "Completion counts by campaign channel", tabindex: "0",
+                                        table { class: "completion-table form-completion-table completion-channel-table",
+                                            caption { "Successful form submissions grouped by page campaign category" }
+                                            thead { tr { th { scope: "col", "Channel" } th { scope: "col", "Completions" } } }
+                                            tbody {
+                                                for channel in report.channels.iter() {
+                                                    tr {
+                                                        th { scope: "row", "{channel.label}" }
+                                                        td { class: "completion-number", "{channel.completions}" }
                                                     }
                                                 }
                                             }
@@ -1805,6 +1835,7 @@ mod tests {
                 total_completions: 3,
                 days: Vec::new(),
                 forms: Vec::new(),
+                channels: Vec::new(),
             }),
         );
         assert!(state.response.is_none());
@@ -1817,6 +1848,7 @@ mod tests {
                 total_completions: 0,
                 days: Vec::new(),
                 forms: Vec::new(),
+                channels: Vec::new(),
             }),
         );
         assert_eq!(state.funnel_id.as_deref(), Some("funnel-current"));
@@ -1838,6 +1870,7 @@ mod tests {
                 total_completions: 3,
                 days: Vec::new(),
                 forms: Vec::new(),
+                channels: Vec::new(),
             })),
             ..FormCompletionReportState::default()
         };

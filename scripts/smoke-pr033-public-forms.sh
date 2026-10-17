@@ -327,7 +327,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert status == 200, (status, content)
 
-        status, html, headers = request("GET", f"/f/{slug}")
+        status, html, headers = request(
+            "GET", f"/f/{slug}?utm_medium=organic&utm_campaign=campaign-fixture"
+        )
         assert status == 200, html
         assert headers.get("cache-control") == "no-store", headers
         assert "etag" not in headers, headers
@@ -337,10 +339,12 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         action = re.search(
             rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/'
             + re.escape(form_id.encode())
-            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64}))"',
+            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})&channel=(unattributed|search|social|email|paid|partner|other))"',
             html,
         )
         assert action is not None, html
+        assert action.group(4) == b"search", action.group(4)
+        assert b"campaign-fixture" not in html and b"utm_medium" not in html
         action_path = action.group(1).decode()
         submission_key = action.group(2).decode()
         assert action.group(3).decode() == saved_revision_id, action.group(3)
@@ -399,16 +403,20 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert stale_status == 409, (stale_status, stale_body)
         assert b"conflict/public_form_stale_revision" in stale_body
 
-        latest_status, latest_html, latest_headers = request("GET", f"/f/{slug}")
+        latest_status, latest_html, latest_headers = request(
+            "GET", f"/f/{slug}?utm_medium=social&utm_campaign=campaign-fixture"
+        )
         assert latest_status == 200, latest_html
         assert latest_headers.get("cache-control") == "no-store", latest_headers
         latest_action = re.search(
             rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/'
             + re.escape(form_id.encode())
-            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64}))"',
+            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})&channel=(unattributed|search|social|email|paid|partner|other))"',
             latest_html,
         )
         assert latest_action is not None, latest_html
+        assert latest_action.group(4) == b"social", latest_action.group(4)
+        assert b"campaign-fixture" not in latest_html and b"utm_medium" not in latest_html
         action_path = latest_action.group(1).decode()
         submission_key = latest_action.group(2).decode()
         assert latest_action.group(3).decode() == updated_revision_id, latest_action.group(3)
@@ -418,12 +426,13 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert second_page_status == 200, second_page_html
         assert second_page_headers.get("cache-control") == "no-store", second_page_headers
         second_action = re.search(
-            rb'submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})',
+            rb'submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})&channel=(unattributed|search|social|email|paid|partner|other)',
             second_page_html,
         )
         assert second_action is not None, second_page_html
         assert second_action.group(1).decode() != submission_key
         assert second_action.group(2).decode() == updated_revision_id
+        assert second_action.group(3) == b"unattributed", second_action.group(3)
 
         invalid_payload = urlencode(
             {"name": "Ada Lovelace", "email": "ada@example.test"}
@@ -466,6 +475,14 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert duplicate_status == 303, (duplicate_status, duplicate_body)
+        changed_channel_path = action_path.replace("&channel=social", "&channel=other")
+        changed_channel_status, changed_channel_body, _ = request_form_with_transport_retry(
+            changed_channel_path,
+            payload,
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert changed_channel_status == 409, (changed_channel_status, changed_channel_body)
+        assert b"conflict/idempotency_payload_mismatch" in changed_channel_body
 
         marketing_payload = urlencode(
             {
@@ -482,7 +499,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert b"conflict/idempotency_payload_mismatch" in reused_key_body
 
         second_key_path = re.sub(
-            r"(?<=key=)[0-9a-f-]{36}", second_action.group(1).decode(), action_path
+            r"(?<=key=)[0-9a-f-]{36}",
+            second_action.group(1).decode(),
+            action_path.replace("&channel=social", "&channel=unattributed"),
         )
         marketing_status, marketing_body, _ = request_form_with_transport_retry(
             second_key_path,
@@ -497,7 +516,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 [
                     "node",
                     str(root / "scripts/test-pr033-public-forms-browser.mjs"),
-                    f"http://localhost:{port}/f/{slug}",
+                    f"http://localhost:{port}/f/{slug}?utm_medium=social&utm_campaign=campaign-fixture",
                 ],
                 cwd=root,
                 env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
@@ -536,7 +555,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--json", "--command",
-                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(request_consent_copy_version) AS consent_copy_version, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email FROM public_form_submissions",
+                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(request_consent_copy_version) AS consent_copy_version, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email, SUM(submission_channel = 'social') AS social_submissions, SUM(submission_channel = 'unattributed') AS unattributed_submissions FROM public_form_submissions",
             ],
             cwd=root,
             check=True,
@@ -554,6 +573,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert result["retention_seconds"] == 86_400, result
         assert result["unique_keys"] == 3, result
         assert result["stored_email"] == "ada@example.test", result
+        assert result["social_submissions"] == 2, result
+        assert result["unattributed_submissions"] == 1, result
 
         inbox_status, inbox_body, inbox_headers = request("GET", "/api/submissions")
         assert inbox_status == 200, inbox_body
@@ -654,11 +675,21 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "form_id": form_id,
             "completions": 28,
         }, {"report": completion_report, "expected_form_id": form_id}
+        assert {
+            item["channel"]: item["completions"]
+            for item in completion_report["channels"]
+        } == {"social": 2, "unattributed": 26}, completion_report
+        assert all(
+            item["label"] in {"Social", "Unattributed"}
+            for item in completion_report["channels"]
+        ), completion_report
         assert set(completion_report) == {
             "command_id", "correlation_id", "funnel_id", "period_days",
-            "total_completions", "days", "forms"
+            "total_completions", "days", "forms", "channels"
         }, completion_report
         assert b"ada@example.test" not in completion_body
+        assert b"campaign-fixture" not in completion_body
+        assert b"utm_medium" not in completion_body
         assert b"request_consent_copy" not in completion_body
         assert b"submission_id" not in completion_body
 
@@ -722,6 +753,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert len(isolated_report["days"]) == 7, isolated_report
         assert all(day["completions"] == 0 for day in isolated_report["days"])
         assert isolated_report["forms"] == []
+        assert isolated_report["channels"] == []
 
         first_page_status, first_page_body, first_page_headers = request("GET", "/api/submissions")
         assert first_page_status == 200, first_page_body

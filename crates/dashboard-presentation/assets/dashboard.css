@@ -1922,6 +1922,14 @@ h1 {
   letter-spacing: -0.015em;
 }
 
+.completion-channel-note {
+  max-width: 720px;
+  margin: 0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .form-completion-table {
   min-width: 380px;
 }
@@ -1930,6 +1938,10 @@ h1 {
   color: #35466f;
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.completion-channel-table {
+  min-width: 320px;
 }
 
 .completion-loading,

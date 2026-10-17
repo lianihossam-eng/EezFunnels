@@ -6,44 +6,81 @@ use eez_storage::repository::FormCompletionCountRow;
 fn report_builder_zero_fills_dates_and_sorts_forms_without_payload_fields() {
     let mut rows = vec![
         FormCompletionCountRow {
-            utc_day: "2026-10-11".to_owned(),
-            form_id: Some("form-b".to_owned()),
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-11".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 5,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-12".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 0,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-13".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 0,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-14".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 0,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-15".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 0,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-16".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 0,
+        },
+        FormCompletionCountRow {
+            row_type: "day".to_owned(),
+            utc_day: Some("2026-10-17".to_owned()),
+            form_id: None,
+            submission_channel: None,
+            completions: 1,
+        },
+        FormCompletionCountRow {
+            row_type: "form".to_owned(),
+            utc_day: None,
+            form_id: Some("form-a".to_owned()),
+            submission_channel: None,
             completions: 3,
         },
         FormCompletionCountRow {
-            utc_day: "2026-10-11".to_owned(),
-            form_id: Some("form-a".to_owned()),
+            row_type: "form".to_owned(),
+            utc_day: None,
+            form_id: Some("form-b".to_owned()),
+            submission_channel: None,
+            completions: 3,
+        },
+        FormCompletionCountRow {
+            row_type: "channel".to_owned(),
+            utc_day: None,
+            form_id: None,
+            submission_channel: Some("unattributed".to_owned()),
+            completions: 4,
+        },
+        FormCompletionCountRow {
+            row_type: "channel".to_owned(),
+            utc_day: None,
+            form_id: None,
+            submission_channel: Some("search".to_owned()),
             completions: 2,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-12".to_owned(),
-            form_id: None,
-            completions: 0,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-13".to_owned(),
-            form_id: None,
-            completions: 0,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-14".to_owned(),
-            form_id: None,
-            completions: 0,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-15".to_owned(),
-            form_id: None,
-            completions: 0,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-16".to_owned(),
-            form_id: None,
-            completions: 0,
-        },
-        FormCompletionCountRow {
-            utc_day: "2026-10-17".to_owned(),
-            form_id: Some("form-a".to_owned()),
-            completions: 1,
         },
     ];
     rows.reverse();
@@ -71,9 +108,19 @@ fn report_builder_zero_fills_dates_and_sorts_forms_without_payload_fields() {
             .collect::<Vec<_>>(),
         [("form-a", 3), ("form-b", 3)]
     );
+    assert_eq!(
+        report
+            .channels
+            .iter()
+            .map(|channel| (channel.channel, channel.label, channel.completions))
+            .collect::<Vec<_>>(),
+        [("unattributed", "Unattributed", 4), ("search", "Search", 2)]
+    );
     let value = serde_json::to_value(report).expect("report serializes");
     assert!(value.get("field_values_json").is_none());
     assert!(value.get("request_consent_copy").is_none());
+    assert!(value.to_string().contains("unattributed"));
+    assert!(!value.to_string().contains("raw-utm"));
 }
 
 #[test]

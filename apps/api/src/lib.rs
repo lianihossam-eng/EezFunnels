@@ -10,7 +10,7 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
-use eez_domain::FormCompletionPeriod;
+use eez_domain::{FormCompletionPeriod, FormSubmissionChannel};
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
     NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
@@ -738,6 +738,7 @@ async fn public_funnel_response(
     if !valid_public_slug(route.funnel_slug) {
         return funnel_slug_not_found_response(&correlation_id);
     }
+    let submission_channel = public_form_submission_channel_from_page_query(request.uri().query());
     let parameters = match route.page_slug {
         Some(page_slug) => {
             serde_json::json!({ "slug": route.funnel_slug, "page_slug": page_slug }).to_string()
@@ -771,7 +772,12 @@ async fn public_funnel_response(
             return error_response(&error, correlation_id);
         }
         let submission_key = uuid::Uuid::new_v4().to_string();
-        let html = bind_public_form_submission_identity(html, &submission_key, revision_id);
+        let html = bind_public_form_submission_identity(
+            html,
+            &submission_key,
+            revision_id,
+            submission_channel,
+        );
         let mut response = Response::new(axum::body::Body::from(html));
         response
             .headers_mut()
@@ -820,12 +826,16 @@ fn bind_public_form_submission_identity(
     html: &str,
     submission_key: &str,
     revision_id: &str,
+    submission_channel: FormSubmissionChannel,
 ) -> String {
     let placeholder = format!(
         "?key={}",
         eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER
     );
-    let bound_query = format!("?key={submission_key}&revision_id={revision_id}");
+    let bound_query = format!(
+        "?key={submission_key}&revision_id={revision_id}&channel={}",
+        submission_channel.as_str()
+    );
     let mut output = String::with_capacity(html.len() + bound_query.len());
     let mut remaining = html;
 
@@ -874,6 +884,32 @@ struct ParsedPublicFormBody {
 struct PublicFormSubmissionIdentity {
     submission_key: String,
     revision_id: String,
+    submission_channel: FormSubmissionChannel,
+}
+
+fn public_form_submission_channel_from_page_query(query: Option<&str>) -> FormSubmissionChannel {
+    let Some(query) = query else {
+        return FormSubmissionChannel::Unattributed;
+    };
+    if query.len() > 2_048 {
+        return FormSubmissionChannel::Other;
+    }
+    let mut medium = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if name == "utm_medium" {
+            if medium.is_some() {
+                return FormSubmissionChannel::Other;
+            }
+            if value.len() > 64 {
+                return FormSubmissionChannel::Other;
+            }
+            medium = Some(value.into_owned());
+        }
+    }
+    medium
+        .as_deref()
+        .map(FormSubmissionChannel::from_utm_medium)
+        .unwrap_or(FormSubmissionChannel::Unattributed)
 }
 
 async fn public_form_submission_response(
@@ -1007,6 +1043,7 @@ async fn public_form_submission_response(
             revision_id: &revision.id,
             page_id: page_id.as_str(),
             form_id: form_id.as_str(),
+            submission_channel: submission_identity.submission_channel,
             submission_key: &submission_identity.submission_key,
             field_values_json: &field_values_json,
             request_consent_copy_version: request_consent.copy_version().as_str(),
@@ -1138,12 +1175,17 @@ fn public_form_submission_cursor(
 
 fn public_form_submission_identity(query: Option<&str>) -> Option<PublicFormSubmissionIdentity> {
     let query = query?;
+    if query.len() > 1_024 {
+        return None;
+    }
     let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-    if pairs.len() != 2 {
+    if !(2..=3).contains(&pairs.len()) {
         return None;
     }
     let mut submission_key = None;
     let mut revision_id = None;
+    let mut submission_channel = FormSubmissionChannel::Unattributed;
+    let mut channel_seen = false;
     for (name, value) in pairs {
         match name.as_ref() {
             "key" if submission_key.is_none() => {
@@ -1156,12 +1198,18 @@ fn public_form_submission_identity(query: Option<&str>) -> Option<PublicFormSubm
             "revision_id" if revision_id.is_none() && valid_funnel_route_id(&value) => {
                 revision_id = Some(value.into_owned());
             }
+            "channel" if !channel_seen => {
+                channel_seen = true;
+                submission_channel = FormSubmissionChannel::from_wire_value(&value)
+                    .unwrap_or(FormSubmissionChannel::Other);
+            }
             _ => return None,
         }
     }
     Some(PublicFormSubmissionIdentity {
         submission_key: submission_key?,
         revision_id: revision_id?,
+        submission_channel,
     })
 }
 
@@ -2963,17 +3011,18 @@ mod tests {
     use super::{
         bind_public_form_submission_identity, correlation_id, editor_command_parameters,
         form_completion_period, funnel_subroute, normalize_correlation_id, parse_public_form_body,
-        public_form_submission_cursor, public_form_submission_identity,
-        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
-        public_route_from_path, publication_command_parameters, request_if_none_match,
-        stage_upload_token, v1_conversion_command_parameters, v2_document_revision_query,
-        v2_edit_command_parameters, v2_preview_command_parameters, v2_save_command_parameters,
-        v2_stage_command_parameters, valid_public_slug, EditorCommandParametersError,
-        PublicFormSubmissionCursor, PublicFormSubmissionIdentity,
+        public_form_submission_channel_from_page_query, public_form_submission_cursor,
+        public_form_submission_identity, public_form_submission_route_from_path,
+        public_form_success_location, public_html_etag, public_route_from_path,
+        publication_command_parameters, request_if_none_match, stage_upload_token,
+        v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
+        v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
+        valid_public_slug, EditorCommandParametersError, PublicFormSubmissionCursor,
+        PublicFormSubmissionIdentity,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
-    use eez_domain::FormCompletionPeriod;
+    use eez_domain::{FormCompletionPeriod, FormSubmissionChannel};
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
@@ -3416,6 +3465,7 @@ mod tests {
         let expected = PublicFormSubmissionIdentity {
             submission_key: key.clone(),
             revision_id: "revision-a".to_owned(),
+            submission_channel: FormSubmissionChannel::Unattributed,
         };
         assert_eq!(
             public_form_submission_identity(Some(&format!("key={key}&revision_id=revision-a"))),
@@ -3424,6 +3474,20 @@ mod tests {
         assert_eq!(
             public_form_submission_identity(Some(&format!("revision_id=revision-a&key={key}"))),
             Some(expected)
+        );
+        assert_eq!(
+            public_form_submission_identity(Some(&format!(
+                "key={key}&revision_id=revision-a&channel=social"
+            )))
+            .map(|identity| identity.submission_channel),
+            Some(FormSubmissionChannel::Social)
+        );
+        assert_eq!(
+            public_form_submission_identity(Some(&format!(
+                "key={key}&revision_id=revision-a&channel=raw-utm"
+            )))
+            .map(|identity| identity.submission_channel),
+            Some(FormSubmissionChannel::Other)
         );
         for query in [
             None,
@@ -3438,6 +3502,45 @@ mod tests {
         ] {
             assert_eq!(public_form_submission_identity(query), None, "{query:?}");
         }
+    }
+
+    #[test]
+    fn page_utm_medium_is_reduced_to_one_bounded_channel_category() {
+        for (query, expected) in [
+            (None, FormSubmissionChannel::Unattributed),
+            (
+                Some("utm_source=fixture-source"),
+                FormSubmissionChannel::Unattributed,
+            ),
+            (Some("utm_medium=organic"), FormSubmissionChannel::Search),
+            (
+                Some("utm_medium=social&utm_campaign=campaign-fixture"),
+                FormSubmissionChannel::Social,
+            ),
+            (Some("utm_medium=unknown"), FormSubmissionChannel::Other),
+            (
+                Some("utm_medium=social&utm_medium=email"),
+                FormSubmissionChannel::Other,
+            ),
+            (Some("utm_medium="), FormSubmissionChannel::Other),
+        ] {
+            assert_eq!(
+                public_form_submission_channel_from_page_query(query),
+                expected,
+                "{query:?}"
+            );
+        }
+        assert_eq!(
+            public_form_submission_channel_from_page_query(Some(&format!(
+                "utm_medium={}",
+                "x".repeat(65)
+            ))),
+            FormSubmissionChannel::Other
+        );
+        assert_eq!(
+            public_form_submission_channel_from_page_query(Some(&"x".repeat(2_049))),
+            FormSubmissionChannel::Other
+        );
     }
 
     #[test]
@@ -3499,10 +3602,15 @@ mod tests {
         );
         let key = "e8ac58a6-a7cf-4f65-9a3e-13e9b2e7d59d";
 
-        let bound = bind_public_form_submission_identity(&html, key, "revision-a");
+        let bound = bind_public_form_submission_identity(
+            &html,
+            key,
+            "revision-a",
+            FormSubmissionChannel::Social,
+        );
 
         assert!(bound.contains(&format!(
-            "forms/{marker}/submissions?key={key}&revision_id=revision-a"
+            "forms/{marker}/submissions?key={key}&revision_id=revision-a&channel=social"
         )));
         assert!(bound.contains(&format!("<input value=\"{marker}\">")));
         assert!(bound.contains(&format!("<p>{marker}</p>")));
