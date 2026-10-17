@@ -104,6 +104,7 @@ struct V2EditorState {
     page_title_input: String,
     page_slug_input: String,
     page_input_error: Option<String>,
+    page_input_error_field: Option<PageInputErrorField>,
     delete_page_confirmation: Option<String>,
     new_section_kind: SectionKind,
     new_block_kind: V2NewBlockKind,
@@ -149,6 +150,12 @@ struct V2EditorState {
     publication_body: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageInputErrorField {
+    Title,
+    Slug,
+}
+
 impl Default for V2EditorState {
     fn default() -> Self {
         Self {
@@ -174,6 +181,7 @@ impl Default for V2EditorState {
             page_title_input: String::new(),
             page_slug_input: String::new(),
             page_input_error: None,
+            page_input_error_field: None,
             delete_page_confirmation: None,
             new_section_kind: SectionKind::Features,
             new_block_kind: V2NewBlockKind::default(),
@@ -485,23 +493,35 @@ impl V2EditorState {
             self.clear_page_inputs();
             return;
         }
-        self.page_input_error =
-            if self.page_title_input.trim().is_empty() || self.page_title_input.len() > 8192 {
-                Some("Enter a page title with 1 to 8192 bytes.".to_owned())
-            } else if page.id() != document.entry_page_id()
-                && !is_valid_page_slug(&self.page_slug_input)
-            {
-                Some("Use a lowercase page slug with letters, numbers, and hyphens.".to_owned())
-            } else if page.id() != document.entry_page_id()
-                && document
-                    .pages()
-                    .iter()
-                    .any(|other| other.id() != page.id() && other.slug() == self.page_slug_input)
-            {
-                Some("Each page must have a unique slug.".to_owned())
-            } else {
-                None
-            };
+        let (error, field) = if self.page_title_input.trim().is_empty()
+            || self.page_title_input.len() > 8192
+        {
+            (
+                Some("Enter a page title with 1 to 8192 bytes.".to_owned()),
+                Some(PageInputErrorField::Title),
+            )
+        } else if page.id() != document.entry_page_id()
+            && !is_valid_page_slug(&self.page_slug_input)
+        {
+            (
+                Some("Use a lowercase page slug with letters, numbers, and hyphens.".to_owned()),
+                Some(PageInputErrorField::Slug),
+            )
+        } else if page.id() != document.entry_page_id()
+            && document
+                .pages()
+                .iter()
+                .any(|other| other.id() != page.id() && other.slug() == self.page_slug_input)
+        {
+            (
+                Some("Each page must have a unique slug.".to_owned()),
+                Some(PageInputErrorField::Slug),
+            )
+        } else {
+            (None, None)
+        };
+        self.page_input_error = error;
+        self.page_input_error_field = field;
     }
 
     fn clear_page_inputs(&mut self) {
@@ -509,6 +529,7 @@ impl V2EditorState {
         self.page_title_input.clear();
         self.page_slug_input.clear();
         self.page_input_error = None;
+        self.page_input_error_field = None;
     }
 
     fn prune_page_inputs(&mut self, document: &DocumentV2) {
@@ -2522,7 +2543,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                                 maxlength: "8192",
                                                 disabled: locked,
                                                 "aria-label": "Page title",
-                                                "aria-invalid": "{view.page_input_error.is_some()}",
+                                                "aria-invalid": "{view.page_input_error_field == Some(PageInputErrorField::Title)}",
                                                 "aria-describedby": "page-settings-error",
                                                 oninput: move |event| state.with_mut(|state| state.update_page_input(&page_id_title, "title", event.value())),
                                             }
@@ -2536,7 +2557,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                                     maxlength: "64",
                                                     disabled: locked,
                                                     "aria-label": "Page slug",
-                                                    "aria-invalid": "{view.page_input_error.is_some()}",
+                                                    "aria-invalid": "{view.page_input_error_field == Some(PageInputErrorField::Slug)}",
                                                     "aria-describedby": "page-settings-error",
                                                     oninput: move |event| state.with_mut(|state| state.update_page_input(&page_id_slug, "slug", event.value())),
                                                 }

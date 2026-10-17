@@ -103,6 +103,8 @@ try {
   const slugInput = page.getByRole("textbox", { name: "Page slug" });
   await slugInput.fill("Invalid slug");
   await page.getByText("Use a lowercase page slug with letters, numbers, and hyphens.").waitFor();
+  assert.equal(await pageTitle.getAttribute("aria-invalid"), "false");
+  assert.equal(await slugInput.getAttribute("aria-invalid"), "true");
   assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Publish saved revision" }).isDisabled(), true);
 
@@ -143,12 +145,12 @@ try {
   await page.getByRole("button", { name: "Delete page Checkout" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "Delete Checkout?" });
   await deleteDialog.waitFor({ state: "visible" });
-  await deleteDialog.getByRole("button", { name: "Delete page", exact: true }).click();
   const deletePageResponsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith(`/api/funnels/${funnelId}/edit-v2`),
   );
+  await deleteDialog.getByRole("button", { name: "Delete page", exact: true }).click();
   const deletedPage = await jsonResponse(await deletePageResponsePromise, 200, "Delete page");
   const deletedDocument = JSON.parse(deletedPage.document_json);
   assert.equal(deletedDocument.pages.length, 1);
