@@ -980,7 +980,7 @@ async fn funnel_v2_stage_mint_response(
         if request.method() == Method::PUT {
             return funnel_v2_stage_upload_response(env, request, funnel_id, correlation_id).await;
         }
-        return method_not_allowed_for(&correlation_id, "POST");
+        return method_not_allowed_for(&correlation_id, "POST, PUT");
     }
     let valid_route_id = valid_funnel_route_id(funnel_id);
     let idempotency_key = match request_idempotency_key(request.headers()) {

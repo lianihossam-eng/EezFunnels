@@ -42,19 +42,23 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         stdout=subprocess.DEVNULL,
     )
     log = log_path.open("w", encoding="utf-8")
-    worker = subprocess.Popen(
-        [
-            str(wrangler), "dev", "--local", "--env", "dev", "--port", str(port),
-            "--ip", "127.0.0.1", "--var", f"ALLOWED_HOSTS:localhost:{port}",
+    def worker_command_for(worker_port):
+        return [
+            str(wrangler), "dev", "--local", "--env", "dev", "--port", str(worker_port),
+            "--ip", "127.0.0.1", "--var", f"ALLOWED_HOSTS:localhost:{worker_port}",
             "--persist-to", str(state / "persist"), "--log-level", "error",
-        ],
+        ]
+
+    worker_command = worker_command_for(port)
+    worker = subprocess.Popen(
+        [*worker_command, "--var", "V2_STAGE_ORPHAN_BYTE_BUDGET:0"],
         cwd=root,
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
 
-    def request(method, path, body=None, headers=None):
+    def request(method, path, body=None, headers=None, include_headers=False):
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
         request_headers = {"Host": f"localhost:{port}"}
         request_headers.update(headers or {})
@@ -62,7 +66,10 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         response = connection.getresponse()
         content = response.read()
         status = response.status
+        response_headers = {name.lower(): value for name, value in response.getheaders()}
         connection.close()
+        if include_headers:
+            return status, content, response_headers
         return status, content
 
     def wait_for_worker():
@@ -171,6 +178,29 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
             return True
 
     try:
+        wait_for_worker()
+        no_stage_control_funnel, _ = create_funnel("stage-control-unavailable-create")
+        assert no_stage_control_funnel
+        os.killpg(worker.pid, signal.SIGINT)
+        worker.wait(timeout=10)
+        if active_group_members(worker.pid):
+            os.killpg(worker.pid, signal.SIGTERM)
+            deadline = time.monotonic() + 5
+            while active_group_members(worker.pid) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if active_group_members(worker.pid):
+                os.killpg(worker.pid, signal.SIGKILL)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        worker_command = worker_command_for(port)
+        worker = subprocess.Popen(
+            worker_command,
+            cwd=root,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         wait_for_worker()
         status, content = request("POST", "/__local/stage-control/bootstrap")
         assert status == 204, (status, content)
@@ -336,6 +366,13 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr024-stage-") as directory:
         )
 
         first_funnel, first_revision = create_funnel("stage-first-create")
+        status, content, response_headers = request(
+            "PATCH",
+            f"/api/funnels/{first_funnel}/stages-v2",
+            include_headers=True,
+        )
+        assert status == 405, (status, content)
+        assert response_headers.get("allow") == "POST, PUT", response_headers
         first_data = (
             root / "crates/domain/tests/fixtures/document_v2_minimal.json"
         ).read_bytes().replace(b'"funnel-01"', f'"{first_funnel}"'.encode())
