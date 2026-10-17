@@ -7,8 +7,8 @@ use eez_domain::document_v2::{
 use eez_domain::document_v2::{AssetId, BlockId, ImageAlt, PageId, SectionId};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::document_v2::{
-    ButtonShape, ContentWidth, CornerScale, FontFamily, Shadow, SpacingScale, ThemeColors,
-    ThemeOverrides, TypeScale,
+    ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
+    ThemeColors, ThemeOverrides, TypeScale,
 };
 #[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
@@ -4063,6 +4063,22 @@ fn theme_contrast_warnings(tokens: &BTreeMap<String, String>) -> Vec<String> {
 }
 
 #[cfg(any(feature = "browser", test))]
+fn theme_profile_contrast_warnings(profile: &ResolvedThemeProfile) -> Vec<String> {
+    [
+        ("Desktop", &profile.desktop),
+        ("Tablet", &profile.tablet),
+        ("Mobile", &profile.mobile),
+    ]
+    .into_iter()
+    .flat_map(|(viewport, tokens)| {
+        theme_contrast_warnings(tokens)
+            .into_iter()
+            .map(move |warning| format!("{viewport}: {warning}"))
+    })
+    .collect()
+}
+
+#[cfg(any(feature = "browser", test))]
 fn contrast_ratio(first: &str, second: &str) -> Option<f64> {
     fn luminance(value: &str) -> Option<f64> {
         let bytes = value.as_bytes();
@@ -4103,9 +4119,9 @@ fn V2ThemeCustomization(
 ) -> Element {
     let overrides = document.theme().overrides().clone();
     let profile = document.resolved_theme_profile();
-    let warnings = theme_contrast_warnings(&profile.desktop);
+    let warnings = theme_profile_contrast_warnings(&profile);
     let contrast_message = if warnings.is_empty() {
-        "Current text and button colors meet the 4.5:1 contrast target.".to_owned()
+        "Current text and button colors meet the 4.5:1 contrast target across desktop, tablet, and mobile.".to_owned()
     } else {
         format!(
             "Low contrast: {}. Adjust these colors to improve readability.",
@@ -5059,5 +5075,38 @@ mod tests {
         assert!(revision_comparison(&with_theme.document, &original)
             .iter()
             .any(|line| line == "The theme changed."));
+    }
+
+    #[test]
+    fn responsive_contrast_report_catches_low_contrast_on_mobile() {
+        let compliant = BTreeMap::from([
+            ("color-background".to_owned(), "#ffffff".to_owned()),
+            ("color-border".to_owned(), "#cbd5e1".to_owned()),
+            ("color-muted".to_owned(), "#666666".to_owned()),
+            ("color-on-primary".to_owned(), "#ffffff".to_owned()),
+            ("color-primary".to_owned(), "#2c5282".to_owned()),
+            ("color-surface".to_owned(), "#ffffff".to_owned()),
+            ("color-text".to_owned(), "#111111".to_owned()),
+        ]);
+        let low_contrast_mobile = BTreeMap::from([
+            ("color-background".to_owned(), "#ffffff".to_owned()),
+            ("color-border".to_owned(), "#cbd5e1".to_owned()),
+            ("color-muted".to_owned(), "#666666".to_owned()),
+            ("color-on-primary".to_owned(), "#ffffff".to_owned()),
+            ("color-primary".to_owned(), "#ffffff".to_owned()),
+            ("color-surface".to_owned(), "#ffffff".to_owned()),
+            ("color-text".to_owned(), "#111111".to_owned()),
+        ]);
+        let profile = ResolvedThemeProfile {
+            profile_version: "theme-profile-v1".to_owned(),
+            desktop: compliant.clone(),
+            tablet: compliant,
+            mobile: low_contrast_mobile,
+        };
+
+        assert_eq!(
+            theme_profile_contrast_warnings(&profile),
+            vec!["Mobile: Button text (1.00:1)".to_owned()]
+        );
     }
 }

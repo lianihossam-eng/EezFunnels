@@ -10,7 +10,7 @@ Every funnel starts with one of five built-in presets. In the typed V2 editor, c
 | `playful` | Pink accents, rounded cards and buttons, larger spacing |
 | `corporate` | Cool blue palette, Arial font, compact corners and shadow |
 
-The color controls cover the page background, cards and forms, main and secondary text, buttons and accents, text on buttons, and borders. The editor checks the current main-text, secondary-text, and button-text combinations against a 4.5:1 contrast target and reports combinations that fall below it. The warning updates as colors change; it does not prevent a deliberate brand choice.
+The color controls cover the page background, cards and forms, main and secondary text, buttons and accents, text on buttons, and borders. The editor checks the main-text, secondary-text, and button-text combinations against a 4.5:1 contrast target at desktop, tablet, and mobile widths, and reports each combination that falls below it. The warning updates as colors change; it does not prevent a deliberate brand choice.
 
 Style controls include four text scales, five system font families, five section-spacing scales, five card-corner scales, three content widths, four button shapes, and three card shadows. The settings apply across the desktop, tablet, and mobile preview sizes.
 

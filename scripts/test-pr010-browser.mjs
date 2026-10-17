@@ -424,6 +424,14 @@ try {
   const contrastStatus = page.getByRole("status").filter({ hasText: "Button text" });
   await contrastStatus.waitFor();
   assert.match(await contrastStatus.innerText(), /Button text \(1\.[0-9]{2}:1\)/);
+  const contrastStatusColors = await contrastStatus.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    color: getComputedStyle(element).color,
+  }));
+  assert.deepEqual(contrastStatusColors, {
+    background: "rgb(254, 242, 242)",
+    color: "rgb(127, 29, 29)",
+  });
 
   previousPreview = await page.locator("iframe").getAttribute("srcdoc");
   edit = themeEdit();
