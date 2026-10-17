@@ -1,6 +1,6 @@
 # Eez Funnel
 
-An open source, single-owner funnel builder that you run on your own Cloudflare account. The v0.1.0 GitHub Release is published with CLI binaries for Linux, macOS, and Windows. The application is still under development, and the release does not verify a Cloudflare production deployment. Cloudflare usage is billed under your account where applicable.
+An open source, single-owner funnel builder that you run on your own Cloudflare account. The v0.1.0 GitHub Release is published with CLI binaries for Linux, macOS, and Windows; it predates the typed editor described below. The application is still under development, and the release does not verify a Cloudflare production deployment. Cloudflare usage is billed under your account where applicable.
 
 [![CI](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,9 +8,9 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 ## What you can do
 
 - Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
-- Reorder the starter sections, edit their supported text, links, image URL and theme settings, and preview at mobile, tablet, and desktop widths.
-- Undo or redo editor changes and save them as immutable revisions.
-- Publish a saved revision at `/f/:slug`.
+- Edit typed pages, sections, supported content blocks, actions, and theme settings in the dashboard; preview at mobile, tablet, and desktop widths.
+- Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
+- Review revision history, save immutable revisions, and publish or unpublish them at `/f/:slug`.
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
@@ -58,11 +58,17 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | Path | Current behavior |
 |:---|:---|
 | `/`, `/funnels`, `/funnels/:id` | Dashboard, funnel list, and editor |
-| `/api/funnels` | List or create funnels |
+| `/api/funnels` | List funnels or create a version 1 funnel |
+| `/api/funnels/v2` | Create a typed version 2 funnel |
 | `/api/funnels/:id` | Read or delete a funnel |
+| `/api/funnels/:id/document` and `/revisions-v2` | Read a typed revision and its revision history |
+| `/api/funnels/:id/edit-v2` and `/preview-v2` | Apply typed edits and preview a document |
+| `/api/funnels/:id/convert-v2/preview` and `/convert-v2` | Preview and save a version 1 conversion |
+| `/api/funnels/:id/stages-v2` and `/revisions-v2` | Upload and save a typed revision |
 | `/api/funnels/:id/preview` | Preview proposed editor state |
 | `/api/funnels/:id/revisions` | Save an editor revision |
 | `/api/funnels/:id/publish` and `/unpublish` | Change the published revision pointer |
+| `/api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `/f/:slug` | Render a published funnel |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |

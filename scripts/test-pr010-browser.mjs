@@ -920,7 +920,13 @@ try {
 
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "PR-010 browser editor" }).waitFor();
-  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  const reloadedHeroRow = page.locator('[data-editor-section="hero"]');
+  await reloadedHeroRow.waitFor({ state: "visible" });
+  await reloadedHeroRow.focus();
+  await page.waitForFunction(() =>
+    document.querySelector('[data-editor-section="hero"]')?.getAttribute("aria-current") === "true",
+  );
+  await setting("setting-section.hero.title").waitFor({ state: "visible" });
   assert.equal(await setting("setting-section.hero.title").inputValue(), "PR-011 inspector headline");
   assert.equal(await setting("setting-theme.preset").inputValue(), "bold");
   assert.equal(await setting("setting-theme.primary_color").inputValue(), "#123456");
@@ -1038,7 +1044,67 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010/011/012/013 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  const conversionFunnel = await apiCreate(origin, "PR-024 browser conversion");
+  await page.goto(`${origin}/funnels/${conversionFunnel.funnel.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-024 browser conversion" }).waitFor();
+  const reviewConversion = page.getByRole("button", { name: "Review typed conversion" });
+  const blockedConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`),
+  );
+  await reviewConversion.click();
+  const blockedConversion = await (await blockedConversionResponse).json();
+  assert.equal(blockedConversion.conversion_available, false);
+  assert.deepEqual(blockedConversion.blockers.map(({ path }) => path), [
+    "contents.hero.cta_url",
+    "contents.cta.cta_url",
+  ]);
+  await page.getByText("contents.hero.cta_url").waitFor();
+
+  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  await page.locator('[id="setting-section.hero.cta_url"]').fill("https://example.com/offer");
+  await clickWithPointer(page, page.locator('[data-editor-section="cta"]'));
+  await page.locator('[id="setting-section.cta.cta_url"]').fill("https://example.com/offer");
+  const convertedV1SaveResponse = page.waitForResponse(
+    (response) => response.request().method() === "PUT"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/revisions`),
+  );
+  await page.getByRole("button", { name: "Save revision" }).click();
+  const convertedV1Save = await convertedV1SaveResponse;
+  assert.equal(convertedV1Save.status(), 200, await convertedV1Save.text());
+  await page.getByText("All changes saved").waitFor();
+
+  const readyConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`),
+  );
+  await page.getByRole("button", { name: "Review typed conversion" }).click();
+  const readyConversion = await (await readyConversionResponse).json();
+  assert.equal(readyConversion.conversion_available, true);
+  assert.deepEqual(readyConversion.blockers, []);
+  await page.frameLocator(".editor-conversion-preview iframe")
+    .getByText("PR-024 browser conversion", { exact: true }).waitFor();
+
+  const commitConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2`),
+  );
+  await page.getByRole("button", { name: "Save as a new typed revision" }).click();
+  const commitConversion = await commitConversionResponse;
+  assert.equal(commitConversion.status(), 201, await commitConversion.text());
+  await page.getByRole("link", { name: "Open typed editor" }).waitFor();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.addScriptTag({ content: require("axe-core").source });
+  const convertedAxe = await page.evaluate(async () => {
+    const result = await window.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] },
+    });
+    return result.violations.map(({ id, impact, help, nodes }) => ({ id, impact, help, nodes: nodes.length }));
+  });
+  assert.deepEqual(convertedAxe, [], `Converted typed editor axe findings: ${JSON.stringify(convertedAxe)}`);
+
+  console.log(`PR-010/011/012/013/024 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,

@@ -338,7 +338,7 @@ fn Funnels() -> Element {
                     #[cfg(feature = "browser")]
                     let prepared_key = match prepare_idempotency_key(
                         "POST",
-                        "/api/funnels",
+                        "/api/funnels/v2",
                         Some(&request_body),
                         create_idempotency_key(),
                     ) {
@@ -355,7 +355,7 @@ fn Funnels() -> Element {
                     spawn(async move {
                         let response = api_request(
                             "POST",
-                            "/api/funnels",
+                            "/api/funnels/v2",
                             Some(request_body),
                             Some(prepared_key.clone()),
                         );
