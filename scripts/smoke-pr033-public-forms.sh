@@ -164,11 +164,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
 
     def port_is_closed():
         with socket.socket() as probe:
-            try:
-                probe.bind(("127.0.0.1", port))
-            except OSError:
-                return False
-            return True
+            probe.settimeout(1)
+            return probe.connect_ex(("127.0.0.1", port)) != 0
 
     try:
         wait_for_worker()
@@ -731,7 +728,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         if not clean_shutdown_status or active_members or not port_closed:
             print(
                 f"worker-cleanup status={worker.returncode} active-members={active_members} "
-                f"port-closed={port_closed}",
+                f"port={port} port-closed={port_closed}",
                 file=sys.stderr,
             )
             raise RuntimeError(f"Local Worker exited with status {worker.returncode}")
