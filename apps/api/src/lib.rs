@@ -10,6 +10,7 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
+use eez_domain::FormCompletionPeriod;
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
     NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
@@ -99,7 +100,7 @@ pub async fn fetch(
     let method = request.method().as_str().to_owned();
     let correlation_id = normalize_correlation_id(request.headers_mut());
 
-    let response = if !request_host_allowed(&env, request.headers()) {
+    let mut response = if !request_host_allowed(&env, request.headers()) {
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
@@ -123,6 +124,8 @@ pub async fn fetch(
             correlation_id.clone(),
         )
         .await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/completions") {
+        funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
         public_form_submission_response(&env, request, route, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/document") {
@@ -202,6 +205,13 @@ pub async fn fetch(
         let mut router = router();
         router.call(request).await?
     };
+
+    if funnel_subroute(&request_path, "/completions").is_some() {
+        response.headers_mut().insert(
+            "cache-control",
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
 
     log_request(
         &method,
@@ -1076,6 +1086,25 @@ fn is_urlencoded_form(headers: &HeaderMap<HeaderValue>) -> bool {
     parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
 }
 
+fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, ()> {
+    let Some(query) = query.filter(|query| !query.is_empty()) else {
+        return Err(());
+    };
+    let mut period = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if name != "period" || period.is_some() {
+            return Err(());
+        }
+        period = match value.as_ref() {
+            "7" => Some(FormCompletionPeriod::Days7),
+            "30" => Some(FormCompletionPeriod::Days30),
+            "90" => Some(FormCompletionPeriod::Days90),
+            _ => return Err(()),
+        };
+    }
+    period.ok_or(())
+}
+
 fn public_form_submission_cursor(
     query: Option<&str>,
 ) -> Result<Option<PublicFormSubmissionCursor>, ()> {
@@ -1316,6 +1345,38 @@ async fn form_submission_list_response(
                 HeaderValue::from_static("private, no-store"),
             );
             response
+        }
+    }
+}
+
+async fn funnel_completion_report_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let period = match form_completion_period(request.uri().query()) {
+        Ok(period) => period,
+        Err(()) => {
+            let error = ApiError::from_code("validation/invalid_json");
+            return error_response(&error, correlation_id);
+        }
+    };
+    let parameters = serde_json::json!({
+        "funnel_id": funnel_id,
+        "period_days": period.days(),
+    })
+    .to_string();
+    match execute_funnel_command(env, command_ids::FORM_COMPLETION_REPORT, &parameters, None).await
+    {
+        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Err(error) => {
+            let error = ApiError::from_code(error.code());
+            log_api_error(&error, &correlation_id, error.code());
+            error_response(&error, correlation_id)
         }
     }
 }
@@ -2901,7 +2962,7 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 mod tests {
     use super::{
         bind_public_form_submission_identity, correlation_id, editor_command_parameters,
-        funnel_subroute, normalize_correlation_id, parse_public_form_body,
+        form_completion_period, funnel_subroute, normalize_correlation_id, parse_public_form_body,
         public_form_submission_cursor, public_form_submission_identity,
         public_form_submission_route_from_path, public_form_success_location, public_html_etag,
         public_route_from_path, publication_command_parameters, request_if_none_match,
@@ -2912,6 +2973,7 @@ mod tests {
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
+    use eez_domain::FormCompletionPeriod;
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
@@ -3399,6 +3461,33 @@ mod tests {
             "cursor=01234567890.11111111-1111-4111-8111-111111111111",
         ] {
             assert_eq!(public_form_submission_cursor(Some(query)), Err(()), "{query}");
+        }
+    }
+
+    #[test]
+    fn form_completion_period_requires_one_supported_value() {
+        assert_eq!(
+            form_completion_period(Some("period=7")),
+            Ok(FormCompletionPeriod::Days7)
+        );
+        assert_eq!(
+            form_completion_period(Some("period=30")),
+            Ok(FormCompletionPeriod::Days30)
+        );
+        assert_eq!(
+            form_completion_period(Some("period=90")),
+            Ok(FormCompletionPeriod::Days90)
+        );
+        for query in [
+            None,
+            Some(""),
+            Some("period=1"),
+            Some("period=07"),
+            Some("period=30&period=90"),
+            Some("period=30&other=value"),
+            Some("other=value"),
+        ] {
+            assert_eq!(form_completion_period(query), Err(()), "{query:?}");
         }
     }
 
