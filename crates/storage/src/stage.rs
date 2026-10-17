@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
-use worker::{Bucket, D1Database, Error};
+use worker::{Bucket, Conditional, D1Database, Error};
 
 use crate::repository::{MutationResult, NewRevision, RepositoryError, RepositoryResult};
 
@@ -370,15 +370,14 @@ impl<'a> DocumentStageRepository<'a> {
         if stage.expected_length != bytes.len() as i64 || stage.expected_sha256 != digest {
             return Err(RepositoryError::StageDigestMismatch);
         }
+        let now = self.database_now().await?;
+        if is_live_uploaded_retry(&stage, now, bytes.len(), &digest) {
+            return Ok(());
+        }
         if stage.state == "uploaded" {
-            if stage.uploaded_length == Some(bytes.len() as i64)
-                && stage.uploaded_sha256.as_deref() == Some(digest.as_str())
-            {
-                return Ok(());
-            }
             return Err(RepositoryError::StageUnavailable);
         }
-        if stage.state != "issued" || stage.expires_at <= self.database_now().await? {
+        if stage.state != "issued" || stage.expires_at <= now {
             return Err(RepositoryError::StageUnavailable);
         }
         self.ensure_sequence_control().await?;
@@ -427,14 +426,9 @@ impl<'a> DocumentStageRepository<'a> {
         }
         self.abandon_attempt(&attempt_id).await?;
         let current = self.find_upload_stage(&stage.stage_id_hash).await?;
+        let now = self.database_now().await?;
         match current {
-            Some(current)
-                if current.state == "uploaded"
-                    && current.uploaded_length == Some(bytes.len() as i64)
-                    && current.uploaded_sha256.as_deref() == Some(digest.as_str()) =>
-            {
-                Ok(())
-            }
+            Some(current) if is_live_uploaded_retry(&current, now, bytes.len(), &digest) => Ok(()),
             _ => Err(RepositoryError::StageUnavailable),
         }
     }
@@ -475,8 +469,7 @@ impl<'a> DocumentStageRepository<'a> {
                         self.bucket,
                         R2_SEQUENCE_KEY,
                         &encoded,
-                        "If-Match",
-                        &etag,
+                        r2_if_match(&etag),
                     )
                     .await
                     {
@@ -488,8 +481,7 @@ impl<'a> DocumentStageRepository<'a> {
                     self.bucket,
                     R2_SEQUENCE_KEY,
                     &initial_json,
-                    "If-None-Match",
-                    "*",
+                    r2_if_absent(),
                 )
                 .await
                 {
@@ -1260,7 +1252,7 @@ impl<'a> DocumentStageRepository<'a> {
             let (mut current, etag) = self.read_sequence_control().await?;
             let next = current.allocate_attempt(expected_bytes, capacity)?;
             let encoded = serde_json::to_vec(&current).map_err(|_| RepositoryError::InvalidJson)?;
-            if conditional_r2_put(self.bucket, R2_SEQUENCE_KEY, &encoded, "If-Match", &etag)
+            if conditional_r2_put(self.bucket, R2_SEQUENCE_KEY, &encoded, r2_if_match(&etag))
                 .await
                 .map_err(|_| RepositoryError::StageControlUnavailable)?
             {
@@ -1361,6 +1353,11 @@ fn validate_mint(mutation: &StageMintMutation<'_>) -> RepositoryResult<()> {
 }
 
 fn validate_finalize(mutation: &StageFinalizeMutation<'_>) -> RepositoryResult<()> {
+    if mutation.revision.data_json.len() != mutation.expected_length
+        || sha256_hex(mutation.revision.data_json.as_bytes()) != mutation.expected_sha256
+    {
+        return Err(RepositoryError::StageDigestMismatch);
+    }
     if mutation.command_id != "funnel.revision.save.v2"
         || !is_stage_id(mutation.stage_id)
         || !is_lower_hex_digest(mutation.expected_sha256)
@@ -1385,6 +1382,18 @@ fn validate_finalize(mutation: &StageFinalizeMutation<'_>) -> RepositoryResult<(
         return Err(RepositoryError::InvalidField("v2_finalize"));
     }
     Ok(())
+}
+
+fn is_live_uploaded_retry(
+    stage: &StageUploadRecord,
+    now: i64,
+    length: usize,
+    digest: &str,
+) -> bool {
+    stage.state == "uploaded"
+        && stage.expires_at > now
+        && stage.uploaded_length == Some(length as i64)
+        && stage.uploaded_sha256.as_deref() == Some(digest)
 }
 
 fn valid_idempotency_key(value: &str) -> bool {
@@ -1494,32 +1503,63 @@ async fn conditional_r2_put(
     bucket: &Bucket,
     key: &str,
     bytes: &[u8],
-    condition_name: &str,
-    condition_value: &str,
+    condition: Conditional,
 ) -> worker::Result<bool> {
-    use worker::wasm_bindgen::{JsCast, JsValue};
-    use worker::wasm_bindgen_futures::JsFuture;
-    use worker::worker_sys::R2Bucket;
+    bucket
+        .put(key.to_owned(), bytes.to_vec())
+        .only_if(condition)
+        .execute()
+        .await
+        .map(|result| result.is_some())
+}
 
-    let headers = worker::Headers::new();
-    headers.set(condition_name, condition_value)?;
-    let options = worker::js_sys::Object::new();
-    worker::js_sys::Reflect::set(&options, &JsValue::from_str("onlyIf"), headers.0.as_ref())?;
-    let array = worker::js_sys::Uint8Array::new_with_length(bytes.len() as u32);
-    array.copy_from(bytes);
-    let raw_bucket: R2Bucket = bucket.as_ref().clone().unchecked_into();
-    let promise = raw_bucket.put(key.to_owned(), array.into(), options.into())?;
-    let result = JsFuture::from(promise).await?;
-    Ok(!result.is_null())
+fn r2_if_match(etag: &str) -> Conditional {
+    Conditional {
+        etag_matches: Some(etag.to_owned()),
+        ..Conditional::default()
+    }
+}
+
+fn r2_if_absent() -> Conditional {
+    Conditional {
+        etag_does_not_match: Some("*".to_owned()),
+        ..Conditional::default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_hex, increment_sequence, is_lower_hex_digest, is_sequence, sha256_hex,
-        stage_object_key, stage_sequence_from_key, StageCapacity, StageControl,
+        encode_hex, increment_sequence, is_live_uploaded_retry, is_lower_hex_digest, is_sequence,
+        r2_if_absent, r2_if_match, sha256_hex, stage_object_key, stage_sequence_from_key,
+        validate_finalize, StageCapacity, StageControl, StageFinalizeMutation, StageUploadRecord,
     };
-    use crate::repository::RepositoryError;
+    use crate::repository::{NewRevision, RepositoryError};
+
+    fn uploaded_stage(
+        expires_at: i64,
+        uploaded_length: i64,
+        uploaded_sha256: &str,
+    ) -> StageUploadRecord {
+        StageUploadRecord {
+            stage_id_hash: "a".repeat(64),
+            funnel_id: "funnel-a".to_owned(),
+            base_revision_id: "revision-a".to_owned(),
+            purpose: "full_snapshot".to_owned(),
+            document_type: "eezfunnel.document".to_owned(),
+            document_version: 2,
+            schema_version: 2,
+            manifest_version: 2,
+            maximum_bytes: super::V2_DOCUMENT_STAGE_MAX_BYTES as i64,
+            expected_length: uploaded_length,
+            expected_sha256: uploaded_sha256.to_owned(),
+            expires_at,
+            state: "uploaded".to_owned(),
+            object_key: Some("private/stage/00000000000000000001/attempt".to_owned()),
+            uploaded_length: Some(uploaded_length),
+            uploaded_sha256: Some(uploaded_sha256.to_owned()),
+        }
+    }
 
     #[test]
     fn encodes_stage_tokens_and_hashes_as_lowercase_hex() {
@@ -1637,5 +1677,66 @@ mod tests {
         ));
         control.orphan_bytes_spent = control.orphan_byte_budget + 1;
         assert!(!control.validate());
+    }
+
+    #[test]
+    fn uploaded_stage_retries_require_matching_content_before_expiry() {
+        let digest = sha256_hex(b"document");
+        let live = uploaded_stage(11, 8, &digest);
+        let expired = uploaded_stage(10, 8, &digest);
+
+        assert!(is_live_uploaded_retry(&live, 10, 8, &digest));
+        assert!(!is_live_uploaded_retry(&expired, 10, 8, &digest));
+        assert!(!is_live_uploaded_retry(&live, 10, 7, &digest));
+        assert!(!is_live_uploaded_retry(&live, 10, 8, &"b".repeat(64)));
+    }
+
+    #[test]
+    fn sequence_writes_use_r2_conditional_etag_fields() {
+        let matches = r2_if_match("etag-1");
+        assert_eq!(matches.etag_matches.as_deref(), Some("etag-1"));
+        assert_eq!(matches.etag_does_not_match, None);
+
+        let absent = r2_if_absent();
+        assert_eq!(absent.etag_matches, None);
+        assert_eq!(absent.etag_does_not_match.as_deref(), Some("*"));
+    }
+
+    #[test]
+    fn staged_revision_bytes_must_match_the_uploaded_digest() {
+        let data_json = r#"{"format_version":2}"#;
+        let expected_sha256 = sha256_hex(data_json.as_bytes());
+        let revision = NewRevision {
+            id: "revision-v2".to_owned(),
+            funnel_id: "funnel-a".to_owned(),
+            schema_version: 2,
+            data_json: data_json.to_owned(),
+            render_manifest_json: "{}".to_owned(),
+        };
+        let stage_id = "a".repeat(64);
+        let mutation = StageFinalizeMutation {
+            funnel_id: "funnel-a",
+            base_revision_id: "revision-a",
+            stage_id: &stage_id,
+            expected_length: data_json.len(),
+            expected_sha256: &expected_sha256,
+            command_id: "funnel.revision.save.v2",
+            idempotency_key: "finalize-v2",
+            payload_json: "{}",
+            result_json: "{}",
+            revision: &revision,
+        };
+
+        assert!(validate_finalize(&mutation).is_ok());
+
+        let wrong_digest = "b".repeat(64);
+        let mismatched = StageFinalizeMutation {
+            expected_sha256: &wrong_digest,
+            ..mutation
+        };
+        assert!(matches!(
+            validate_finalize(&mismatched),
+            Err(RepositoryError::StageDigestMismatch)
+        ));
     }
 }
