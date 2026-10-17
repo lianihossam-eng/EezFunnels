@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
-use eez_domain::FormCompletionPeriod;
+use eez_domain::{FormCompletionPeriod, FormSubmissionChannel};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
@@ -225,6 +225,7 @@ pub struct NewPublicFormSubmission<'a> {
     pub revision_id: &'a str,
     pub page_id: &'a str,
     pub form_id: &'a str,
+    pub submission_channel: FormSubmissionChannel,
     pub submission_key: &'a str,
     pub field_values_json: &'a str,
     pub request_consent_copy_version: &'a str,
@@ -304,8 +305,10 @@ pub struct PublicFormSubmissionPage {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct FormCompletionCountRow {
-    pub utc_day: String,
+    pub row_type: String,
+    pub utc_day: Option<String>,
     pub form_id: Option<String>,
+    pub submission_channel: Option<String>,
     pub completions: i64,
 }
 
@@ -1255,7 +1258,7 @@ impl<'a> Repository<'a> {
         if !field_values.is_object() {
             return Err(RepositoryError::InvalidJson);
         }
-        let fingerprint_payload = serde_json::json!({
+        let mut fingerprint_payload = serde_json::json!({
             "funnel_id": input.funnel_id,
             "funnel_slug": input.funnel_slug,
             "revision_id": input.revision_id,
@@ -1269,6 +1272,15 @@ impl<'a> Repository<'a> {
             "marketing_opt_in_copy_version": input.marketing_opt_in_copy_version,
             "marketing_opt_in_copy": input.marketing_opt_in_copy,
         });
+        if input.submission_channel != FormSubmissionChannel::Unattributed {
+            fingerprint_payload
+                .as_object_mut()
+                .ok_or(RepositoryError::InvalidJson)?
+                .insert(
+                    "submission_channel".to_owned(),
+                    serde_json::Value::String(input.submission_channel.as_str().to_owned()),
+                );
+        }
         let fingerprint_payload = serde_json_canonicalizer::to_vec(&fingerprint_payload)
             .map_err(|_| RepositoryError::InvalidJson)?;
         let mut fingerprint_hasher = Sha256::new();
@@ -1305,6 +1317,7 @@ impl<'a> Repository<'a> {
         let revision_id = D1Type::Text(input.revision_id);
         let page_id = D1Type::Text(input.page_id);
         let form_id = D1Type::Text(input.form_id);
+        let submission_channel = D1Type::Text(input.submission_channel.as_str());
         let submission_key = D1Type::Text(input.submission_key);
         let request_fingerprint = D1Type::Text(&request_fingerprint);
         let field_values_json = D1Type::Text(input.field_values_json);
@@ -1325,13 +1338,14 @@ impl<'a> Repository<'a> {
         let inserted = self
             .database
             .prepare(
-                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_key, request_fingerprint, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
+                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, submission_key, request_fingerprint, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
             )
             .bind_refs([
                 &submission_id,
                 &revision_id,
                 &page_id,
                 &form_id,
+                &submission_channel,
                 &submission_key,
                 &request_fingerprint,
                 &field_values_json,
@@ -1471,7 +1485,7 @@ impl<'a> Repository<'a> {
         let rows = self
             .database
             .prepare(
-                "WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), grouped(utc_day, form_id, completions) AS (SELECT strftime('%Y-%m-%d', submissions.submitted_at, 'unixepoch'), submissions.form_id, COUNT(*) FROM public_form_submissions AS submissions JOIN funnel ON funnel.id = submissions.funnel_id CROSS JOIN bounds WHERE submissions.submitted_at >= bounds.start_at AND submissions.submitted_at < bounds.end_at AND submissions.expires_at > bounds.now GROUP BY strftime('%Y-%m-%d', submissions.submitted_at, 'unixepoch'), submissions.form_id) SELECT days.utc_day, grouped.form_id, COALESCE(grouped.completions, 0) AS completions FROM days CROSS JOIN funnel LEFT JOIN grouped ON grouped.utc_day = days.utc_day ORDER BY days.utc_day ASC, grouped.form_id ASC",
+                "WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), retained AS MATERIALIZED (SELECT submissions.submitted_at, submissions.form_id, submissions.submission_channel FROM public_form_submissions AS submissions JOIN funnel ON funnel.id = submissions.funnel_id CROSS JOIN bounds WHERE submissions.submitted_at >= bounds.start_at AND submissions.submitted_at < bounds.end_at AND submissions.expires_at > bounds.now), daily AS (SELECT strftime('%Y-%m-%d', submitted_at, 'unixepoch') AS utc_day, COUNT(*) AS completions FROM retained GROUP BY strftime('%Y-%m-%d', submitted_at, 'unixepoch')), forms AS (SELECT form_id, COUNT(*) AS completions FROM retained GROUP BY form_id), channels AS (SELECT submission_channel, COUNT(*) AS completions FROM retained GROUP BY submission_channel) SELECT 'day' AS row_type, days.utc_day, NULL AS form_id, NULL AS submission_channel, COALESCE(daily.completions, 0) AS completions FROM days CROSS JOIN funnel LEFT JOIN daily ON daily.utc_day = days.utc_day UNION ALL SELECT 'form' AS row_type, NULL AS utc_day, forms.form_id, NULL AS submission_channel, forms.completions FROM forms UNION ALL SELECT 'channel' AS row_type, NULL AS utc_day, NULL AS form_id, channels.submission_channel, channels.completions FROM channels ORDER BY row_type ASC, utc_day ASC, form_id ASC, submission_channel ASC",
             )
             .bind_refs([
                 &funnel_id,

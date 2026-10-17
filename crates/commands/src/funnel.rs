@@ -4,8 +4,8 @@ use std::fmt::{Display, Formatter};
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
-    DomainError, FormCompletionPeriod, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision,
-    RevisionId, Section, ThemePreset,
+    DomainError, FormCompletionPeriod, FormSubmissionChannel, Funnel, FunnelBlueprint, FunnelId,
+    RenderManifest, Revision, RevisionId, Section, ThemePreset,
 };
 use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
@@ -1035,6 +1035,7 @@ struct FormCompletionReportResult {
     total_completions: u64,
     days: Vec<DailyFormCompletionCount>,
     forms: Vec<FormCompletionCount>,
+    channels: Vec<FormSubmissionChannelCount>,
 }
 
 #[derive(Serialize)]
@@ -1047,6 +1048,13 @@ struct DailyFormCompletionCount {
 #[derive(Serialize)]
 struct FormCompletionCount {
     form_id: String,
+    completions: u64,
+}
+
+#[derive(Serialize)]
+struct FormSubmissionChannelCount {
+    channel: &'static str,
+    label: &'static str,
     completions: u64,
 }
 
@@ -2930,17 +2938,33 @@ fn build_form_completion_report(
 ) -> Result<FormCompletionReportResult, FunnelCommandError> {
     let mut daily_counts = BTreeMap::<String, u64>::new();
     let mut form_counts = BTreeMap::<String, u64>::new();
+    let mut channel_counts = BTreeMap::<FormSubmissionChannel, u64>::new();
     for row in rows {
         let count = u64::try_from(row.completions).map_err(|_| FunnelCommandError::Internal)?;
-        let daily_total = daily_counts.entry(row.utc_day).or_default();
-        *daily_total = daily_total
-            .checked_add(count)
-            .ok_or(FunnelCommandError::Internal)?;
-        if let Some(form_id) = row.form_id {
-            let form_total = form_counts.entry(form_id).or_default();
-            *form_total = form_total
-                .checked_add(count)
-                .ok_or(FunnelCommandError::Internal)?;
+        match row.row_type.as_str() {
+            "day" if row.form_id.is_none() && row.submission_channel.is_none() => {
+                let utc_day = row.utc_day.ok_or(FunnelCommandError::Internal)?;
+                if daily_counts.insert(utc_day, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "form" if row.utc_day.is_none() && row.submission_channel.is_none() => {
+                let form_id = row.form_id.ok_or(FunnelCommandError::Internal)?;
+                if form_counts.insert(form_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "channel" if row.utc_day.is_none() && row.form_id.is_none() => {
+                let channel = row
+                    .submission_channel
+                    .as_deref()
+                    .and_then(FormSubmissionChannel::from_wire_value)
+                    .ok_or(FunnelCommandError::Internal)?;
+                if channel_counts.insert(channel, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            _ => return Err(FunnelCommandError::Internal),
         }
     }
     if daily_counts.len() != usize::from(period.days()) {
@@ -2952,6 +2976,19 @@ fn build_form_completion_report(
             .checked_add(*count)
             .ok_or(FunnelCommandError::Internal)
     })?;
+    let form_total = form_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    let channel_total = channel_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    if form_total != total_completions || channel_total != total_completions {
+        return Err(FunnelCommandError::Internal);
+    }
     let days = daily_counts
         .into_iter()
         .enumerate()
@@ -2968,6 +3005,14 @@ fn build_form_completion_report(
             completions,
         })
         .collect();
+    let channels = channel_counts
+        .into_iter()
+        .map(|(channel, completions)| FormSubmissionChannelCount {
+            channel: channel.as_str(),
+            label: channel.label(),
+            completions,
+        })
+        .collect();
     Ok(FormCompletionReportResult {
         command_id: FormCompletionReportCommand::ID,
         funnel_id,
@@ -2975,6 +3020,7 @@ fn build_form_completion_report(
         total_completions,
         days,
         forms,
+        channels,
     })
 }
 

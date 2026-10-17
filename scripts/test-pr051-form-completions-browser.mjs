@@ -28,6 +28,17 @@ try {
   assert.equal(await page.locator(".completion-total strong").textContent(), "28");
   assert.equal(await page.getByRole("button", { name: "30 days" }).getAttribute("aria-pressed"), "true");
   assert.equal(await page.getByText(`Form ID ${formId}`, { exact: true }).count(), 1);
+  const channelTable = page.locator(".completion-channel-table");
+  const channelRows = await channelTable.locator("tbody tr").allTextContents();
+  assert.deepEqual(
+    await channelTable.locator("tbody tr").evaluateAll((rows) =>
+      rows.map((row) => [
+        row.querySelector("th")?.textContent?.trim(),
+        row.querySelector("td")?.textContent?.trim(),
+      ]),
+    ),
+    [["Unattributed", "26"], ["Social", "2"]],
+  );
   assert.equal(await page.getByText("Today (partial) · ", { exact: false }).count(), 1);
 
   await page.getByRole("button", { name: "7 days" }).click();
@@ -59,7 +70,8 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(emptyPageUrl, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Form completions", level: 1 }).waitFor({ state: "visible" });
-  await page.getByText("No retained form submissions in this period.", { exact: true }).waitFor({ state: "visible" });
+  await page.locator(".completion-channel-section .completion-empty-forms").waitFor({ state: "visible" });
+  assert.equal(await page.locator(".completion-channel-table").count(), 0);
   assert.equal(await page.locator(".completion-total strong").textContent(), "0");
   const emptyDailyRows = page.locator("table.completion-table:not(.form-completion-table) tbody tr");
   await emptyDailyRows.first().waitFor({ state: "visible" });

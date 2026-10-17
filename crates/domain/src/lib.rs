@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod document_v2;
 pub mod form_completions;
+pub mod form_submission_channel;
 
 pub use form_completions::FormCompletionPeriod;
+pub use form_submission_channel::FormSubmissionChannel;
 
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 
