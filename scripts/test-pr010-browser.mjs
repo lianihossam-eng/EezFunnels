@@ -920,7 +920,13 @@ try {
 
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "PR-010 browser editor" }).waitFor();
-  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  const reloadedHeroRow = page.locator('[data-editor-section="hero"]');
+  await reloadedHeroRow.waitFor({ state: "visible" });
+  await reloadedHeroRow.focus();
+  await page.waitForFunction(() =>
+    document.querySelector('[data-editor-section="hero"]')?.getAttribute("aria-current") === "true",
+  );
+  await setting("setting-section.hero.title").waitFor({ state: "visible" });
   assert.equal(await setting("setting-section.hero.title").inputValue(), "PR-011 inspector headline");
   assert.equal(await setting("setting-theme.preset").inputValue(), "bold");
   assert.equal(await setting("setting-theme.primary_color").inputValue(), "#123456");
@@ -1038,7 +1044,277 @@ try {
   assert.equal(await page.locator(".editor-toolbar code").first().innerText(), primaryBaseBeforeOldResponse);
   await page.getByText("All changes saved").waitFor();
 
-  console.log(`PR-010/011/012/013 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, five inspector controls, live preview, duplicate-key preview/save rejection, V2 save/reload, sandbox/network, save replay, stale CAS, and route-race checks passed; critical axe findings=${criticalAxeFindings.length}`);
+  const conversionFunnel = await apiCreate(origin, "PR-024 browser conversion");
+  await page.goto(`${origin}/funnels/${conversionFunnel.funnel.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-024 browser conversion" }).waitFor();
+  const conversionPreviewRoute = `**/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`;
+  let releaseConversionPreview;
+  let reportConversionPreviewReady;
+  const conversionPreviewReady = new Promise((resolve) => (reportConversionPreviewReady = resolve));
+  const conversionPreviewReleased = new Promise((resolve) => (releaseConversionPreview = resolve));
+  await page.route(conversionPreviewRoute, async (route) => {
+    const response = await route.fetch();
+    const preview = await response.json();
+    reportConversionPreviewReady();
+    await conversionPreviewReleased;
+    await route.fulfill({
+      response,
+      body: JSON.stringify({
+        ...preview,
+        conversion_available: true,
+        blockers: [],
+        warnings: [],
+        preview_html: "<!doctype html><html><body>stale conversion preview</body></html>",
+      }),
+    });
+  });
+  const delayedConversionPreview = page
+    .getByRole("button", { name: "Review typed conversion" })
+    .click();
+  await conversionPreviewReady;
+  await page.evaluate((funnelId) => {
+    window.history.pushState(null, "", `/funnels/${funnelId}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, secondaryId);
+  await page.getByRole("heading", { name: "PR-010 route race" }).waitFor();
+  releaseConversionPreview();
+  await delayedConversionPreview;
+  await delay(100);
+  assert.equal(
+    await page.locator(".editor-conversion-preview iframe").count(),
+    0,
+    "A late V1 conversion preview must not be applied to the next funnel route",
+  );
+  await page.unroute(conversionPreviewRoute);
+  await page.goto(`${origin}/funnels/${conversionFunnel.funnel.id}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "PR-024 browser conversion" }).waitFor();
+  const reviewConversion = page.getByRole("button", { name: "Review typed conversion" });
+  const blockedConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`),
+  );
+  await reviewConversion.click();
+  const blockedConversion = await (await blockedConversionResponse).json();
+  assert.equal(blockedConversion.conversion_available, false);
+  assert.deepEqual(blockedConversion.blockers.map(({ path }) => path), [
+    "contents.hero.cta_url",
+    "contents.cta.cta_url",
+  ]);
+  await page.getByText("contents.hero.cta_url").waitFor();
+
+  await clickWithPointer(page, page.locator('[data-editor-section="hero"]'));
+  await page.locator('[id="setting-section.hero.cta_url"]').fill("https://example.com/offer");
+  await clickWithPointer(page, page.locator('[data-editor-section="cta"]'));
+  await page.locator('[id="setting-section.cta.cta_url"]').fill("https://example.com/offer");
+  const convertedV1SaveResponse = page.waitForResponse(
+    (response) => response.request().method() === "PUT"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/revisions`),
+  );
+  await page.getByRole("button", { name: "Save revision" }).click();
+  const convertedV1Save = await convertedV1SaveResponse;
+  assert.equal(convertedV1Save.status(), 200, await convertedV1Save.text());
+  await page.getByText("All changes saved").waitFor();
+
+  const readyConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2/preview`),
+  );
+  await page.getByRole("button", { name: "Review typed conversion" }).click();
+  const readyConversion = await (await readyConversionResponse).json();
+  assert.equal(readyConversion.conversion_available, true);
+  assert.deepEqual(readyConversion.blockers, []);
+  await page.frameLocator(".editor-conversion-preview iframe")
+    .getByText("PR-024 browser conversion", { exact: true }).waitFor();
+
+  const conversionCommitRoute = `**/api/funnels/${conversionFunnel.funnel.id}/convert-v2`;
+  let conversionCommitCount = 0;
+  let firstConversionRequest;
+  let retryConversionRequest;
+  let signalConversionCommitStarted;
+  let releaseConversionCommit;
+  const conversionCommitStarted = new Promise((resolve) => (signalConversionCommitStarted = resolve));
+  const conversionCommitGate = new Promise((resolve) => (releaseConversionCommit = resolve));
+  await page.route(conversionCommitRoute, async (route) => {
+    conversionCommitCount += 1;
+    const request = {
+      key: (await route.request().allHeaders())["idempotency-key"],
+      body: route.request().postData(),
+    };
+    if (conversionCommitCount === 1) {
+      firstConversionRequest = request;
+      signalConversionCommitStarted();
+      await conversionCommitGate;
+      const committedResponse = await route.fetch();
+      assert.equal(committedResponse.status(), 201, await committedResponse.text());
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "service/temporarily_unavailable" }),
+      });
+      return;
+    }
+    retryConversionRequest = request;
+    assert.deepEqual(retryConversionRequest, firstConversionRequest);
+    await route.continue();
+  });
+  const startConversion = page.getByRole("button", { name: "Save as a new typed revision" }).click();
+  await conversionCommitStarted;
+  const conversionTitle = page.locator('[id="setting-section.cta.cta_url"]');
+  assert.equal(await conversionTitle.isDisabled(), true, "V1 settings stay locked while conversion commits");
+  assert.equal(
+    await page.getByRole("button", { name: "Move down Hero" }).isDisabled(),
+    true,
+    "V1 section reordering stays locked while conversion commits",
+  );
+  releaseConversionCommit();
+  await startConversion;
+  await page.getByRole("button", { name: "Retry typed conversion" }).waitFor();
+  assert.equal(await conversionTitle.isDisabled(), true, "V1 settings stay locked while conversion is uncertain");
+  assert.equal(await page.getByRole("button", { name: "Retry typed conversion" }).isDisabled(), false);
+  const retryConversionResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/convert-v2`),
+  );
+  await page.getByRole("button", { name: "Retry typed conversion" }).click();
+  const retriedConversion = await retryConversionResponse;
+  assert.equal(retriedConversion.status(), 201, await retriedConversion.text());
+  assert.deepEqual(retryConversionRequest, firstConversionRequest);
+  assert.equal(await conversionTitle.isDisabled(), false, "V1 settings unlock after conversion is confirmed");
+  await page.unroute(conversionCommitRoute);
+  await page.getByRole("link", { name: "Open typed editor" }).waitFor();
+
+  let failedSchemaProbe = false;
+  const funnelMetadataRoute = `**/api/funnels/${conversionFunnel.funnel.id}`;
+  await page.route(funnelMetadataRoute, async (route) => {
+    if (route.request().method() === "GET" && !failedSchemaProbe) {
+      failedSchemaProbe = true;
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("alert", { name: "Funnel editor type error" }).waitFor();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.unroute(funnelMetadataRoute);
+
+  await page.getByLabel("Block type").selectOption("button");
+  await page.getByRole("button", { name: "Add block" }).click();
+  const buttonUrl = page.locator('input[aria-label^="Destination URL for button"]').last();
+  await buttonUrl.waitFor();
+  assert.equal(await buttonUrl.inputValue(), "https://example.invalid/");
+  const buttonEditResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/edit-v2`)
+      && response.request().postData()?.includes("https://example.test/pr031-checkout"),
+  );
+  await buttonUrl.fill("https://example.test/pr031-checkout");
+  await buttonUrl.press("Tab");
+  const buttonEdit = await buttonEditResponse;
+  assert.equal(buttonEdit.status(), 200, await buttonEdit.text());
+  const buttonEditBody = await buttonEdit.json();
+  assert.ok(
+    buttonEditBody.document_json.includes("https://example.test/pr031-checkout"),
+    "the Rust edit command should return the changed external destination",
+  );
+  assert.match(buttonEditBody.preview_html, /<span class="v2-button" aria-disabled="true">Continue<\/span>/);
+
+  await page.route("**/api/v2/stage-capacity", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "temporary storage budget is unavailable" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), true);
+  await page.unroute("**/api/v2/stage-capacity");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("region", { name: "Typed visual editor" }).waitFor();
+  await page.getByRole("button", { name: "Save revision" }).waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "Save revision" }).isDisabled(), false);
+
+  let stageCreateCount = 0;
+  let stageUploadCount = 0;
+  let finalizationCount = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === `/api/funnels/${conversionFunnel.funnel.id}/stages-v2` && request.method() === "POST") {
+      stageCreateCount += 1;
+    }
+    if (url.pathname === `/api/funnels/${conversionFunnel.funnel.id}/stages-v2` && request.method() === "PUT") {
+      stageUploadCount += 1;
+    }
+  });
+  const finalizationRoute = `**/api/funnels/${conversionFunnel.funnel.id}/revisions-v2`;
+  await page.route(finalizationRoute, async (route) => {
+    finalizationCount += 1;
+    if (finalizationCount === 1) {
+      const response = await route.fetch();
+      assert.equal(response.status(), 201, await response.text());
+      await route.abort("failed");
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Save revision" }).click();
+  await page.getByRole("button", { name: "Retry save" }).waitFor();
+  assert.equal(await buttonUrl.isDisabled(), true, "V2 controls stay locked while the final save receipt is uncertain");
+  await page.getByRole("button", { name: "Retry save" }).click();
+  await page.getByText("All changes saved").waitFor();
+  assert.equal(await buttonUrl.isDisabled(), false, "V2 controls unlock after the final save receipt is confirmed");
+  assert.equal(finalizationCount, 2, "retry replays the final save receipt");
+  assert.equal(stageCreateCount, 1, "retry does not mint another stage");
+  assert.equal(stageUploadCount, 1, "retry does not upload to the consumed stage");
+  await page.unroute(finalizationRoute);
+
+  const firstPublishResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/publish`),
+  );
+  await page.getByRole("button", { name: "Publish saved revision" }).click();
+  assert.equal((await firstPublishResponse).status(), 200);
+  await page.getByRole("link", { name: "Open live funnel" }).waitFor();
+
+  const unpublishRoute = `**/api/funnels/${conversionFunnel.funnel.id}/unpublish`;
+  await page.route(unpublishRoute, async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "conflict/publish_stale_revision" }),
+    });
+  });
+  await page.route(funnelMetadataRoute, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      return;
+    }
+    await route.continue();
+  });
+  const unpublishConflictResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${conversionFunnel.funnel.id}/unpublish`),
+  );
+  await page.getByRole("button", { name: "Unpublish" }).click();
+  await page.getByRole("button", { name: "Confirm unpublish" }).click();
+  assert.equal((await unpublishConflictResponse).status(), 409);
+  await page.getByRole("alert").filter({ hasText: "current state could not be loaded" }).waitFor();
+  await page.getByText("Status unavailable").waitFor();
+  assert.equal(await page.getByRole("link", { name: "Open live funnel" }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Publish saved revision" }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Unpublish" }).isDisabled(), true);
+  await page.unroute(unpublishRoute);
+  await page.unroute(funnelMetadataRoute);
+
+  await page.addScriptTag({ content: require("axe-core").source });
+  const convertedAxe = await page.evaluate(async () => {
+    const result = await window.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] },
+    });
+    return result.violations.map(({ id, impact, help, nodes }) => ({ id, impact, help, nodes: nodes.length }));
+  });
+  assert.deepEqual(convertedAxe, [], `Converted typed editor axe findings: ${JSON.stringify(convertedAxe)}`);
+
+  console.log(`PR-010/011/012/013/024/031 browser: navigation, keyboard, responsive preview snapshots, undo/redo shortcuts, pointer, inspector controls, live preview, V1-to-V2 conversion blockers, schema-probe retry, button destination editing, stage-capacity fallback, final-save receipt replay, failed publication refresh UI, conversion preview/save/reload, duplicate-key rejection, sandbox/network, save replay, stale CAS, route-race checks passed; critical V1 axe findings=${criticalAxeFindings.length}, converted V2 axe violations=${convertedAxe.length}`);
 } catch (error) {
   await writeFile(
     failureLogPath,

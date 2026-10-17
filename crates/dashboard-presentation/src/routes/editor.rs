@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "browser"), allow(dead_code))]
+
 use super::section_label;
 #[cfg(feature = "browser")]
 use super::{
@@ -10,6 +12,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod inspector;
+mod v2;
 #[cfg(feature = "browser")]
 use inspector::EditorPreviewResponse;
 #[cfg(test)]
@@ -42,6 +45,32 @@ struct EditorReadResponse {
     settings_schema: EditorSettingsSchema,
     settings_values: BTreeMap<String, EditorSettingValue>,
     preview_html: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct EditorConversionNote {
+    code: String,
+    path: String,
+    message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct EditorConversionPreview {
+    base_revision_id: String,
+    conversion_available: bool,
+    blockers: Vec<EditorConversionNote>,
+    warnings: Vec<EditorConversionNote>,
+    preview_html: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EditorConversionState {
+    loading: bool,
+    committing: bool,
+    retryable: bool,
+    preview: Option<EditorConversionPreview>,
+    committed_revision_id: Option<String>,
+    error: Option<String>,
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -296,6 +325,13 @@ struct EditorSaveCapture {
     settings_changes: Vec<EditorSettingChange>,
 }
 
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorConversionCapture {
+    route_epoch: u64,
+    funnel_id: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct EditorState {
     funnel_id: String,
@@ -313,6 +349,7 @@ struct EditorState {
     announcement: String,
     announcement_revision: u64,
     saving: bool,
+    conversion_locked: bool,
     retryable: bool,
     stale: bool,
     save_error: Option<String>,
@@ -335,6 +372,19 @@ impl EditorState {
         *self = Self::for_route(funnel_id);
         self.route_epoch = route_epoch;
         route_epoch
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn conversion_capture(&self) -> EditorConversionCapture {
+        EditorConversionCapture {
+            route_epoch: self.route_epoch,
+            funnel_id: self.funnel_id.clone(),
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn is_current_conversion(&self, capture: &EditorConversionCapture) -> bool {
+        self.route_epoch == capture.route_epoch && self.funnel_id == capture.funnel_id
     }
 
     #[cfg(any(feature = "browser", test))]
@@ -385,6 +435,14 @@ impl EditorState {
         self.document.as_ref().is_some_and(|document| {
             document.order != document.saved_order || !document.settings_changes.is_empty()
         })
+    }
+
+    fn edits_locked(&self) -> bool {
+        self.saving
+            || self.conversion_locked
+            || self.retryable
+            || self.stale
+            || self.publication.retryable
     }
 
     fn can_publish(&self) -> bool {
@@ -599,7 +657,7 @@ impl EditorState {
     }
 
     fn move_section(&mut self, from: usize, to: usize) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale || self.publication.retryable {
+        if self.edits_locked() {
             return None;
         }
         let before = if self.keyboard_section.is_some() || self.keyboard_original_order.is_some() {
@@ -706,10 +764,7 @@ impl EditorState {
         };
         if self.keyboard_section.is_some()
             || !document.order.iter().any(|id| id == section_id)
-            || self.saving
-            || self.retryable
-            || self.publication.retryable
-            || self.stale
+            || self.edits_locked()
         {
             return false;
         }
@@ -754,7 +809,7 @@ impl EditorState {
     }
 
     fn cancel_keyboard_drag(&mut self) -> Option<EditorPreviewCapture> {
-        if self.saving || self.retryable || self.stale || self.publication.retryable {
+        if self.edits_locked() {
             return None;
         }
         let original = self.keyboard_original_order.take()?;
@@ -777,6 +832,7 @@ impl EditorState {
 
     fn can_save(&self) -> bool {
         !self.saving
+            && !self.conversion_locked
             && !self.publication.pending
             && !self.publication.retryable
             && !self.stale
@@ -939,6 +995,7 @@ impl EditorState {
     fn history_locked(&self) -> bool {
         self.loading
             || self.saving
+            || self.conversion_locked
             || self.retryable
             || self.publication.retryable
             || self.stale
@@ -1079,6 +1136,163 @@ async fn load_editor(funnel_id: &str) -> Result<EditorReadResponse, ()> {
         return Err(());
     }
     serde_json::from_str::<EditorReadResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+async fn preview_v1_conversion(
+    mut conversion_state: Signal<EditorConversionState>,
+    editor_state: Signal<EditorState>,
+    capture: EditorConversionCapture,
+    funnel_id: String,
+    base_revision_id: String,
+) {
+    if capture.funnel_id != funnel_id || !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
+    conversion_state.set(EditorConversionState {
+        loading: true,
+        ..EditorConversionState::default()
+    });
+    let path = format!("/api/funnels/{funnel_id}/convert-v2/preview");
+    let body = serde_json::json!({ "base_revision_id": base_revision_id }).to_string();
+    let result = match api_request("POST", &path, Some(body), None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<EditorConversionPreview>(&response.body)
+                .map_err(|_| "The conversion preview response was invalid.".to_owned())
+        }
+        Ok(response) => Err(error_message(&response.body)),
+        Err(()) => Err("The conversion preview could not be reached.".to_owned()),
+    };
+    if !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
+    match result {
+        Ok(preview) => conversion_state.set(EditorConversionState {
+            preview: Some(preview),
+            ..EditorConversionState::default()
+        }),
+        Err(error) => conversion_state.set(EditorConversionState {
+            error: Some(error),
+            ..EditorConversionState::default()
+        }),
+    }
+}
+
+#[cfg(feature = "browser")]
+fn is_current_conversion_route(
+    editor_state: Signal<EditorState>,
+    capture: &EditorConversionCapture,
+) -> bool {
+    editor_state
+        .try_peek()
+        .is_ok_and(|state| state.is_current_conversion(capture))
+}
+
+#[cfg(feature = "browser")]
+#[derive(Deserialize)]
+struct EditorConversionCommitResponse {
+    revision_id: String,
+    schema_version: u32,
+}
+
+#[cfg(feature = "browser")]
+async fn commit_v1_conversion(
+    mut conversion_state: Signal<EditorConversionState>,
+    mut idempotency_key: Signal<Option<PreparedIdempotencyKey>>,
+    mut idempotency_body: Signal<Option<String>>,
+    mut editor_state: Signal<EditorState>,
+    capture: EditorConversionCapture,
+    funnel_id: String,
+    base_revision_id: String,
+) {
+    if capture.funnel_id != funnel_id
+        || !is_current_conversion_route(editor_state, &capture)
+        || conversion_state
+            .try_peek()
+            .is_ok_and(|state| state.committing)
+    {
+        return;
+    }
+    let path = format!("/api/funnels/{funnel_id}/convert-v2");
+    let body = serde_json::json!({ "base_revision_id": base_revision_id }).to_string();
+    if idempotency_body().as_deref() != Some(body.as_str()) {
+        if let Some(previous_key) = idempotency_key() {
+            let _ = clear_idempotency_storage(&previous_key);
+        }
+        idempotency_key.set(None);
+        idempotency_body.set(None);
+    }
+    let key = match prepare_idempotency_key("POST", &path, Some(&body), idempotency_key()) {
+        Ok(key) => key,
+        Err(()) => {
+            conversion_state.with_mut(|state| {
+                state.error = Some("A retry-safe conversion could not be prepared.".to_owned());
+            });
+            return;
+        }
+    };
+    idempotency_key.set(Some(key.clone()));
+    idempotency_body.set(Some(body.clone()));
+    conversion_state.with_mut(|state| {
+        state.committing = true;
+        state.retryable = false;
+        state.error = None;
+        state.committed_revision_id = None;
+    });
+    editor_state.with_mut(|state| state.conversion_locked = true);
+    let response = api_request("POST", &path, Some(body), Some(key.clone())).await;
+    if !is_current_conversion_route(editor_state, &capture) {
+        return;
+    }
+    match response {
+        Ok(response) if response.status == 201 => {
+            match serde_json::from_str::<EditorConversionCommitResponse>(&response.body) {
+                Ok(saved) if saved.schema_version == 2 => {
+                    let _ = clear_idempotency_storage(&key);
+                    idempotency_key.set(None);
+                    idempotency_body.set(None);
+                    editor_state.with_mut(|state| state.conversion_locked = false);
+                    conversion_state.with_mut(|state| {
+                        state.committing = false;
+                        state.retryable = false;
+                        state.committed_revision_id = Some(saved.revision_id);
+                    });
+                }
+                _ => conversion_state.with_mut(|state| {
+                    state.committing = false;
+                    state.retryable = true;
+                    state.error = Some(
+                        "The conversion result could not be verified. Retry the same action to confirm it."
+                            .to_owned(),
+                    );
+                }),
+            }
+        }
+        Ok(response) => {
+            let retryable = response.status >= 500;
+            if !retryable {
+                let _ = clear_idempotency_storage(&key);
+                idempotency_key.set(None);
+                idempotency_body.set(None);
+            }
+            conversion_state.with_mut(|state| {
+                state.committing = false;
+                state.retryable = retryable;
+                state.error = Some(error_message(&response.body));
+            });
+            if !retryable {
+                editor_state.with_mut(|state| state.conversion_locked = false);
+            }
+        }
+        Err(()) => conversion_state.with_mut(|state| {
+            state.committing = false;
+            state.retryable = true;
+            state.error = Some(
+                "The conversion result is uncertain. Retry the same action to confirm it."
+                    .to_owned(),
+            );
+        }),
+    }
 }
 
 #[cfg(feature = "browser")]
@@ -1387,8 +1601,147 @@ fn ResponsivePreview(title: String, srcdoc: String) -> Element {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum EditorSurface {
+    #[default]
+    Loading,
+    Error,
+    V1,
+    V2,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EditorSurfaceState {
+    funnel_id: String,
+    request_epoch: u64,
+    surface: EditorSurface,
+}
+
+impl EditorSurfaceState {
+    fn for_route(funnel_id: String) -> Self {
+        Self {
+            funnel_id,
+            ..Self::default()
+        }
+    }
+
+    fn begin_route(&mut self, funnel_id: String) -> u64 {
+        self.funnel_id = funnel_id;
+        self.request_epoch = self.request_epoch.wrapping_add(1);
+        self.surface = EditorSurface::Loading;
+        self.request_epoch
+    }
+
+    fn finish_route(
+        &mut self,
+        funnel_id: &str,
+        request_epoch: u64,
+        surface: EditorSurface,
+    ) -> bool {
+        if self.funnel_id != funnel_id || self.request_epoch != request_epoch {
+            return false;
+        }
+        self.surface = surface;
+        true
+    }
+
+    fn surface_for(&self, funnel_id: &str) -> EditorSurface {
+        if self.funnel_id == funnel_id {
+            self.surface
+        } else {
+            EditorSurface::Loading
+        }
+    }
+}
+
+fn editor_surface_for_schema(schema_version: u64) -> Option<EditorSurface> {
+    match schema_version {
+        1 => Some(EditorSurface::V1),
+        2 => Some(EditorSurface::V2),
+        _ => None,
+    }
+}
+
+fn editor_surface_from_metadata(metadata: &serde_json::Value) -> Option<EditorSurface> {
+    match metadata.get("schema_version") {
+        None => Some(EditorSurface::V1),
+        Some(schema_version) => editor_surface_for_schema(schema_version.as_u64()?),
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn load_editor_surface(
+    mut state: Signal<EditorSurfaceState>,
+    funnel_id: String,
+    request_epoch: u64,
+) {
+    let path = format!("/api/funnels/{funnel_id}");
+    let surface = match api_request("GET", &path, None, None).await {
+        Ok(response) if response.status == 200 => {
+            serde_json::from_str::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|value| editor_surface_from_metadata(&value))
+                .unwrap_or(EditorSurface::Error)
+        }
+        _ => EditorSurface::Error,
+    };
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            state.finish_route(&funnel_id, request_epoch, surface);
+        });
+    }
+}
+
+#[cfg(feature = "browser")]
 #[component]
 pub(super) fn FunnelDetail(id: String) -> Element {
+    let mut surface_state = use_signal(|| EditorSurfaceState::for_route(id.clone()));
+    use_effect(use_reactive!(|(id)| {
+        let funnel_id = id.clone();
+        let request_epoch = surface_state.with_mut(|state| state.begin_route(funnel_id.clone()));
+        spawn(async move { load_editor_surface(surface_state, funnel_id, request_epoch).await });
+    }));
+
+    match surface_state.with(|state| state.surface_for(&id)) {
+        EditorSurface::Loading => rsx! {
+            section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",
+                "Loading the current funnel revision…"
+                code { class: "detail-id", "Funnel ID: {id}" }
+            }
+        },
+        EditorSurface::Error => rsx! {
+            section { class: "empty-state editor-load-error", role: "alert", "aria-label": "Funnel editor type error",
+                p { "The funnel type could not be checked. No editor was opened." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        let funnel_id = id.clone();
+                        let request_epoch = surface_state.with_mut(|state| state.begin_route(funnel_id.clone()));
+                        spawn(async move { load_editor_surface(surface_state, funnel_id, request_epoch).await });
+                    },
+                    "Try again"
+                }
+            }
+        },
+        EditorSurface::V1 => rsx! { FunnelDetailV1 { id } },
+        EditorSurface::V2 => rsx! { v2::V2FunnelDetail { id } },
+    }
+}
+
+#[cfg(not(feature = "browser"))]
+#[component]
+pub(super) fn FunnelDetail(id: String) -> Element {
+    rsx! {
+        section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",
+            "Loading the current funnel revision…"
+            code { class: "detail-id", "Funnel ID: {id}" }
+        }
+    }
+}
+
+#[component]
+fn FunnelDetailV1(id: String) -> Element {
     #[cfg(feature = "browser")]
     let mut state = use_signal(|| EditorState::for_route(id.clone()));
     #[cfg(not(feature = "browser"))]
@@ -1401,6 +1754,12 @@ pub(super) fn FunnelDetail(id: String) -> Element {
     let mut save_key = use_signal(|| None::<PreparedIdempotencyKey>);
     #[cfg(feature = "browser")]
     let mut save_body = use_signal(|| None::<String>);
+    #[allow(unused_mut)]
+    let mut conversion_state = use_signal(EditorConversionState::default);
+    #[cfg(feature = "browser")]
+    let mut conversion_key = use_signal(|| None::<PreparedIdempotencyKey>);
+    #[cfg(feature = "browser")]
+    let mut conversion_body = use_signal(|| None::<String>);
     #[cfg(feature = "browser")]
     let mut publication_key = use_signal(|| None::<PreparedIdempotencyKey>);
     #[cfg(feature = "browser")]
@@ -1416,8 +1775,14 @@ pub(super) fn FunnelDetail(id: String) -> Element {
         if let Some(key) = publication_key.peek().as_ref() {
             let _ = clear_idempotency_storage(key);
         }
+        if let Some(key) = conversion_key.peek().as_ref() {
+            let _ = clear_idempotency_storage(key);
+        }
         save_key.set(None);
         save_body.set(None);
+        conversion_key.set(None);
+        conversion_body.set(None);
+        conversion_state.set(EditorConversionState::default());
         publication_key.set(None);
         publication_body.set(None);
         unpublish_confirmation.set(false);
@@ -1426,6 +1791,19 @@ pub(super) fn FunnelDetail(id: String) -> Element {
     }));
 
     let view = state();
+    let conversion_view = conversion_state();
+    let conversion_review_funnel_id = id.clone();
+    let conversion_review_base_revision_id = view
+        .document
+        .as_ref()
+        .map(|document| document.base_revision_id.clone())
+        .unwrap_or_default();
+    let conversion_commit_funnel_id = id.clone();
+    let conversion_commit_base_revision_id = conversion_view
+        .preview
+        .as_ref()
+        .map(|preview| preview.base_revision_id.clone())
+        .unwrap_or_default();
     let title = view
         .document
         .as_ref()
@@ -1554,6 +1932,146 @@ pub(super) fn FunnelDetail(id: String) -> Element {
             if view.preview_error {
                 p { class: "error-message editor-preview-error", role: "status",
                     "Preview could not be refreshed. Showing the last successful preview."
+                }
+            }
+            section {
+                class: "editor-conversion-panel",
+                role: "region",
+                "aria-label": "Typed editor conversion",
+                div { class: "section-heading",
+                    h2 { "Move this funnel to the typed editor" }
+                    span { "Review the converted draft before saving it" }
+                }
+                p {
+                    "The existing V1 revision remains in history. The conversion creates a new immutable V2 revision and leaves the published version unchanged."
+                }
+                if view.has_unsaved_changes() {
+                    p { class: "editor-conversion-help", role: "status",
+                        "Save your V1 edits before reviewing their conversion."
+                    }
+                }
+                if let Some(error) = conversion_view.error.as_ref() {
+                    p { class: "error-message", role: "alert", "{error}" }
+                }
+                if let Some(revision_id) = conversion_view.committed_revision_id.as_ref() {
+                    p { class: "editor-save-status", role: "status",
+                        "Created typed revision " code { "{revision_id}" }
+                    }
+                    a { class: "primary-button", href: "/funnels/{id}", "Open typed editor" }
+                } else {
+                    button {
+                        class: "secondary-button",
+                        r#type: "button",
+                        disabled: view.has_unsaved_changes()
+                            || view.saving
+                            || view.conversion_locked
+                            || conversion_view.loading
+                            || conversion_view.committing,
+                        onclick: move |_| {
+                            let funnel_id = conversion_review_funnel_id.clone();
+                            let base_revision_id = conversion_review_base_revision_id.clone();
+                            #[cfg(feature = "browser")]
+                            let capture = state.with(EditorState::conversion_capture);
+                            #[cfg(feature = "browser")]
+                            spawn(async move {
+                                preview_v1_conversion(
+                                    conversion_state,
+                                    state,
+                                    capture,
+                                    funnel_id,
+                                    base_revision_id,
+                                )
+                                .await;
+                            });
+                            #[cfg(not(feature = "browser"))]
+                            let _ = (funnel_id, base_revision_id);
+                        },
+                        if conversion_view.loading { "Checking conversion…" } else { "Review typed conversion" }
+                    }
+                    if let Some(preview) = conversion_view.preview.clone() {
+                        if preview.base_revision_id != document.base_revision_id {
+                            p { class: "editor-conversion-help", role: "status",
+                                "The source revision changed. Review the conversion again."
+                            }
+                        }
+                        if !preview.blockers.is_empty() {
+                            div { class: "editor-conversion-notes", role: "alert",
+                                h3 { "Resolve these fields before converting" }
+                                ul {
+                                    for blocker in preview.blockers.iter() {
+                                        li {
+                                            strong { "{blocker.path}" }
+                                            code { " ({blocker.code})" }
+                                            p { "{blocker.message}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !preview.warnings.is_empty() {
+                            div { class: "editor-conversion-notes", role: "note",
+                                h3 { "Content presentation changes" }
+                                ul {
+                                    for warning in preview.warnings.iter() {
+                                        li {
+                                            strong { "{warning.path}" }
+                                            p { "{warning.message}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if preview.conversion_available {
+                            if let Some(preview_html) = preview.preview_html.as_ref() {
+                                div { class: "editor-conversion-preview",
+                                    h3 { "Typed draft preview" }
+                                    iframe {
+                                        class: "editor-preview-frame",
+                                        title: "Converted typed funnel preview",
+                                        "sandbox": "",
+                                        width: "960",
+                                        height: "500",
+                                        srcdoc: "{preview_html}",
+                                    }
+                                }
+                            }
+                            button {
+                                class: "primary-button",
+                                r#type: "button",
+                                disabled: view.has_unsaved_changes()
+                                    || view.saving
+                                    || conversion_view.loading
+                                    || conversion_view.committing
+                                    || (view.conversion_locked && !conversion_view.retryable)
+                                    || view.keyboard_section.is_some()
+                                    || view.keyboard_original_order.is_some()
+                                    || preview.base_revision_id != document.base_revision_id,
+                                onclick: move |_| {
+                                    let funnel_id = conversion_commit_funnel_id.clone();
+                                    let base_revision_id = conversion_commit_base_revision_id.clone();
+                                    #[cfg(feature = "browser")]
+                                    let capture = state.with(EditorState::conversion_capture);
+                                    #[cfg(feature = "browser")]
+                                    spawn(async move {
+                                        commit_v1_conversion(
+                                            conversion_state,
+                                            conversion_key,
+                                            conversion_body,
+                                            state,
+                                            capture,
+                                            funnel_id,
+                                            base_revision_id,
+                                        ).await;
+                                    });
+                                    #[cfg(not(feature = "browser"))]
+                                    let _ = (funnel_id, base_revision_id);
+                                },
+                                if conversion_view.committing { "Saving typed revision…" }
+                                else if conversion_view.retryable { "Retry typed conversion" }
+                                else { "Save as a new typed revision" }
+                            }
+                        }
+                    }
                 }
             }
             section {
@@ -1759,10 +2277,10 @@ pub(super) fn FunnelDetail(id: String) -> Element {
 #[component]
 fn EditorSortableList(state: Signal<EditorState>) -> Element {
     let view = state();
+    let rows_locked = view.edits_locked();
     let Some(document) = view.document else {
         return rsx! { div {} };
     };
-    let rows_locked = view.saving || view.retryable || view.stale || view.publication.retryable;
     let sections = document.sections;
     let order = document.order;
     let mut editor_state = state;
@@ -2258,6 +2776,61 @@ mod tests {
             }),
         );
         state
+    }
+
+    #[test]
+    fn conversion_completion_is_scoped_to_the_captured_funnel_route() {
+        let mut state = EditorState::for_route("funnel-a".to_owned());
+        let capture = state.conversion_capture();
+        assert!(state.is_current_conversion(&capture));
+
+        state.begin_route("funnel-b".to_owned());
+        assert!(!state.is_current_conversion(&capture));
+
+        state.begin_route("funnel-a".to_owned());
+        assert!(!state.is_current_conversion(&capture));
+    }
+
+    #[test]
+    fn conversion_commit_locks_v1_content_edits_until_resolved() {
+        let mut state = loaded_editor_state();
+        state.conversion_locked = true;
+        let original_order = state
+            .document
+            .as_ref()
+            .expect("loaded V1 document")
+            .order
+            .clone();
+
+        assert!(state.edits_locked());
+        assert!(state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Edit during conversion"),
+                    effective_value: None,
+                },
+            )
+            .is_none());
+        assert!(state.move_section(0, 1).is_none());
+        assert_eq!(
+            state.document.as_ref().expect("V1 document remains").order,
+            original_order
+        );
+
+        state.conversion_locked = false;
+        assert!(!state.edits_locked());
+        assert!(state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Edit after conversion resolves"),
+                    effective_value: None,
+                },
+            )
+            .is_some());
     }
 
     fn editor_response(
@@ -3239,6 +3812,34 @@ mod tests {
             .value
             .is_null());
         assert!(!state.can_save());
+    }
+
+    #[test]
+    fn delayed_editor_surface_lookup_cannot_override_the_current_route() {
+        let mut state = EditorSurfaceState::for_route("funnel-1".to_owned());
+        let first_request = state.begin_route("funnel-1".to_owned());
+        let second_request = state.begin_route("funnel-2".to_owned());
+
+        assert!(!state.finish_route("funnel-1", first_request, EditorSurface::V2));
+        assert_eq!(state.surface_for("funnel-2"), EditorSurface::Loading);
+        assert!(state.finish_route("funnel-2", second_request, EditorSurface::V1));
+        assert_eq!(state.surface_for("funnel-2"), EditorSurface::V1);
+        assert_eq!(state.surface_for("funnel-1"), EditorSurface::Loading);
+    }
+
+    #[test]
+    fn only_supported_schema_versions_select_an_editor_surface() {
+        assert_eq!(editor_surface_for_schema(1), Some(EditorSurface::V1));
+        assert_eq!(editor_surface_for_schema(2), Some(EditorSurface::V2));
+        assert_eq!(editor_surface_for_schema(99), None);
+        assert_eq!(
+            editor_surface_from_metadata(&serde_json::json!({})),
+            Some(EditorSurface::V1)
+        );
+        assert_eq!(
+            editor_surface_from_metadata(&serde_json::json!({ "schema_version": "unknown" })),
+            None
+        );
     }
 
     #[test]

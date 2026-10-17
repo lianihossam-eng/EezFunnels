@@ -12,19 +12,30 @@ The dashboard, HTTP API, CLI, and MCP endpoint use the same funnel command sessi
 |:---|:---|
 | `GET /api/funnels` | List workspace funnels (`funnel.list`) |
 | `POST /api/funnels` | Create from a blueprint (`funnel.create`); requires an `Idempotency-Key` header |
+| `POST /api/funnels/v2` | Create a typed version 2 funnel from a blueprint; requires an `Idempotency-Key` header |
 | `GET /api/funnels/:funnel_id` | Read the editable funnel and current revision (`funnel.editor.read`) |
 | `DELETE /api/funnels/:funnel_id` | Delete the funnel and its revisions (`funnel.delete`); requires an `Idempotency-Key` header |
 | `POST /api/funnels/:funnel_id/preview` | Render the proposed editor state without saving (`funnel.editor.preview`) |
 | `POST /api/funnels/:funnel_id/revisions` | Save a new immutable revision (`funnel.revision.save`); requires an `Idempotency-Key` header |
 | `POST /api/funnels/:funnel_id/publish` | Publish a revision if the expected pointer still matches (`funnel.publish`); requires an `Idempotency-Key` header |
 | `POST /api/funnels/:funnel_id/unpublish` | Clear the published pointer if the expected revision still matches (`funnel.unpublish`); requires an `Idempotency-Key` header |
+| `GET /api/funnels/:funnel_id/document[?revision_id=...]` | Read the current typed document or select a typed revision |
+| `GET /api/funnels/:funnel_id/revisions-v2` | Read the funnel's revision history |
+| `POST /api/funnels/:funnel_id/preview-v2` | Render a typed document preview |
+| `POST /api/funnels/:funnel_id/edit-v2` | Apply a typed page, section, or block edit |
+| `POST /api/funnels/:funnel_id/convert-v2/preview` | Preview conversion from a version 1 funnel and report blockers |
+| `POST /api/funnels/:funnel_id/convert-v2` | Save a validated conversion as a new typed revision; requires an `Idempotency-Key` header |
+| `POST /api/funnels/:funnel_id/stages-v2` | Create a bounded staged upload; requires an `Idempotency-Key` header |
+| `PUT /api/funnels/:funnel_id/stages-v2` | Upload staged document bytes with the returned bearer capability |
+| `POST /api/funnels/:funnel_id/revisions-v2` | Validate and save a staged typed revision; requires an `Idempotency-Key` header |
+| `GET /api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `GET /f/:slug` | Render the currently published revision (`funnel.public.read`) |
 
-Mutation requests use JSON. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks.
+JSON mutation requests use JSON bodies. The `PUT` staged upload uses `application/octet-stream` and a short-lived bearer capability. Errors have `code`, `category`, `message`, and `correlation_id` fields. The [Security guide](security.md) describes request limits and host checks; [Deploy](deploy.md) describes the required staged-save capacity settings.
 
-## Executable command registry
+## MCP commands
 
-The registry contains the following nine command IDs. The MCP `list_commands` tool reports the same IDs, actors, descriptions, and key requirements.
+The MCP endpoint exposes the following nine command IDs. Typed editor operations use the HTTP routes above and are not exposed through MCP.
 
 | ID | Parameters | Actor | Idempotency key |
 |:---|:---|:---|:---|

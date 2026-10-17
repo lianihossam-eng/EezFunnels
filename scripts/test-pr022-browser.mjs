@@ -173,28 +173,47 @@ try {
     "Create funnel submit button",
   );
   const createResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().endsWith("/api/funnels"),
+    (response) => response.request().method() === "POST" && response.url().endsWith("/api/funnels/v2"),
   );
   await pressKeyboard(page, "Enter");
   const createResponse = await createResponsePromise;
   const created = await responseJson(createResponse, 201, "Create funnel");
-  const funnelId = created.funnel?.id;
-  const slug = created.funnel?.slug;
-  const initialRevisionId = created.initial_revision?.id;
-  assert.equal(typeof funnelId, "string");
-  assert.equal(typeof slug, "string");
-  assert.equal(typeof initialRevisionId, "string");
+  const createdV2FunnelId = created.funnel?.id;
+  assert.equal(typeof createdV2FunnelId, "string");
+  assert.equal(typeof created.funnel?.slug, "string");
+  assert.equal(typeof created.initial_revision?.id, "string");
   await createDialog.waitFor({ state: "hidden" });
   await page.getByRole("link", { name: funnelName }).waitFor();
   await assertCriticalAxeFindingsAbsent(page, "Funnel dashboard");
 
+  const funnelNameV1 = "PR-022 V1 publication journey";
+  const createV1Response = await fetch(`${worker.origin}/api/funnels`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `pr022-v1-${randomUUID()}`,
+    },
+    body: JSON.stringify({ name: funnelNameV1, blueprint: "tripwire" }),
+  });
+  const createdV1 = await responseJson(createV1Response, 201, "Create V1 funnel fixture");
+  const funnelId = createdV1.funnel?.id;
+  const slug = createdV1.funnel?.slug;
+  const initialRevisionId = createdV1.initial_revision?.id;
+  assert.equal(typeof funnelId, "string");
+  assert.equal(typeof slug, "string");
+  assert.equal(typeof initialRevisionId, "string");
+
+  await page.goto(`${worker.origin}/funnels`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Your funnels" }).waitFor();
+  await page.getByRole("link", { name: funnelNameV1 }).waitFor();
+
   await tabUntil(
     page,
-    (active) => active.tag === "A" && hasName(active, funnelName),
-    "created funnel link",
+    (active) => active.tag === "A" && hasName(active, funnelNameV1),
+    "created V1 funnel link",
   );
   await pressKeyboard(page, "Enter");
-  await page.getByRole("heading", { name: funnelName }).waitFor();
+  await page.getByRole("heading", { name: funnelNameV1 }).waitFor();
   await page.getByRole("list", { name: "Funnel sections" }).waitFor();
   const publicationPanel = page.getByRole("region", { name: "Publication" });
   await publicationPanel.waitFor();
@@ -520,7 +539,8 @@ try {
   assert.deepEqual(diagnostics, [], `Browser errors: ${diagnostics.join("\n")}`);
   console.log(
     JSON.stringify({
-      workflow: "create -> edit -> save -> stale publish conflict -> preserve draft -> save -> publish -> lose response while editing -> exact retry -> save preserved draft -> public read -> confirm unpublish -> 404",
+      workflow: "create V2 in dashboard -> seed existing V1 -> edit -> save -> stale publish conflict -> preserve draft -> save -> publish -> lose response while editing -> exact retry -> save preserved draft -> public read -> confirm unpublish -> 404",
+      createdV2FunnelId,
       funnelId,
       slug,
       initialRevisionId,

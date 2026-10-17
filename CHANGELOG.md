@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+- Typed version 2 funnel documents with page, section, block, theme, and revision history editing.
+- Preview-first conversion for version 1 funnels, with explicit blockers for unsupported content.
+- Bounded R2 staging for typed revisions, including local capacity reporting and cleanup.
+
+### Changed
+- Dashboard funnel creation and editing use typed version 2 documents while preserving version 1 reads and conversion.
+
 ## [0.1.0] - 2026-10-15
 
 ### Added

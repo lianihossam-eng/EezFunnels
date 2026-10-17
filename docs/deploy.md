@@ -33,6 +33,14 @@ Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top
 
 Edit the top-level `[vars]` entry in `wrangler.toml` and set `ALLOWED_HOSTS` to the exact hostname that will receive requests. For the default workers.dev route, this is the Worker name and your account's workers.dev subdomain, for example `eezfunnel.<account-subdomain>.workers.dev`. The Worker rejects hosts that are not listed exactly. Multiple hosts can be comma-separated. If you use another hostname, configure its Cloudflare Worker route separately and list that exact host.
 
+## V2 staged-save capacity
+
+The top-level `[vars]` table supplies initial caps of 104,857,600 bytes (100 MiB) and 1,000 object keys through `V2_STAGE_ORPHAN_BYTE_BUDGET` and `V2_STAGE_ORPHAN_KEY_BUDGET`. These are starting values; review them against the account and the exposure you accept before deployment. Local development has separate values in `[env.dev.vars]`. If either variable is missing, invalid, or non-positive, V2 staging and saves fail closed. The dashboard keeps an already saved V2 document readable and disables saves while the capacity endpoint is unavailable.
+
+Before an upload, the Worker reserves its expected byte length and one object key across active stage attempts. The reservation is released when the stage is consumed or expired and its object cleanup completes; it is not a lifetime charge. The external stage-control object keeps the accepted caps outside D1 so a D1 restore does not reset them. The typed editor shows the byte/key caps and currently held reservations; `GET /api/v2/stage-capacity` provides the same status to the dashboard.
+
+Increasing either persisted cap is an explicit operator change; the persisted limits only increase. If configuration is lowered below the persisted cap, V2 staging fails closed. The control object is initialized on the first V2 create and lives in R2 outside D1 Time Travel restores.
+
 Do not deploy with the placeholder D1 or KV IDs. The `[env.dev]` resources are separate from the production bindings; the local development commands do not need real remote dev resources.
 
 ## Apply migrations and deploy
@@ -53,7 +61,7 @@ Confirm the health route and dashboard after deployment:
 curl --fail --show-error https://eezfunnel.<account-subdomain>.workers.dev/health
 ```
 
-A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor saves revisions but cannot publish them yet. Publish with `eez funnels publish <funnel-id>`, the `POST /api/funnels/:funnel_id/publish` route, or the MCP `execute_command` tool using `funnel.publish`; see [CLI](commands.md#native-cli), [HTTP routes](commands.md#http-routes), and [command registry](commands.md#executable-command-registry). Its public page is available at `/f/<slug>`.
+A healthy Worker responds with `{"status":"ok"}`. Then open the same host in a browser and create a test funnel. The editor provides publish and unpublish controls for saved revisions; the public page is available at `/f/<slug>`. Review the configured V2 staging capacity before enabling V2 creation.
 
 ## Optional MCP secret
 
