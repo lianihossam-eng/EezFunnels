@@ -447,7 +447,7 @@ const PLAYFUL_TOKENS: [ThemeToken; 13] = [
     },
     ThemeToken {
         name: "color-primary",
-        value: "#d946ef",
+        value: "#c026d3",
     },
     ThemeToken {
         name: "color-surface",
