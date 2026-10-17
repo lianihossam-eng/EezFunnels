@@ -34,9 +34,9 @@ pub fn render_document(path: &str) -> Option<String> {
 fn is_dashboard_path(path: &str) -> bool {
     match path {
         "/" | "/funnels" | "/submissions" => true,
-        _ => path
-            .strip_prefix("/funnels/")
-            .is_some_and(is_valid_funnel_id),
+        _ => path.strip_prefix("/funnels/").is_some_and(|route| {
+            is_valid_funnel_id(route.strip_suffix("/completions").unwrap_or(route))
+        }),
     }
 }
 
