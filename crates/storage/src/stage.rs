@@ -363,7 +363,10 @@ impl<'a> DocumentStageRepository<'a> {
             return Err(RepositoryError::StageDigestMismatch);
         }
         let now = self.database_now().await?;
-        if is_live_uploaded_retry(&stage, now, bytes.len(), &digest) {
+        if self
+            .is_current_uploaded_retry(&stage, now, bytes.len(), &digest)
+            .await?
+        {
             return Ok(());
         }
         if stage.state == "uploaded" {
@@ -419,10 +422,15 @@ impl<'a> DocumentStageRepository<'a> {
         self.abandon_attempt(&attempt_id).await?;
         let current = self.find_upload_stage(&stage.stage_id_hash).await?;
         let now = self.database_now().await?;
-        match current {
-            Some(current) if is_live_uploaded_retry(&current, now, bytes.len(), &digest) => Ok(()),
-            _ => Err(RepositoryError::StageUnavailable),
+        if let Some(current) = current {
+            if self
+                .is_current_uploaded_retry(&current, now, bytes.len(), &digest)
+                .await?
+            {
+                return Ok(());
+            }
         }
+        Err(RepositoryError::StageUnavailable)
     }
 
     pub async fn capacity_snapshot(&self) -> RepositoryResult<StageCapacitySnapshot> {
@@ -994,6 +1002,23 @@ impl<'a> DocumentStageRepository<'a> {
             .map_err(Into::into)
     }
 
+    async fn is_current_uploaded_retry(
+        &self,
+        stage: &StageUploadRecord,
+        now: i64,
+        length: usize,
+        digest: &str,
+    ) -> RepositoryResult<bool> {
+        let current_head = self.editor_head(&stage.funnel_id).await?;
+        Ok(uploaded_retry_matches_current_head(
+            stage,
+            current_head.as_deref(),
+            now,
+            length,
+            digest,
+        ))
+    }
+
     async fn expire_stage(&self, stage_id_hash: &str) -> RepositoryResult<()> {
         let stage_hash = D1Type::Text(stage_id_hash);
         self.database
@@ -1340,7 +1365,7 @@ impl<'a> DocumentStageRepository<'a> {
             .await
             .map_err(|_| RepositoryError::StageControlUnavailable)?
             .ok_or(RepositoryError::StageControlUnavailable)?;
-        let etag = object.http_etag();
+        let etag = object.etag();
         if etag.is_empty() {
             return Err(RepositoryError::StageControlUnavailable);
         }
@@ -1464,6 +1489,17 @@ fn is_live_uploaded_retry(
         && stage.expires_at > now
         && stage.uploaded_length == Some(length as i64)
         && stage.uploaded_sha256.as_deref() == Some(digest)
+}
+
+fn uploaded_retry_matches_current_head(
+    stage: &StageUploadRecord,
+    current_head: Option<&str>,
+    now: i64,
+    length: usize,
+    digest: &str,
+) -> bool {
+    is_live_uploaded_retry(stage, now, length, digest)
+        && current_head == Some(stage.base_revision_id.as_str())
 }
 
 fn stage_quota_fits(
@@ -1620,8 +1656,8 @@ mod tests {
     use super::{
         encode_hex, increment_sequence, is_live_uploaded_retry, is_lower_hex_digest, is_sequence,
         r2_if_absent, r2_if_match, sha256_hex, stage_object_key, stage_quota_fits,
-        stage_sequence_from_key, validate_finalize, StageCapacity, StageControl,
-        StageFinalizeMutation, StageUploadRecord,
+        stage_sequence_from_key, uploaded_retry_matches_current_head, validate_finalize,
+        StageCapacity, StageControl, StageFinalizeMutation, StageUploadRecord,
     };
     use crate::repository::{NewRevision, RepositoryError};
 
@@ -1755,6 +1791,30 @@ mod tests {
         assert!(!is_live_uploaded_retry(&expired, 10, 8, &digest));
         assert!(!is_live_uploaded_retry(&live, 10, 7, &digest));
         assert!(!is_live_uploaded_retry(&live, 10, 8, &"b".repeat(64)));
+    }
+
+    #[test]
+    fn uploaded_stage_retries_require_the_base_revision_to_remain_current() {
+        let digest = sha256_hex(b"document");
+        let uploaded = uploaded_stage(11, 8, &digest);
+
+        assert!(uploaded_retry_matches_current_head(
+            &uploaded,
+            Some(&uploaded.base_revision_id),
+            10,
+            8,
+            &digest,
+        ));
+        assert!(!uploaded_retry_matches_current_head(
+            &uploaded,
+            Some("new-editor-head"),
+            10,
+            8,
+            &digest,
+        ));
+        assert!(!uploaded_retry_matches_current_head(
+            &uploaded, None, 10, 8, &digest,
+        ));
     }
 
     #[test]
