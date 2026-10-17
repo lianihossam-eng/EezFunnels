@@ -6,6 +6,8 @@ Published V2 documents render these definitions as native HTML forms and accept 
 
 The dashboard's **Submissions** page reads retained responses from a private, read-only API. Each entry shows the submitted field labels and values, the page and form, the captured consent wording and versions, and when the response expires. Expired rows are excluded immediately and later removed by scheduled cleanup. Results are ordered newest first and loaded 25 at a time. The read API is not exposed as an MCP tool. Treat the D1 database, dashboard, API, and their backups as sensitive because they contain submitted field values and consent evidence.
 
+The funnel editor also links to **Form completions**, a count-only report for the selected funnel. Choose 7, 30, or 90 UTC calendar dates. The report includes the current date as a partial day, fills dates without submissions with zero, and groups form totals by stable form ID. It counts successful submissions that have not expired; a report period can therefore contain less data than its date range when retention is configured below that range. It does not read or return response values or consent evidence, and these counts are not a conversion rate because page and form views are not tracked. The owner API is `GET /api/funnels/:funnel_id/completions?period=7|30|90`, returns `Cache-Control: private, no-store`, and is not exposed as an MCP tool.
+
 ## Submission behavior
 
 The browser posts URL-encoded values to the same-origin route:
@@ -24,6 +26,6 @@ Request acknowledgement is required for every submission. Marketing opt-in is a 
 
 Submissions are retained for 90 days by default and removed by the scheduled cleanup. Set `PUBLIC_FORM_RETENTION_DAYS` to a value from 1 to 3650 to change this period. The Worker allows up to 100 submissions per funnel in a rolling 60-second window by default; set `PUBLIC_FORM_SUBMISSIONS_PER_MINUTE` from 1 to 100 to lower the limit for that funnel.
 
-The submission route only accepts POST. The dashboard read surface is `GET /submissions`, backed by `GET /api/submissions`; the API returns `Cache-Control: private, no-store` and accepts an opaque keyset cursor for older rows. This single-user public edition does not add application login or roles. Protect both routes with Cloudflare Access or another network perimeter as described in [Security](security.md), and keep the D1 database and backups private.
+The submission route only accepts POST. The dashboard read surface is `GET /submissions`, backed by `GET /api/submissions`; the API returns `Cache-Control: private, no-store` and accepts an opaque keyset cursor for older rows. Form completion reports are available at `/funnels/:funnel_id/completions`, backed by the owner API described above. This single-user public edition does not add application login or roles. Protect the dashboard and both read surfaces with Cloudflare Access or another network perimeter as described in [Security](security.md), and keep the D1 database and backups private.
 
 Run `PR033_BROWSER=1 bash scripts/smoke-pr033-public-forms.sh` to exercise the published-page form flow and the submissions inbox against local Worker and D1 bindings.

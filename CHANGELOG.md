@@ -10,6 +10,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Typed version 2 funnel documents with page, section, block, theme, and revision history editing.
 - Preview-first conversion for version 1 funnels, with explicit blockers for unsupported content.
 - Bounded R2 staging for typed revisions, including local capacity reporting and cleanup.
+- Funnel-scoped form completion counts by UTC date and stable form ID, limited to retained submissions.
 
 ### Changed
 - Dashboard funnel creation and editing use typed version 2 documents while preserving version 1 reads and conversion.

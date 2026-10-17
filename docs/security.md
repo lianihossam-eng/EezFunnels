@@ -4,7 +4,7 @@ Eez Funnel v0.1 is a single-user application and does not include a login, user 
 
 ## Protect administrative routes
 
-Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*`, `/submissions`, `/api/submissions`, `/api/funnels` (including its subroutes), and `/api/media`. Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
+Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*` (including funnel completion reports), `/submissions`, `/api/submissions`, `/api/funnels` (including its subroutes, such as `/api/funnels/:funnel_id/completions`), and `/api/media`. Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
 
 Published entry pages use `GET /f/:slug`; additional V2 pages use `GET /f/:slug/:page_slug`. Add an Access bypass/public policy for those published-page paths only if those funnels should be public. If the bypass is omitted, visitors will also need to authenticate before seeing a published funnel.
 
@@ -12,7 +12,7 @@ Published image delivery uses `GET /media/:sha256`. This route is public so publ
 
 Published forms post to `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions`. If a funnel is public, allow this route to receive POST requests along with its published-page paths. The Worker rejects a supplied `Origin` that does not match the request scheme and host. Requests without `Origin` remain accepted for compatibility. Origin is not authentication.
 
-Do not make the dashboard, `/api/submissions`, or `/api/funnels/*` public to enable form submissions. D1 stores form values and consent evidence for 90 days by default. The submissions page reads this sensitive data, so it must have the same Access policy as the dashboard. See [Public forms](forms.md) for the read surface, retention, and rate-limit settings.
+Do not make the dashboard, `/api/submissions`, or `/api/funnels/*` public to enable form submissions. D1 stores form values and consent evidence for 90 days by default. The submissions page reads this sensitive data, and the funnel completion report reveals owner-only counts, so both read surfaces must have the same Access policy as the dashboard. See [Public forms](forms.md) for the read surface, report semantics, retention, and rate-limit settings.
 
 Access is an edge policy, not application login or multi-user authorization. The native `eez` CLI currently has no support for Access cookies or arbitrary Access headers; funnel commands through an Access-protected API will not work with the current CLI. An MCP client must be able to send any required Access credentials as well as the Eez Bearer token. The Worker does not provide a second authentication mode for these tools.
 
