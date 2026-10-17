@@ -33,6 +33,8 @@ Copy the D1 `database_id` and KV namespace `id` printed by Wrangler into the top
 
 Edit the top-level `[vars]` entry in `wrangler.toml` and set `ALLOWED_HOSTS` to the exact hostname that will receive requests. For the default workers.dev route, this is the Worker name and your account's workers.dev subdomain, for example `eezfunnel.<account-subdomain>.workers.dev`. The Worker rejects hosts that are not listed exactly. Multiple hosts can be comma-separated. If you use another hostname, configure its Cloudflare Worker route separately and list that exact host.
 
+Set `PUBLIC_BASE_URL` in the same `[vars]` table to the preferred public HTTPS origin, for example `https://eezfunnel.<account-subdomain>.workers.dev` or `https://funnels.example`. Do not include a path, query, or fragment. This trusted value supplies canonical links for published pages across every allowed host; if it is unset or invalid, canonical links are omitted. When using a custom domain, configure DNS and the Worker route separately as described above.
+
 ## V2 staged-save capacity
 
 The top-level `[vars]` table supplies initial caps of 104,857,600 bytes (100 MiB) and 1,000 object keys through `V2_STAGE_ORPHAN_BYTE_BUDGET` and `V2_STAGE_ORPHAN_KEY_BUDGET`. These are starting values; review them against the account and the exposure you accept before deployment. Local development has separate values in `[env.dev.vars]`. If either variable is missing, invalid, or non-positive, V2 staging and saves fail closed. The dashboard keeps an already saved V2 document readable and disables saves while the capacity endpoint is unavailable.
