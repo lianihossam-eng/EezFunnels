@@ -9,8 +9,10 @@ The dashboard does not yet create or edit form definitions, and there is no dash
 The browser posts URL-encoded values to the same-origin route:
 
 ```text
-POST /api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions?key=:uuid
+POST /api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions?key=:uuid&revision_id=:id
 ```
+
+The rendered action carries the immutable revision that produced the form. If that revision is no longer published when the visitor submits, the Worker returns HTTP 409 with `conflict/public_form_stale_revision` and stores no lead. Reload the page to submit against the current form and consent copy. A publication that races with the request is checked again at the D1 insert.
 
 If a request includes an `Origin` header, the Worker requires one valid HTTP(S) origin that matches the request scheme and host. It checks this header before reading the form body or accessing D1. Requests without `Origin` remain accepted for non-browser client compatibility. Origin is not authentication because non-browser clients can forge it.
 

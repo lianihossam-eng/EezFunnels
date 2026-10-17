@@ -234,12 +234,13 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert b"type=\"email\"" in html, html
         assert b"request-v1" not in html, html
         action = re.search(
-            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/form-lead/submissions\?key=([0-9a-f-]{36}))"',
+            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/form-lead/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64}))"',
             html,
         )
         assert action is not None, html
         action_path = action.group(1).decode()
         submission_key = action.group(2).decode()
+        assert action.group(3).decode() == saved_revision_id, action.group(3)
         second_status, second_html, second_headers = request("GET", f"/f/{slug}")
         assert second_status == 200, second_html
         assert second_headers.get("cache-control") == "no-store", second_headers
@@ -250,6 +251,75 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         payload = urlencode(
             {"name": "Ada Lovelace", "email": "ada@example.test", "_request_consent": "on"}
         ).encode()
+
+        document["forms"][0]["request_consent"]["copy_version"] = "request-v2"
+        document["forms"][0]["request_consent"]["copy"] = (
+            "I agree to be contacted about this updated request."
+        )
+        updated_data = json.dumps(document, separators=(",", ":")).encode()
+        updated_stage_id = mint_stage(
+            funnel_id, saved_revision_id, updated_data, "pr033-form-stage-v2"
+        )
+        assert upload(funnel_id, updated_stage_id, updated_data)[0] == 204
+        status, content, _ = post_json(
+            f"/api/funnels/{funnel_id}/revisions-v2",
+            {
+                "base_revision_id": saved_revision_id,
+                "stage_id": updated_stage_id,
+                "expected_length": len(updated_data),
+                "expected_sha256": hashlib.sha256(updated_data).hexdigest(),
+            },
+            "pr033-form-save-v2",
+        )
+        assert status == 201, (status, content)
+        updated_revision_id = json.loads(content)["revision_id"]
+        status, content, _ = request(
+            "POST",
+            f"/api/funnels/{funnel_id}/publish",
+            json.dumps(
+                {
+                    "revision_id": updated_revision_id,
+                    "expected_published_revision_id": saved_revision_id,
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json", "Idempotency-Key": "pr033-form-publish-v2"},
+        )
+        assert status == 200, (status, content)
+
+        stale_status, stale_body, _ = request(
+            "POST",
+            action_path,
+            payload,
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert stale_status == 409, (stale_status, stale_body)
+        assert b"conflict/public_form_stale_revision" in stale_body
+
+        latest_status, latest_html, latest_headers = request("GET", f"/f/{slug}")
+        assert latest_status == 200, latest_html
+        assert latest_headers.get("cache-control") == "no-store", latest_headers
+        latest_action = re.search(
+            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/form-lead/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64}))"',
+            latest_html,
+        )
+        assert latest_action is not None, latest_html
+        action_path = latest_action.group(1).decode()
+        submission_key = latest_action.group(2).decode()
+        assert latest_action.group(3).decode() == updated_revision_id, latest_action.group(3)
+        second_page_status, second_page_html, second_page_headers = request(
+            "GET", f"/f/{slug}"
+        )
+        assert second_page_status == 200, second_page_html
+        assert second_page_headers.get("cache-control") == "no-store", second_page_headers
+        second_action = re.search(
+            rb'submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})',
+            second_page_html,
+        )
+        assert second_action is not None, second_page_html
+        assert second_action.group(1).decode() != submission_key
+        assert second_action.group(2).decode() == updated_revision_id
+
         invalid_payload = urlencode(
             {"name": "Ada Lovelace", "email": "ada@example.test"}
         ).encode()
@@ -312,7 +382,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert b"conflict/idempotency_payload_mismatch" in reused_key_body
 
         second_key_path = re.sub(
-            r"key=[0-9a-f-]{36}$", f"key={second_action.group(1).decode()}", action_path
+            r"(?<=key=)[0-9a-f-]{36}", second_action.group(1).decode(), action_path
         )
         marketing_status, marketing_body, _ = request(
             "POST",
@@ -338,7 +408,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         else:
             third_status, third_body, _ = request(
                 "POST",
-                re.sub(r"key=[0-9a-f-]{36}$", f"key={third_key}", action_path),
+                re.sub(r"(?<=key=)[0-9a-f-]{36}", third_key, action_path),
                 payload,
                 {"Content-Type": "application/x-www-form-urlencoded"},
             )
@@ -347,7 +417,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         rate_limit_key = "3da91eb0-7f65-49c1-9341-a28eb9d10c27"
         rate_status, rate_body, rate_headers = request(
             "POST",
-            re.sub(r"key=[0-9a-f-]{36}$", f"key={rate_limit_key}", action_path),
+            re.sub(r"(?<=key=)[0-9a-f-]{36}", rate_limit_key, action_path),
             payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
         )
@@ -370,7 +440,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--json", "--command",
-                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email FROM public_form_submissions",
+                "SELECT COUNT(*) AS submissions, SUM(marketing_opt_in) AS opted_in, MIN(request_consent_acknowledged) AS acknowledged, MIN(length(request_consent_copy)) AS consent_copy_length, MIN(request_consent_copy_version) AS consent_copy_version, MIN(expires_at - submitted_at) AS retention_seconds, COUNT(DISTINCT submission_key) AS unique_keys, MIN(json_extract(field_values_json, '$.email')) AS stored_email FROM public_form_submissions",
             ],
             cwd=root,
             check=True,
@@ -384,6 +454,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert result["opted_in"] == 1, result
         assert result["acknowledged"] == 1, result
         assert result["consent_copy_length"] > 0, result
+        assert result["consent_copy_version"] == "request-v2", result
         assert result["retention_seconds"] == 86_400, result
         assert result["unique_keys"] == 3, result
         assert result["stored_email"] == "ada@example.test", result

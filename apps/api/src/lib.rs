@@ -589,8 +589,18 @@ async fn public_funnel_response(
         eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER
     );
     if html.contains(&submission_key_placeholder) {
+        let Some(revision_id) = result.get("revision_id").and_then(Value::as_str) else {
+            let error = ApiError::from_code("internal/unexpected");
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        };
+        if !valid_funnel_route_id(revision_id) {
+            let error = ApiError::from_code("internal/unexpected");
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        }
         let submission_key = uuid::Uuid::new_v4().to_string();
-        let html = bind_public_form_submission_keys(html, &submission_key);
+        let html = bind_public_form_submission_identity(html, &submission_key, revision_id);
         let mut response = Response::new(axum::body::Body::from(html));
         response
             .headers_mut()
@@ -635,13 +645,17 @@ async fn public_funnel_response(
     response
 }
 
-fn bind_public_form_submission_keys(html: &str, submission_key: &str) -> String {
+fn bind_public_form_submission_identity(
+    html: &str,
+    submission_key: &str,
+    revision_id: &str,
+) -> String {
     let placeholder = format!(
         "?key={}",
         eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER
     );
-    let bound_query = format!("?key={submission_key}");
-    let mut output = String::with_capacity(html.len() + submission_key.len());
+    let bound_query = format!("?key={submission_key}&revision_id={revision_id}");
+    let mut output = String::with_capacity(html.len() + bound_query.len());
     let mut remaining = html;
 
     while let Some(form_start) = remaining.find("<form ") {
@@ -685,6 +699,12 @@ struct ParsedPublicFormBody {
     marketing_opt_in: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PublicFormSubmissionIdentity {
+    submission_key: String,
+    revision_id: String,
+}
+
 async fn public_form_submission_response(
     env: &Env,
     request: HttpRequest,
@@ -706,7 +726,7 @@ async fn public_form_submission_response(
     if !is_urlencoded_form(request.headers()) {
         return form_submission_payload_error(&correlation_id);
     }
-    let Some(submission_key) = public_form_submission_key(request.uri().query()) else {
+    let Some(submission_identity) = public_form_submission_identity(request.uri().query()) else {
         return form_submission_payload_error(&correlation_id);
     };
     let body = match to_bytes(
@@ -734,6 +754,9 @@ async fn public_form_submission_response(
         Ok(Some(revision)) if revision.schema_version == 2 => revision,
         _ => return funnel_slug_not_found_response(&correlation_id),
     };
+    if revision.id != submission_identity.revision_id {
+        return form_submission_stale_revision_error(&correlation_id);
+    }
     let document = match validate_revision_v2(
         revision.schema_version,
         &revision.funnel_id,
@@ -791,7 +814,7 @@ async fn public_form_submission_response(
             revision_id: &revision.id,
             page_id: page_id.as_str(),
             form_id: form_id.as_str(),
-            submission_key: &submission_key,
+            submission_key: &submission_identity.submission_key,
             field_values_json: &field_values_json,
             request_consent_copy_version: request_consent.copy_version().as_str(),
             request_consent_copy: request_consent.copy(),
@@ -823,7 +846,7 @@ async fn public_form_submission_response(
             return response;
         }
         Ok(PublicFormSubmissionResult::NotCurrent) => {
-            return funnel_slug_not_found_response(&correlation_id)
+            return form_submission_stale_revision_error(&correlation_id)
         }
         Err(error) => {
             let api_error = ApiError::from_code(error.code());
@@ -870,15 +893,33 @@ fn is_urlencoded_form(headers: &HeaderMap<HeaderValue>) -> bool {
     parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
 }
 
-fn public_form_submission_key(query: Option<&str>) -> Option<String> {
+fn public_form_submission_identity(query: Option<&str>) -> Option<PublicFormSubmissionIdentity> {
     let query = query?;
     let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-    if pairs.len() != 1 || pairs[0].0 != "key" {
+    if pairs.len() != 2 {
         return None;
     }
-    let value = pairs[0].1.as_ref();
-    let parsed = uuid::Uuid::parse_str(value).ok()?;
-    (parsed.to_string() == value).then(|| value.to_owned())
+    let mut submission_key = None;
+    let mut revision_id = None;
+    for (name, value) in pairs {
+        match name.as_ref() {
+            "key" if submission_key.is_none() => {
+                let parsed = uuid::Uuid::parse_str(&value).ok()?;
+                if parsed.to_string() != value {
+                    return None;
+                }
+                submission_key = Some(value.into_owned());
+            }
+            "revision_id" if revision_id.is_none() && valid_funnel_route_id(&value) => {
+                revision_id = Some(value.into_owned());
+            }
+            _ => return None,
+        }
+    }
+    Some(PublicFormSubmissionIdentity {
+        submission_key: submission_key?,
+        revision_id: revision_id?,
+    })
 }
 
 fn parse_public_form_body(body: &[u8]) -> Option<ParsedPublicFormBody> {
@@ -969,6 +1010,15 @@ fn form_submission_payload_error(correlation_id: &str) -> Response<axum::body::B
 
 fn form_submission_origin_error(correlation_id: &str) -> Response<axum::body::Body> {
     let error = ApiError::from_code("request/invalid_origin");
+    let mut response = error_response(&error, correlation_id.to_owned());
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+
+fn form_submission_stale_revision_error(correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code("conflict/public_form_stale_revision");
     let mut response = error_response(&error, correlation_id.to_owned());
     response
         .headers_mut()
@@ -2587,14 +2637,14 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_public_form_submission_keys, correlation_id, editor_command_parameters,
+        bind_public_form_submission_identity, correlation_id, editor_command_parameters,
         funnel_subroute, normalize_correlation_id, parse_public_form_body,
-        public_form_submission_key, public_form_submission_route_from_path,
+        public_form_submission_identity, public_form_submission_route_from_path,
         public_form_success_location, public_html_etag, public_route_from_path,
         publication_command_parameters, request_if_none_match, stage_upload_token,
         v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
         v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
-        valid_public_slug, EditorCommandParametersError,
+        valid_public_slug, EditorCommandParametersError, PublicFormSubmissionIdentity,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
@@ -3035,32 +3085,48 @@ mod tests {
     }
 
     #[test]
-    fn public_form_submission_key_accepts_one_canonical_uuid_only() {
+    fn public_form_submission_identity_requires_one_key_and_one_revision() {
         let key = uuid::Uuid::new_v4().to_string();
+        let expected = PublicFormSubmissionIdentity {
+            submission_key: key.clone(),
+            revision_id: "revision-a".to_owned(),
+        };
         assert_eq!(
-            public_form_submission_key(Some(&format!("key={key}"))),
-            Some(key.clone())
+            public_form_submission_identity(Some(&format!("key={key}&revision_id=revision-a"))),
+            Some(expected.clone())
         );
-        assert_eq!(public_form_submission_key(None), None);
-        assert_eq!(public_form_submission_key(Some("key=")), None);
-        assert_eq!(public_form_submission_key(Some("key=not-a-uuid")), None);
         assert_eq!(
-            public_form_submission_key(Some(&format!("key={key}&other=value"))),
-            None
+            public_form_submission_identity(Some(&format!("revision_id=revision-a&key={key}"))),
+            Some(expected)
         );
+        for query in [
+            None,
+            Some("key="),
+            Some("key=not-a-uuid&revision_id=revision-a"),
+            Some("key=00000000-0000-0000-0000-000000000000"),
+            Some("revision_id=revision-a"),
+            Some("key=00000000-0000-0000-0000-000000000000&revision_id="),
+            Some("key=00000000-0000-0000-0000-000000000000&revision_id=../private"),
+            Some("key=00000000-0000-0000-0000-000000000000&revision_id=revision-a&extra=x"),
+            Some("key=00000000-0000-0000-0000-000000000000&key=00000000-0000-0000-0000-000000000000&revision_id=revision-a"),
+        ] {
+            assert_eq!(public_form_submission_identity(query), None, "{query:?}");
+        }
     }
 
     #[test]
-    fn submission_key_binding_changes_only_the_form_action_query() {
+    fn submission_identity_binding_changes_only_the_form_action_query() {
         let marker = eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER;
         let html = format!(
             "<p>{marker}</p><form action=\"/api/public/funnels/test/pages/home/forms/{marker}/submissions?key={marker}\"><input value=\"{marker}\"></form><a href=\"https://example.test/?key={marker}\">copy</a>"
         );
         let key = "e8ac58a6-a7cf-4f65-9a3e-13e9b2e7d59d";
 
-        let bound = bind_public_form_submission_keys(&html, key);
+        let bound = bind_public_form_submission_identity(&html, key, "revision-a");
 
-        assert!(bound.contains(&format!("forms/{marker}/submissions?key={key}")));
+        assert!(bound.contains(&format!(
+            "forms/{marker}/submissions?key={key}&revision_id=revision-a"
+        )));
         assert!(bound.contains(&format!("<input value=\"{marker}\">")));
         assert!(bound.contains(&format!("<p>{marker}</p>")));
         assert!(bound.contains(&format!("href=\"https://example.test/?key={marker}\"")));

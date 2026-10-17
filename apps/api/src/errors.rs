@@ -94,6 +94,7 @@ impl ApiError {
             ),
             "conflict/publish_stale_revision"
             | "conflict/idempotency_payload_mismatch"
+            | "conflict/public_form_stale_revision"
             | "conflict/funnel_limit_reached"
             | "conflict/edit_stale_revision"
             | "conflict/revision_limit_reached"
@@ -241,6 +242,11 @@ mod tests {
         ),
         (
             "conflict/idempotency_payload_mismatch",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/public_form_stale_revision",
             ErrorCategory::Conflict,
             409,
         ),
