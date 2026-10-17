@@ -54,7 +54,10 @@ async function waitForGroup(groupId, timeoutMs) {
   while (groupHasLiveMembers(groupId) && Date.now() < deadline) await delay(100);
 }
 
-export async function startPr019Worker(label, { onWorkerSpawn, onSignalCleanup } = {}) {
+export async function startPr019Worker(
+  label,
+  { onWorkerSpawn, onSignalCleanup, extraAllowedHosts = [], workerVars = {} } = {},
+) {
   let stateDir;
   const localConfigPath = join(root, `.wrangler-pr019-${process.pid}-${randomUUID()}.toml`);
   let port;
@@ -223,6 +226,10 @@ export async function startPr019Worker(label, { onWorkerSpawn, onSignalCleanup }
     );
     ensureActive();
 
+    const configuredWorkerVars = {
+      ALLOWED_HOSTS: [`127.0.0.1:${port}`, ...extraAllowedHosts].join(","),
+      ...workerVars,
+    };
     worker = spawn(
       wrangler,
       [
@@ -237,8 +244,10 @@ export async function startPr019Worker(label, { onWorkerSpawn, onSignalCleanup }
         String(port),
         "--ip",
         "127.0.0.1",
-        "--var",
-        `ALLOWED_HOSTS:127.0.0.1:${port}`,
+        ...Object.entries(configuredWorkerVars).flatMap(([name, value]) => [
+          "--var",
+          `${name}:${value}`,
+        ]),
         "--persist-to",
         stateDir,
         "--show-interactive-dev-session=false",

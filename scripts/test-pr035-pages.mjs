@@ -42,6 +42,10 @@ async function assertNoSeriousAxeFindings(page, label) {
 try {
   worker = await startPr019Worker("pr035-pages", {
     onSignalCleanup: async () => browser?.close(),
+    extraAllowedHosts: ["canonical-spoof.example"],
+    workerVars: {
+      PUBLIC_BASE_URL: "https://funnels.example/",
+    },
   });
   const chromiumPath = await access("/usr/bin/chromium").then(
     () => "/usr/bin/chromium",
@@ -138,9 +142,26 @@ try {
   );
   await page.getByRole("button", { name: "Publish saved revision" }).click();
   await jsonResponse(await publishResponsePromise, 200, "Publish multi-page funnel");
-  const publicPage = await fetch(`${worker.origin}/f/${funnelSlug}/checkout`);
+  const publicPage = await fetch(`${worker.origin}/f/${funnelSlug}/checkout?utm_source=pr035`);
   assert.equal(publicPage.status, 200);
-  assert.match(await publicPage.text(), /<title>Checkout<\/title>/);
+  const publicPageHtml = await publicPage.text();
+  assert.match(publicPageHtml, /<title>Checkout<\/title>/);
+  assert.match(
+    publicPageHtml,
+    new RegExp(`<link rel="canonical" href="https://funnels\\.example/f/${funnelSlug}/checkout">`),
+  );
+  assert.doesNotMatch(publicPageHtml, /canonical[^>]+utm_source/);
+
+  const entryPage = await fetch(`${worker.origin}/f/${funnelSlug}?utm_campaign=ignored`, {
+    headers: { Host: "canonical-spoof.example" },
+  });
+  assert.equal(entryPage.status, 200);
+  const entryPageHtml = await entryPage.text();
+  assert.match(
+    entryPageHtml,
+    new RegExp(`<link rel="canonical" href="https://funnels\\.example/f/${funnelSlug}">`),
+  );
+  assert.doesNotMatch(entryPageHtml, /canonical[^>]+utm_campaign/);
 
   await page.getByRole("button", { name: "Delete page Checkout" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "Delete Checkout?" });
