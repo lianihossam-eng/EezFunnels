@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use worker::d1::D1Type;
 use worker::{D1Database, Error};
 
-const SUPPORTED_SCHEMA_VERSION: i32 = 1;
+const SUPPORTED_SCHEMA_VERSION: i32 = 2;
 const MAX_FUNNEL_BYTES: usize = 1_048_576;
 const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
@@ -25,6 +25,13 @@ pub enum RepositoryError {
     StaleEditorRevision,
     StalePublishedRevision,
     EditorRevisionLimitReached,
+    StageCapacityReached,
+    ActiveStageExists,
+    StageIdGenerationFailed,
+    StageDigestMismatch,
+    StageUnavailable,
+    StageControlUnavailable,
+    StageStorageUnavailable,
 }
 
 impl Display for RepositoryError {
@@ -49,6 +56,37 @@ impl Display for RepositoryError {
             Self::EditorRevisionLimitReached => {
                 formatter.write_str("conflict/revision_limit_reached")
             }
+            Self::StageCapacityReached => formatter.write_str("rate_limit/exceeded"),
+            Self::ActiveStageExists => formatter.write_str("conflict/v2_stage_active"),
+            Self::StageIdGenerationFailed => formatter.write_str("internal/unexpected"),
+            Self::StageDigestMismatch => formatter.write_str("validation/invalid_json"),
+            Self::StageUnavailable => formatter.write_str("conflict/v2_stage_active"),
+            Self::StageControlUnavailable | Self::StageStorageUnavailable => {
+                formatter.write_str("external/unavailable")
+            }
+        }
+    }
+}
+
+impl RepositoryError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Database(_) => "external/unavailable",
+            Self::UnsupportedSchemaVersion(_) => "validation/schema_version_unsupported",
+            Self::InvalidJson => "validation/invalid_json",
+            Self::PayloadTooLarge => "validation/invalid_json",
+            Self::InvalidField(_) => "validation/invalid_json",
+            Self::FunnelNotFound | Self::RevisionNotFound => "not_found/funnel",
+            Self::FunnelLimitReached => "conflict/funnel_limit_reached",
+            Self::RevisionLimitReached => "validation/invalid_json",
+            Self::StaleEditorRevision => "conflict/edit_stale_revision",
+            Self::StalePublishedRevision => "conflict/publish_stale_revision",
+            Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
+            Self::StageCapacityReached => "rate_limit/exceeded",
+            Self::ActiveStageExists | Self::StageUnavailable => "conflict/v2_stage_active",
+            Self::StageIdGenerationFailed => "internal/unexpected",
+            Self::StageDigestMismatch => "validation/invalid_json",
+            Self::StageControlUnavailable | Self::StageStorageUnavailable => "external/unavailable",
         }
     }
 }
@@ -82,6 +120,14 @@ pub struct RevisionRecord {
     pub schema_version: i64,
     pub data_json: String,
     pub render_manifest_json: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct RevisionSummary {
+    pub id: String,
+    pub funnel_id: String,
+    pub schema_version: i64,
     pub created_at: String,
 }
 
@@ -136,6 +182,16 @@ pub struct NewRevision {
     pub schema_version: i64,
     pub data_json: String,
     pub render_manifest_json: String,
+}
+
+pub struct EditorSaveMutation<'a> {
+    pub command_id: &'a str,
+    pub funnel_id: &'a str,
+    pub expected_revision_id: &'a str,
+    pub revision: &'a NewRevision,
+    pub idempotency_key: &'a str,
+    pub payload_json: &'a str,
+    pub result_json: &'a str,
 }
 
 pub struct PublicationMutation<'a> {
@@ -231,7 +287,7 @@ impl<'a> Repository<'a> {
         if revision.funnel_id != funnel.id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_schema_version(revision.schema_version)?;
+        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
@@ -278,7 +334,10 @@ impl<'a> Repository<'a> {
 
         let revision_id = D1Type::Text(&revision.id);
         let revision_funnel_id = D1Type::Text(&revision.funnel_id);
-        let schema_version = D1Type::Integer(1);
+        let schema_version = D1Type::Integer(
+            i32::try_from(revision.schema_version)
+                .map_err(|_| RepositoryError::InvalidField("schema_version"))?,
+        );
         let data_json = D1Type::Text(&revision.data_json);
         let manifest_json = D1Type::Text(&revision.render_manifest_json);
         let insert_revision = self
@@ -402,22 +461,24 @@ impl<'a> Repository<'a> {
 
     pub async fn save_editor_revision(
         &self,
-        funnel_id: &str,
-        expected_revision_id: &str,
-        revision: &NewRevision,
-        idempotency_key: &str,
-        payload_json: &str,
-        result_json: &str,
+        mutation: &EditorSaveMutation<'_>,
     ) -> RepositoryResult<MutationResult> {
+        let command_id = mutation.command_id;
+        let funnel_id = mutation.funnel_id;
+        let expected_revision_id = mutation.expected_revision_id;
+        let revision = mutation.revision;
+        let idempotency_key = mutation.idempotency_key;
+        let payload_json = mutation.payload_json;
+        let result_json = mutation.result_json;
         validate_required_field(funnel_id, "funnel_id")?;
         validate_required_field(expected_revision_id, "expected_revision_id")?;
         validate_required_field(&revision.id, "revision_id")?;
-        validate_required_field("funnel.revision.save", "command_id")?;
+        validate_required_field(command_id, "command_id")?;
         validate_idempotency_key(idempotency_key)?;
         if revision.funnel_id != funnel_id {
             return Err(RepositoryError::InvalidField("funnel_id"));
         }
-        validate_schema_version(revision.schema_version)?;
+        validate_legacy_revision_schema_version(revision.schema_version)?;
         validate_payload_size(&revision.data_json)?;
         self.validate_json(&revision.data_json).await?;
         self.validate_json(&revision.render_manifest_json).await?;
@@ -425,11 +486,7 @@ impl<'a> Repository<'a> {
         self.validate_json(result_json).await?;
 
         if let Some(receipt) = self.active_receipt(idempotency_key).await? {
-            return Ok(classify_receipt(
-                receipt,
-                "funnel.revision.save",
-                payload_json,
-            ));
+            return Ok(classify_receipt(receipt, command_id, payload_json));
         }
 
         let funnel_id_value = D1Type::Text(funnel_id);
@@ -444,7 +501,7 @@ impl<'a> Repository<'a> {
         let manifest_json = D1Type::Text(&revision.render_manifest_json);
         let retained_limit = D1Type::Integer(MAX_REVISIONS_RETAINED);
         let key = D1Type::Text(idempotency_key);
-        let command = D1Type::Text("funnel.revision.save");
+        let command = D1Type::Text(command_id);
         let payload = D1Type::Text(payload_json);
         let result = D1Type::Text(result_json);
         let delete_expired_receipts = self.database.prepare(
@@ -532,11 +589,7 @@ impl<'a> Repository<'a> {
             .await
         {
             if let Some(receipt) = self.active_receipt(idempotency_key).await? {
-                return Ok(classify_receipt(
-                    receipt,
-                    "funnel.revision.save",
-                    payload_json,
-                ));
+                return Ok(classify_receipt(receipt, command_id, payload_json));
             }
             return self
                 .classify_editor_save_failure(funnel_id, expected_revision_id, error)
@@ -544,11 +597,7 @@ impl<'a> Repository<'a> {
         }
 
         if let Some(receipt) = self.active_receipt(idempotency_key).await? {
-            return Ok(classify_receipt(
-                receipt,
-                "funnel.revision.save",
-                payload_json,
-            ));
+            return Ok(classify_receipt(receipt, command_id, payload_json));
         }
         self.classify_editor_save_failure(
             funnel_id,
@@ -749,7 +798,7 @@ impl<'a> Repository<'a> {
         if self.get_funnel(&input.funnel_id).await?.is_none() {
             return Err(RepositoryError::FunnelNotFound);
         }
-        validate_schema_version(input.schema_version)?;
+        validate_legacy_revision_schema_version(input.schema_version)?;
         validate_payload_size(&input.data_json)?;
         self.validate_json(&input.data_json).await?;
         self.validate_json(&input.render_manifest_json).await?;
@@ -815,6 +864,27 @@ impl<'a> Repository<'a> {
         Ok(revisions)
     }
 
+    pub async fn list_revision_summaries(
+        &self,
+        funnel_id: &str,
+    ) -> RepositoryResult<Vec<RevisionSummary>> {
+        let funnel_id = D1Type::Text(funnel_id);
+        let limit = D1Type::Integer(MAX_REVISIONS_RETAINED);
+        let result = self
+            .database
+            .prepare(
+                "SELECT id, funnel_id, schema_version, created_at FROM revisions WHERE funnel_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            )
+            .bind_refs([&funnel_id, &limit])?
+            .all()
+            .await?;
+        let revisions = result.results::<RevisionSummary>()?;
+        for revision in &revisions {
+            validate_schema_version(revision.schema_version)?;
+        }
+        Ok(revisions)
+    }
+
     pub async fn delete_revision(&self, id: &str) -> RepositoryResult<bool> {
         let id = D1Type::Text(id);
         let deleted = self
@@ -843,7 +913,7 @@ impl<'a> Repository<'a> {
         let published = self
             .database
             .prepare(
-                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?) RETURNING id",
+                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version <= ?) RETURNING id",
             )
             .bind_refs([
                 &revision_id,
@@ -892,7 +962,7 @@ impl<'a> Repository<'a> {
         let insert_receipt = self
             .database
             .prepare(
-                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnels WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ?) AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
+                "INSERT INTO command_receipts (idempotency_key, command_id, payload_json, result_json, expires_at) SELECT ?, ?, ?, ?, CAST(strftime('%s', 'now') AS INTEGER) + 86400 WHERE EXISTS (SELECT 1 FROM funnels WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ?) AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version <= ?)) ON CONFLICT(idempotency_key) DO UPDATE SET command_id = excluded.command_id, payload_json = excluded.payload_json, result_json = excluded.result_json, expires_at = excluded.expires_at WHERE command_receipts.expires_at <= CAST(strftime('%s', 'now') AS INTEGER)",
             )
             .bind_refs([
                 &key,
@@ -910,7 +980,7 @@ impl<'a> Repository<'a> {
         let update_funnel = self
             .database
             .prepare(
-                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version = ?)) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND changes() = 1",
+                "UPDATE funnels SET published_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND published_revision_id IS ? AND published_revision_id IS NOT ? AND (? IS NULL OR EXISTS (SELECT 1 FROM revisions WHERE id = ? AND funnel_id = ? AND schema_version <= ?)) AND EXISTS (SELECT 1 FROM command_receipts WHERE idempotency_key = ? AND command_id = ? AND payload_json = ? AND result_json = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)) AND changes() = 1",
             )
             .bind_refs([
                 &target,
@@ -1109,7 +1179,15 @@ impl<'a> Repository<'a> {
 }
 
 pub fn validate_schema_version(version: i64) -> RepositoryResult<()> {
-    if version == i64::from(SUPPORTED_SCHEMA_VERSION) {
+    if matches!(version, 1 | 2) {
+        Ok(())
+    } else {
+        Err(RepositoryError::UnsupportedSchemaVersion(version))
+    }
+}
+
+fn validate_legacy_revision_schema_version(version: i64) -> RepositoryResult<()> {
+    if version == 1 {
         Ok(())
     } else {
         Err(RepositoryError::UnsupportedSchemaVersion(version))
@@ -1159,12 +1237,23 @@ fn validate_payload_size(value: &str) -> RepositoryResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_payload_size, validate_required_field, validate_schema_version, RepositoryError,
+        validate_legacy_revision_schema_version, validate_payload_size, validate_required_field,
+        validate_schema_version, RepositoryError,
     };
 
     #[test]
-    fn schema_version_one_is_supported() {
+    fn schema_versions_one_and_two_are_supported_for_storage_dispatch() {
         assert!(validate_schema_version(1).is_ok());
+        assert!(validate_schema_version(2).is_ok());
+    }
+
+    #[test]
+    fn legacy_revision_creation_rejects_v2_instead_of_relabeling_it_as_v1() {
+        assert!(validate_legacy_revision_schema_version(1).is_ok());
+        assert!(matches!(
+            validate_legacy_revision_schema_version(2),
+            Err(RepositoryError::UnsupportedSchemaVersion(2))
+        ));
     }
 
     #[test]
@@ -1174,8 +1263,8 @@ mod tests {
             Err(RepositoryError::UnsupportedSchemaVersion(0))
         ));
         assert!(matches!(
-            validate_schema_version(2),
-            Err(RepositoryError::UnsupportedSchemaVersion(2))
+            validate_schema_version(3),
+            Err(RepositoryError::UnsupportedSchemaVersion(3))
         ));
         assert!(matches!(
             validate_schema_version(i64::MAX),

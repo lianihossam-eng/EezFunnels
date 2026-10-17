@@ -1105,6 +1105,7 @@ dependencies = [
  "eez-domain",
  "serde",
  "serde_json",
+ "sha2",
  "worker",
 ]
 

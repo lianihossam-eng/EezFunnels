@@ -8,6 +8,7 @@ use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
 pub mod repository;
+pub mod stage;
 
 pub struct PublicationRegressionObservations {
     pub cross_funnel_published_revision_insert_accepted: bool,
@@ -24,6 +25,7 @@ pub struct Bindings {
     database: worker::D1Database,
     bucket: worker::Bucket,
     cache: worker::kv::KvStore,
+    stage_capacity: Option<stage::StageCapacity>,
 }
 
 impl Bindings {
@@ -32,6 +34,7 @@ impl Bindings {
             database: env.d1("DB")?,
             bucket: env.bucket("R2")?,
             cache: env.kv("KV")?,
+            stage_capacity: stage::StageCapacity::from_env(env),
         })
     }
 
@@ -47,6 +50,10 @@ impl Bindings {
 
     pub fn repository(&self) -> repository::Repository<'_> {
         repository::Repository::new(&self.database)
+    }
+
+    pub fn document_stage_repository(&self) -> stage::DocumentStageRepository<'_> {
+        stage::DocumentStageRepository::new(&self.database, &self.bucket, self.stage_capacity)
     }
 
     pub async fn verify_product_repository_round_trip(
@@ -227,14 +234,14 @@ impl Bindings {
             .create_revision(&NewRevision {
                 id: "pr003-unsupported-revision".to_owned(),
                 funnel_id: created_funnel.id.clone(),
-                schema_version: 2,
+                schema_version: 3,
                 data_json: "{}".to_owned(),
                 render_manifest_json: "{}".to_owned(),
             })
             .await;
         if !matches!(
             unsupported,
-            Err(RepositoryError::UnsupportedSchemaVersion(2))
+            Err(RepositoryError::UnsupportedSchemaVersion(3))
         ) {
             return Err(Error::RustError(
                 "unsupported schema version was not refused".to_owned(),
@@ -260,7 +267,7 @@ impl Bindings {
         let persisted_unsupported_funnel_id = D1Type::Text(&created_funnel.id);
         let unsupported_data = D1Type::Text("{}");
         self.database
-            .prepare("INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES (?, ?, 2, ?, ?)")
+            .prepare("INSERT INTO revisions (id, funnel_id, schema_version, data_json, render_manifest_json) VALUES (?, ?, 3, ?, ?)")
             .bind_refs([
                 &persisted_unsupported_id,
                 &persisted_unsupported_funnel_id,
@@ -273,7 +280,7 @@ impl Bindings {
             repository
                 .get_revision("pr003-persisted-unsupported-revision")
                 .await,
-            Err(RepositoryError::UnsupportedSchemaVersion(2))
+            Err(RepositoryError::UnsupportedSchemaVersion(3))
         ) {
             return Err(Error::RustError(
                 "persisted unsupported schema version was not refused".to_owned(),

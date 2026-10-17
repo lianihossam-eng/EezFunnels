@@ -1,7 +1,8 @@
 use super::funnel::{
-    FunnelCommandError, FunnelPublicReadCommand, FunnelPublishCommand, FunnelUnpublishCommand,
+    decode_snapshot, FunnelCommandError, FunnelPublicReadCommand, FunnelPublishCommand,
+    FunnelUnpublishCommand,
 };
-use eez_storage::repository::RepositoryError;
+use eez_storage::repository::{RepositoryError, RevisionRecord};
 
 #[test]
 fn publish_requires_explicit_cas_baseline_and_rejects_duplicate_or_unknown_fields() {
@@ -96,4 +97,22 @@ fn public_unsupported_schema_is_a_validation_error() {
         FunnelCommandError::Storage(RepositoryError::UnsupportedSchemaVersion(2)).code(),
         "validation/schema_version_unsupported"
     );
+}
+
+#[test]
+fn legacy_snapshot_decoder_classifies_v2_as_unsupported_before_parsing() {
+    let record = RevisionRecord {
+        id: "revision-v2".to_owned(),
+        funnel_id: "funnel-a".to_owned(),
+        schema_version: 2,
+        data_json: "{}".to_owned(),
+        render_manifest_json: "{}".to_owned(),
+        created_at: "2026-10-17T00:00:00Z".to_owned(),
+    };
+
+    let error = decode_snapshot(&record, "funnel-a")
+        .err()
+        .expect("V2 needs its renderer");
+
+    assert_eq!(error.code(), "validation/schema_version_unsupported");
 }

@@ -14,6 +14,9 @@ run_worker_first = ["/*"]
 [observability]
 enabled = true
 
+[triggers]
+crons = ["*/15 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "eezfunnel"
@@ -31,6 +34,8 @@ id = "00000000-0000-0000-0000-000000000004"
 [vars]
 ENVIRONMENT = "production"
 ALLOWED_HOSTS = "eezfunnel.workers.dev"
+V2_STAGE_ORPHAN_BYTE_BUDGET = "104857600"
+V2_STAGE_ORPHAN_KEY_BUDGET = "1000"
 
 [env.dev]
 name = "eezfunnel-dev"
@@ -38,6 +43,8 @@ name = "eezfunnel-dev"
 [env.dev.vars]
 ENVIRONMENT = "development"
 ALLOWED_HOSTS = "localhost:8787"
+V2_STAGE_ORPHAN_BYTE_BUDGET = "104857600"
+V2_STAGE_ORPHAN_KEY_BUDGET = "1000"
 
 [[env.dev.d1_databases]]
 binding = "DB"
@@ -52,3 +59,6 @@ bucket_name = "eezfunnel-assets-dev"
 [[env.dev.kv_namespaces]]
 binding = "KV"
 id = "00000000-0000-0000-0000-000000000002"
+
+[env.dev.triggers]
+crons = ["*/15 * * * *"]

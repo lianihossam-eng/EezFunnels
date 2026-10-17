@@ -167,6 +167,38 @@ pub async fn fetch(
     Ok(response)
 }
 
+#[event(scheduled)]
+pub async fn scheduled(
+    _event: worker::ScheduledEvent,
+    env: Env,
+    _context: worker::ScheduleContext,
+) {
+    if eez_storage::stage::StageCapacity::from_env(&env).is_none() {
+        worker::console_warn!(
+            "V2 document stage cleanup skipped because orphan budgets are not configured"
+        );
+        return;
+    }
+
+    let bindings = match eez_storage::Bindings::from_env(&env) {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            worker::console_error!("V2 document stage cleanup could not load bindings: {error:?}");
+            return;
+        }
+    };
+    let repository = bindings.document_stage_repository();
+    match repository.cleanup_one_page().await {
+        Ok(progress) => worker::console_log!(
+            "V2 document stage cleanup completed: listed={}, deleted={}, pass_completed={}",
+            progress.listed,
+            progress.deleted,
+            progress.pass_completed
+        ),
+        Err(error) => worker::console_error!("V2 document stage cleanup failed: {error:?}"),
+    }
+}
+
 async fn asset_response(
     env: &Env,
     request: HttpRequest,

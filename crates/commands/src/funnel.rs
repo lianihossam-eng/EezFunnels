@@ -11,8 +11,8 @@ use eez_render::{
     Testimonial, ThemeTokens, RENDERER_VERSION,
 };
 use eez_storage::repository::{
-    FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation, Repository,
-    RepositoryError,
+    EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision, PublicationMutation,
+    Repository, RepositoryError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -742,14 +742,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
         .map_err(|_| FunnelCommandError::Internal)?;
         let result = self
             .repository
-            .save_editor_revision(
-                &command.funnel_id,
-                &command.base_revision_id,
-                &new_revision,
+            .save_editor_revision(&EditorSaveMutation {
+                command_id: command_ids::FUNNEL_REVISION_SAVE,
+                funnel_id: &command.funnel_id,
+                expected_revision_id: &command.base_revision_id,
+                revision: &new_revision,
                 idempotency_key,
-                &canonical_parameters,
-                &result_json,
-            )
+                payload_json: &canonical_parameters,
+                result_json: &result_json,
+            })
             .await?;
         mutation_result_to_value(result)
     }
@@ -1088,6 +1089,11 @@ pub(super) fn decode_snapshot(
     record: &eez_storage::repository::RevisionRecord,
     expected_funnel_id: &str,
 ) -> Result<ValidatedSnapshot, FunnelCommandError> {
+    if record.schema_version != 1 {
+        return Err(FunnelCommandError::Storage(
+            RepositoryError::UnsupportedSchemaVersion(record.schema_version),
+        ));
+    }
     if record.data_json.len() > MAX_SNAPSHOT_BYTES || record.funnel_id != expected_funnel_id {
         return Err(FunnelCommandError::Internal);
     }
