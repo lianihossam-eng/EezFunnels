@@ -138,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn funnel_completion_route_renders_on_direct_ssr_navigation() {
+        let html = render_document("/funnels/demo-1/completions")
+            .expect("funnel completions dashboard route");
+
+        assert!(html.contains("Form completions"));
+        assert!(html.contains("Workspace / Form completions"));
+        assert!(html.contains("demo-1"));
+        assert!(html.contains("UTC date range"));
+        assert_valid_hydration_data(&html);
+    }
+
+    #[test]
     fn submissions_route_renders_a_hydratable_dashboard_shell() {
         let html = render_document("/submissions").expect("submissions dashboard route");
 
@@ -156,6 +168,7 @@ mod tests {
             "/funnels/has space",
             "/funnels/é",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0",
+            "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/completions",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");
         }
@@ -170,6 +183,7 @@ mod tests {
             "/mcp",
             "/__local/probe",
             "/funnels/demo/extra",
+            "/funnels/demo/completions/extra",
             "/unknown",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");

@@ -20,6 +20,7 @@ pub mod command_ids {
     pub const FUNNEL_REVISION_SAVE: &str = "funnel.revision.save";
     pub const FUNNEL_UNPUBLISH: &str = "funnel.unpublish";
     pub const FORM_SUBMISSION_LIST: &str = "form.submission.list";
+    pub const FORM_COMPLETION_REPORT: &str = "form.completion.report";
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +58,7 @@ pub(crate) enum CommandHandler {
     RevisionHistoryReadV2,
     List,
     FormSubmissionList,
+    FormCompletionReport,
     PublicRead,
     Publish,
     RevisionSave,
@@ -82,6 +84,7 @@ impl CommandHandler {
             Self::RevisionHistoryReadV2 => command_ids::FUNNEL_REVISION_HISTORY_READ_V2,
             Self::List => command_ids::FUNNEL_LIST,
             Self::FormSubmissionList => command_ids::FORM_SUBMISSION_LIST,
+            Self::FormCompletionReport => command_ids::FORM_COMPLETION_REPORT,
             Self::PublicRead => command_ids::FUNNEL_PUBLIC_READ,
             Self::Publish => command_ids::FUNNEL_PUBLISH,
             Self::RevisionSave => command_ids::FUNNEL_REVISION_SAVE,
@@ -133,7 +136,7 @@ pub(crate) struct ResolvedCommand<'key> {
     pub(crate) idempotency_key: Option<&'key str>,
 }
 
-const COMMAND_REGISTRY: [CommandDefinition; 19] = [
+const COMMAND_REGISTRY: [CommandDefinition; 20] = [
     CommandDefinition {
         id: command_ids::FUNNEL_CREATE,
         description: "Create a funnel from a built-in blueprint.",
@@ -237,6 +240,14 @@ const COMMAND_REGISTRY: [CommandDefinition; 19] = [
         idempotency_policy: IdempotencyPolicy::NotRequired,
         mcp_exposure: McpExposure::Hidden,
         handler: CommandHandler::FormSubmissionList,
+    },
+    CommandDefinition {
+        id: command_ids::FORM_COMPLETION_REPORT,
+        description: "Report retained form submission counts for the local owner.",
+        actor: CommandActor::LocalUser,
+        idempotency_policy: IdempotencyPolicy::NotRequired,
+        mcp_exposure: McpExposure::Hidden,
+        handler: CommandHandler::FormCompletionReport,
     },
     CommandDefinition {
         id: command_ids::FUNNEL_PUBLIC_READ,

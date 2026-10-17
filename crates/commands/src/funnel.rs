@@ -4,8 +4,8 @@ use std::fmt::{Display, Formatter};
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
-    DomainError, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section,
-    ThemePreset,
+    DomainError, FormCompletionPeriod, Funnel, FunnelBlueprint, FunnelId, RenderManifest, Revision,
+    RevisionId, Section, ThemePreset,
 };
 use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
@@ -13,9 +13,9 @@ use eez_render::{
 };
 use eez_storage::media::{MediaAssetError, MediaAssetRepository};
 use eez_storage::repository::{
-    EditorSaveMutation, FunnelRecord, MutationResult, NewFunnel, NewRevision,
-    PublicFormSubmissionCursor, PublicFormSubmissionRecord, PublicationMutation, Repository,
-    RepositoryError, RevisionRecord,
+    EditorSaveMutation, FormCompletionCountRow, FunnelRecord, MutationResult, NewFunnel,
+    NewRevision, PublicFormSubmissionCursor, PublicFormSubmissionRecord, PublicationMutation,
+    Repository, RepositoryError, RevisionRecord,
 };
 use eez_storage::stage::{
     DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
@@ -37,6 +37,10 @@ mod v2_edit_tests;
 #[cfg(test)]
 #[path = "funnel/v1_conversion_tests.rs"]
 mod v1_conversion_tests;
+
+#[cfg(test)]
+#[path = "funnel/form_completion_tests.rs"]
+mod form_completion_tests;
 
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
@@ -653,6 +657,26 @@ impl FormSubmissionListCommand {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct FormCompletionReportCommand {
+    funnel_id: String,
+    period_days: u8,
+}
+
+impl FormCompletionReportCommand {
+    const ID: &'static str = command_ids::FORM_COMPLETION_REPORT;
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        if FormCompletionPeriod::from_days(command.period_days).is_none() {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct FunnelEditorReadCommand {
     funnel_id: String,
 }
@@ -1004,6 +1028,29 @@ struct FormSubmissionListResult {
 }
 
 #[derive(Serialize)]
+struct FormCompletionReportResult {
+    command_id: &'static str,
+    funnel_id: String,
+    period_days: u8,
+    total_completions: u64,
+    days: Vec<DailyFormCompletionCount>,
+    forms: Vec<FormCompletionCount>,
+}
+
+#[derive(Serialize)]
+struct DailyFormCompletionCount {
+    utc_day: String,
+    completions: u64,
+    is_partial_today: bool,
+}
+
+#[derive(Serialize)]
+struct FormCompletionCount {
+    form_id: String,
+    completions: u64,
+}
+
+#[derive(Serialize)]
 struct FormSubmissionListItem {
     submission_id: String,
     funnel_name: String,
@@ -1159,6 +1206,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             CommandHandler::List => self.execute_list(parameters).await,
             CommandHandler::FormSubmissionList => {
                 self.execute_form_submission_list(parameters).await
+            }
+            CommandHandler::FormCompletionReport => {
+                self.execute_form_completion_report(parameters).await
             }
             CommandHandler::PublicRead => self.execute_public_read(parameters).await,
             CommandHandler::Publish => {
@@ -1321,6 +1371,24 @@ impl<'repo, 'database> Session<'repo, 'database> {
             next_cursor,
         })
         .map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_form_completion_report(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = FormCompletionReportCommand::from_json(parameters)?;
+        let period = FormCompletionPeriod::from_days(command.period_days)
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        let rows = self
+            .repository
+            .form_completion_count_rows(&command.funnel_id, period)
+            .await?;
+        if rows.is_empty() {
+            return Err(FunnelCommandError::FunnelNotFound);
+        }
+        let result = build_form_completion_report(command.funnel_id, period, rows)?;
+        serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
     }
 
     async fn execute_publish(
@@ -2852,6 +2920,61 @@ fn form_submission_list_item(
         submitted_at_label: record.submitted_at_label,
         submitted_at_datetime: record.submitted_at_datetime,
         expires_at_label: record.expires_at_label,
+    })
+}
+
+fn build_form_completion_report(
+    funnel_id: String,
+    period: FormCompletionPeriod,
+    rows: Vec<FormCompletionCountRow>,
+) -> Result<FormCompletionReportResult, FunnelCommandError> {
+    let mut daily_counts = BTreeMap::<String, u64>::new();
+    let mut form_counts = BTreeMap::<String, u64>::new();
+    for row in rows {
+        let count = u64::try_from(row.completions).map_err(|_| FunnelCommandError::Internal)?;
+        let daily_total = daily_counts.entry(row.utc_day).or_default();
+        *daily_total = daily_total
+            .checked_add(count)
+            .ok_or(FunnelCommandError::Internal)?;
+        if let Some(form_id) = row.form_id {
+            let form_total = form_counts.entry(form_id).or_default();
+            *form_total = form_total
+                .checked_add(count)
+                .ok_or(FunnelCommandError::Internal)?;
+        }
+    }
+    if daily_counts.len() != usize::from(period.days()) {
+        return Err(FunnelCommandError::Internal);
+    }
+    let day_count = daily_counts.len();
+    let total_completions = daily_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    let days = daily_counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (utc_day, completions))| DailyFormCompletionCount {
+            utc_day,
+            completions,
+            is_partial_today: index + 1 == day_count,
+        })
+        .collect();
+    let forms = form_counts
+        .into_iter()
+        .map(|(form_id, completions)| FormCompletionCount {
+            form_id,
+            completions,
+        })
+        .collect();
+    Ok(FormCompletionReportResult {
+        command_id: FormCompletionReportCommand::ID,
+        funnel_id,
+        period_days: period.days(),
+        total_completions,
+        days,
+        forms,
     })
 }
 

@@ -14,10 +14,11 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
+- Review retained form completion counts by UTC date and stable form ID from a funnel's editor. The report contains counts only; it does not track visits or calculate conversion rates.
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, CRM, analytics, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, CRM, visitor analytics or conversion attribution, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
 
 ## Scope
 
@@ -76,6 +77,7 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/media/:sha256` | Read a public, content-addressed image |
 | `/f/:slug` | Render a published funnel |
 | `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
+| `/api/funnels/:funnel_id/completions?period=7|30|90` | Read retained form completion counts for one funnel |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |
 

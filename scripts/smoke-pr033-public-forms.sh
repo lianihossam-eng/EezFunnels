@@ -619,6 +619,110 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             timeout=30,
         )
 
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command",
+                "UPDATE public_form_submissions SET submitted_at = unixepoch(date('now', '-1 day')) + 43200, expires_at = unixepoch() + 86400 WHERE submission_id = '90000000-0000-4000-8000-000000000001'; UPDATE public_form_submissions SET submitted_at = unixepoch() - 300, expires_at = unixepoch() WHERE submission_id = '90000000-0000-4000-8000-000000000002'",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        completion_status, completion_body, completion_headers = request(
+            "GET", f"/api/funnels/{funnel_id}/completions?period=7"
+        )
+        assert completion_status == 200, completion_body
+        assert completion_headers.get("cache-control") == "private, no-store", completion_headers
+        completion_report = json.loads(completion_body)
+        assert completion_report["funnel_id"] == funnel_id, completion_report
+        assert completion_report["period_days"] == 7, completion_report
+        assert completion_report["total_completions"] == 28, completion_report
+        assert len(completion_report["days"]) == 7, completion_report
+        assert completion_report["days"][-1]["is_partial_today"] is True, completion_report
+        assert all(not day["is_partial_today"] for day in completion_report["days"][:-1]), completion_report
+        assert [day["utc_day"] for day in completion_report["days"]] == sorted(
+            day["utc_day"] for day in completion_report["days"]
+        )
+        nonzero_days = [day for day in completion_report["days"] if day["completions"]]
+        assert [day["completions"] for day in nonzero_days] == [1, 27], nonzero_days
+        assert len(completion_report["forms"]) == 1, completion_report
+        assert completion_report["forms"][0] == {
+            "form_id": form_id,
+            "completions": 28,
+        }, {"report": completion_report, "expected_form_id": form_id}
+        assert set(completion_report) == {
+            "command_id", "correlation_id", "funnel_id", "period_days",
+            "total_completions", "days", "forms"
+        }, completion_report
+        assert b"ada@example.test" not in completion_body
+        assert b"request_consent_copy" not in completion_body
+        assert b"submission_id" not in completion_body
+
+        for period_days in (30, 90):
+            period_status, period_body, period_headers = request(
+                "GET", f"/api/funnels/{funnel_id}/completions?period={period_days}"
+            )
+            assert period_status == 200, period_body
+            assert period_headers.get("cache-control") == "private, no-store", period_headers
+            period_report = json.loads(period_body)
+            assert len(period_report["days"]) == period_days, period_report
+            assert period_report["total_completions"] == 28, period_report
+
+        for invalid_query in (
+            "",
+            "period=1",
+            "period=07",
+            "period=7&period=30",
+            "period=30&other=value",
+        ):
+            invalid_status, invalid_body, invalid_headers = request(
+                "GET", f"/api/funnels/{funnel_id}/completions?{invalid_query}"
+            )
+            assert invalid_status == 400, (invalid_query, invalid_status, invalid_body)
+            assert invalid_headers.get("cache-control") == "private, no-store", invalid_headers
+
+        completion_method_status, _, completion_method_headers = request(
+            "POST", f"/api/funnels/{funnel_id}/completions?period=7"
+        )
+        assert completion_method_status == 405, completion_method_status
+        assert completion_method_headers.get("cache-control") == "private, no-store", completion_method_headers
+
+        missing_funnel_status, _, missing_funnel_headers = request(
+            "GET", "/api/funnels/missing-funnel/completions?period=7"
+        )
+        assert missing_funnel_status == 404, missing_funnel_status
+        assert missing_funnel_headers.get("cache-control") == "private, no-store", missing_funnel_headers
+
+        host_denied_status, _, host_denied_headers = request(
+            "GET",
+            f"/api/funnels/{funnel_id}/completions?period=7",
+            headers={"Host": "not-allowed.example"},
+        )
+        assert host_denied_status == 403, host_denied_status
+        assert host_denied_headers.get("cache-control") == "private, no-store", host_denied_headers
+
+        isolation_status, isolation_body, _ = post_json(
+            "/api/funnels/v2",
+            {"name": "PR-051 report isolation", "blueprint": "lead_gen"},
+            "pr051-create-isolation-funnel",
+        )
+        assert isolation_status == 201, (isolation_status, isolation_body)
+        isolated_funnel_id = json.loads(isolation_body)["funnel"]["id"]
+        isolated_status, isolated_body, isolated_headers = request(
+            "GET", f"/api/funnels/{isolated_funnel_id}/completions?period=7"
+        )
+        assert isolated_status == 200, isolated_body
+        assert isolated_headers.get("cache-control") == "private, no-store", isolated_headers
+        isolated_report = json.loads(isolated_body)
+        assert isolated_report["total_completions"] == 0, isolated_report
+        assert len(isolated_report["days"]) == 7, isolated_report
+        assert all(day["completions"] == 0 for day in isolated_report["days"])
+        assert isolated_report["forms"] == []
+
         first_page_status, first_page_body, first_page_headers = request("GET", "/api/submissions")
         assert first_page_status == 200, first_page_body
         assert first_page_headers.get("cache-control") == "private, no-store", first_page_headers
@@ -631,11 +735,24 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert second_page_status == 200, second_page_body
         assert second_page_headers.get("cache-control") == "private, no-store", second_page_headers
         second_page = json.loads(second_page_body)
-        assert len(second_page["items"]) == 4, second_page
+        assert len(second_page["items"]) == 3, second_page
         assert second_page["next_cursor"] is None, second_page
         assert second_page["items"][-1]["fields"][0]["value"] == "Inbox fixture 01", second_page
 
         if os.environ.get("PR033_BROWSER") == "1":
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pr051-form-completions-browser.mjs"),
+                    f"http://localhost:{port}/funnels/{funnel_id}/completions",
+                    form_id,
+                    f"http://localhost:{port}/funnels/{isolated_funnel_id}/completions",
+                ],
+                cwd=root,
+                env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
+                check=True,
+                timeout=90,
+            )
             subprocess.run(
                 [
                     "node",

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "browser")]
+use crate::routes::RouteView;
 use eez_domain::document_v2::{
     is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult,
     IdKind, IdSource, NewBlock, SectionKind,
@@ -2345,6 +2347,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                 h1 { "{title}" }
                 p { class: "page-description", "Compose typed sections and blocks. Changes stay as a local draft until you save a new revision." }
                 code { class: "detail-id", "Funnel ID: {id}" }
+                Link { to: RouteView::FunnelCompletions { id: id.clone() }, class: "secondary-button completion-report-link", "View form completions" }
             }
             if view.loading {
                 section { class: "empty-state editor-loading", role: "status", "aria-label": "Typed funnel editor",

@@ -33,7 +33,7 @@ try {
 
   await page.getByRole("button", { name: "Load older submissions" }).click();
   await page.getByText("All retained submissions are shown.").waitFor({ state: "visible" });
-  assert.equal(await entries.count(), 29);
+  assert.equal(await entries.count(), 28);
   assert.equal(await page.getByText("Inbox fixture 01", { exact: true }).count(), 1);
 
   await page.setViewportSize({ width: 390, height: 844 });
