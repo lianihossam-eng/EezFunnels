@@ -651,13 +651,23 @@ struct FormSubmissionListCommand {
     cursor: Option<PublicFormSubmissionCursor>,
     #[serde(default)]
     status: Option<FormSubmissionStatus>,
+    #[serde(default)]
+    funnel_id: Option<String>,
 }
 
 impl FormSubmissionListCommand {
     const ID: &'static str = command_ids::FORM_SUBMISSION_LIST;
 
     fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
-        serde_json::from_str(parameters).map_err(Into::into)
+        let command: Self = serde_json::from_str(parameters)?;
+        if command.funnel_id.as_deref().is_some_and(|funnel_id| {
+            uuid::Uuid::parse_str(funnel_id)
+                .map(|parsed| parsed.to_string() != funnel_id)
+                .unwrap_or(true)
+        }) {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
     }
 }
 
@@ -1369,7 +1379,11 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let command = FormSubmissionListCommand::from_json(parameters)?;
         let page = self
             .repository
-            .list_public_form_submissions(command.cursor.as_ref(), command.status)
+            .list_public_form_submissions(
+                command.cursor.as_ref(),
+                command.status,
+                command.funnel_id.as_deref(),
+            )
             .await?;
         let revision_ids = page
             .items
@@ -1392,9 +1406,15 @@ impl<'repo, 'database> Session<'repo, 'database> {
             documents.insert(revision.id, (revision.funnel_id, document));
         }
         let next_cursor = if page.has_more {
-            page.items
-                .last()
-                .map(|item| format!("{}.{}", item.submitted_at, item.submission_id))
+            page.items.last().map(|item| {
+                format!(
+                    "{}.{}.{}.{}",
+                    item.submitted_at,
+                    item.submission_id,
+                    command.status.map_or("all", FormSubmissionStatus::as_str),
+                    command.funnel_id.as_deref().unwrap_or("all")
+                )
+            })
         } else {
             None
         };

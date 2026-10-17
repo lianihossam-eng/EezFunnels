@@ -6,7 +6,10 @@ import { chromium } from "@playwright/test";
 const require = createRequire(import.meta.url);
 const axeSource = require("axe-core").source;
 const pageUrl = process.argv[2];
+const funnelId = process.argv[3];
+const emptyFunnelId = process.argv[4];
 assert(pageUrl, "Pass the local submissions dashboard URL");
+assert(funnelId && emptyFunnelId, "Pass the matching and empty funnel IDs");
 
 const executablePath = await access("/usr/bin/chromium").then(
   () => "/usr/bin/chromium",
@@ -101,9 +104,80 @@ try {
   assert.equal(await entries.count(), 28);
   assert.equal(await page.getByText("Inbox fixture 01", { exact: true }).count(), 1);
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  const funnelFilter = page.getByRole("combobox", { name: "Filter submissions by funnel" });
+  const scopedList = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  await funnelFilter.selectOption(funnelId);
+  await scopedList;
+  await page.locator("details.submission-entry").first().waitFor({ state: "visible" });
+  assert.equal(await entries.count(), 25);
+  assert.ok((await entries.first().innerText()).includes("PR-033 local form smoke"));
+
+  const combinedFilters = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?status=qualified&funnel_id=${funnelId}`),
+  );
+  await statusFilter.selectOption("qualified");
+  await combinedFilters;
+  assert.equal(await entries.count(), 1);
+  await entries.filter({ hasText: "Grace Hopper" }).waitFor({ state: "visible" });
+
+  const filteredPages = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?status=new&funnel_id=${funnelId}`),
+  );
+  await statusFilter.selectOption("new");
+  await filteredPages;
+  assert.equal(await entries.count(), 25);
+  const filteredOlderPage = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?status=new&funnel_id=${funnelId}&cursor=`),
+  );
+  await page.getByRole("button", { name: "Load older submissions" }).click();
+  await filteredOlderPage;
+  await page.getByText("All retained submissions are shown.").waitFor({ state: "visible" });
+  assert.equal(await entries.count(), 27);
+
+  const resetToFunnel = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  await statusFilter.selectOption("all");
+  await resetToFunnel;
+  assert.equal(await entries.count(), 25);
+
+  const emptyFunnelList = page.waitForResponse((response) =>
+    response.request().method() === "GET" &&
+    response.url().includes(`/api/submissions?funnel_id=${emptyFunnelId}`),
+  );
+  await funnelFilter.selectOption(emptyFunnelId);
+  await emptyFunnelList;
+  await page.getByRole("heading", { name: "No submissions for this funnel" }).waitFor({ state: "visible" });
+  assert.equal(await entries.count(), 0);
+
+  const resetAllFunnels = page.waitForResponse((response) =>
+    response.request().method() === "GET" && response.url().endsWith("/api/submissions"),
+  );
+  await funnelFilter.selectOption("all");
+  await resetAllFunnels;
+  await page.locator("details.submission-entry").first().waitFor({ state: "visible" });
+  assert.equal(await entries.count(), 25);
+
+  await page.setViewportSize({ width: 320, height: 740 });
   const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   assert.ok(width.scroll <= width.viewport, JSON.stringify(width));
+  const filterLayout = await page.locator(".submission-filter-group").evaluateAll((groups) =>
+    groups.map((group) => ({
+      top: group.getBoundingClientRect().top,
+      selectWidth: group.querySelector("select").getBoundingClientRect().width,
+      selectRight: group.querySelector("select").getBoundingClientRect().right,
+    })),
+  );
+  assert.equal(filterLayout.length, 2, JSON.stringify(filterLayout));
+  assert.ok(filterLayout[1].top > filterLayout[0].top, JSON.stringify(filterLayout));
+  assert.ok(filterLayout.every(({ selectWidth, selectRight }) => selectWidth > 0 && selectRight <= width.viewport), JSON.stringify(filterLayout));
 
   await page.addScriptTag({ content: axeSource });
   const violations = await page.evaluate(async () => {
@@ -119,6 +193,28 @@ try {
   if (process.env.PR050_SCREENSHOT) {
     await page.screenshot({ path: process.env.PR050_SCREENSHOT, fullPage: true });
   }
+
+  const failurePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  let failFunnelList = true;
+  await failurePage.route("**/api/funnels", async (route) => {
+    if (failFunnelList) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    } else {
+      await route.continue();
+    }
+  });
+  await failurePage.goto(pageUrl, { waitUntil: "networkidle" });
+  await failurePage.getByText("Funnel filters could not be loaded.", { exact: false }).waitFor({ state: "visible" });
+  assert.equal(await failurePage.getByRole("combobox", { name: "Filter submissions by funnel" }).isDisabled(), true);
+  failFunnelList = false;
+  const retriedFunnels = failurePage.waitForResponse((response) =>
+    response.request().method() === "GET" && response.url().endsWith("/api/funnels"),
+  );
+  await failurePage.getByRole("button", { name: "Retry funnel filters" }).click();
+  const retryResponse = await retriedFunnels;
+  assert.equal(retryResponse.status(), 200);
+  await failurePage.waitForFunction(() => !document.getElementById("submission-funnel-filter")?.disabled);
+  await failurePage.close();
   console.log("PR-050 submissions browser triage, filtering, pagination, consent, responsive layout, and accessibility passed");
 } finally {
   await browser.close();

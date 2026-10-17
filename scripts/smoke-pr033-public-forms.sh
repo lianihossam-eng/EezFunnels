@@ -8,6 +8,8 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/eezfunnel-cache}"
 export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-/tmp/eezfunnel-npm-cache}"
 export WRANGLER_SEND_METRICS=false
 
+python3 "$repo_root/scripts/test-pr057-migration.py"
+
 python3 - "$repo_root" <<'PY'
 import hashlib
 import http.client
@@ -634,6 +636,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "status=unknown",
             "status=new&status=closed",
             "status=new&other=value",
+            "funnel_id=",
+            "funnel_id=not-a-uuid",
+            f"funnel_id={funnel_id}&funnel_id={funnel_id}",
         ):
             invalid_status, invalid_body, invalid_headers = request(
                 "GET", f"/api/submissions?{invalid_query}"
@@ -857,6 +862,53 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert second_page["items"][-1]["fields"][0]["value"] == "Inbox fixture 01", second_page
         assert all(item["status"] == "new" for item in second_page["items"]), second_page
 
+        scoped_contacted_status, scoped_contacted_body, scoped_contacted_headers = request(
+            "GET", f"/api/submissions?status=contacted&funnel_id={funnel_id}"
+        )
+        assert scoped_contacted_status == 200, scoped_contacted_body
+        assert scoped_contacted_headers.get("cache-control") == "private, no-store", scoped_contacted_headers
+        scoped_contacted = json.loads(scoped_contacted_body)
+        assert [item["submission_id"] for item in scoped_contacted["items"]] == [triage_id], scoped_contacted
+        scoped_page_one_status, scoped_page_one_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert scoped_page_one_status == 200, scoped_page_one_body
+        scoped_page_one = json.loads(scoped_page_one_body)
+        assert all(item["funnel_name"] == "PR-033 local form smoke" for item in scoped_page_one["items"]), scoped_page_one
+        assert scoped_page_one["next_cursor"], scoped_page_one
+        scoped_page_two_status, scoped_page_two_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}&cursor={scoped_page_one['next_cursor']}"
+        )
+        assert scoped_page_two_status == 200, scoped_page_two_body
+        scoped_page_two = json.loads(scoped_page_two_body)
+        assert scoped_page_two["next_cursor"] is None, scoped_page_two
+        assert all(item["funnel_name"] == "PR-033 local form smoke" for item in scoped_page_two["items"]), scoped_page_two
+        combined_page_one_status, combined_page_one_body, _ = request(
+            "GET", f"/api/submissions?status=new&funnel_id={funnel_id}"
+        )
+        assert combined_page_one_status == 200, combined_page_one_body
+        combined_page_one = json.loads(combined_page_one_body)
+        assert len(combined_page_one["items"]) == 25, combined_page_one
+        assert combined_page_one["next_cursor"], combined_page_one
+        combined_page_two_status, combined_page_two_body, _ = request(
+            "GET", f"/api/submissions?status=new&funnel_id={funnel_id}&cursor={combined_page_one['next_cursor']}"
+        )
+        assert combined_page_two_status == 200, combined_page_two_body
+        combined_page_two = json.loads(combined_page_two_body)
+        assert combined_page_two["next_cursor"] is None, combined_page_two
+        assert all(item["status"] == "new" for item in combined_page_two["items"]), combined_page_two
+        assert all(item["funnel_name"] == "PR-033 local form smoke" for item in combined_page_two["items"]), combined_page_two
+        mismatched_cursor_status, mismatched_cursor_body, mismatched_cursor_headers = request(
+            "GET", f"/api/submissions?status=contacted&funnel_id={funnel_id}&cursor={combined_page_one['next_cursor']}"
+        )
+        assert mismatched_cursor_status == 400, mismatched_cursor_body
+        assert mismatched_cursor_headers.get("cache-control") == "private, no-store", mismatched_cursor_headers
+        empty_scope_status, empty_scope_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={isolated_funnel_id}"
+        )
+        assert empty_scope_status == 200, empty_scope_body
+        assert json.loads(empty_scope_body)["items"] == [], empty_scope_body
+
         expired_status, _, expired_headers = request(
             "POST",
             "/api/submissions/90000000-0000-4000-8000-000000000002/status",
@@ -885,6 +937,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                     "node",
                     str(root / "scripts/test-pr050-submissions-browser.mjs"),
                     f"http://localhost:{port}/submissions",
+                    funnel_id,
+                    isolated_funnel_id,
                 ],
                 cwd=root,
                 env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
