@@ -8,6 +8,11 @@ use eez_domain::document_v2::{BlockId, PageId, SectionId};
 use eez_domain::ThemePreset;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+#[cfg(feature = "browser")]
+mod form_builder;
+#[cfg(feature = "browser")]
+use form_builder::V2FormEditor;
 #[cfg(feature = "browser")]
 use uuid::Uuid;
 
@@ -98,6 +103,9 @@ struct V2EditorState {
     new_block_kind: V2NewBlockKind,
     history: Vec<String>,
     history_cursor: usize,
+    form_input_drafts: BTreeMap<String, String>,
+    form_input_errors: BTreeMap<String, String>,
+    form_pending_field_types: BTreeMap<String, String>,
     revisions: Vec<V2RevisionSummary>,
     stage_capacity: Option<V2StageCapacity>,
     compare_revision_id: Option<String>,
@@ -160,6 +168,9 @@ impl Default for V2EditorState {
             new_block_kind: V2NewBlockKind::default(),
             history: Vec::new(),
             history_cursor: 0,
+            form_input_drafts: BTreeMap::new(),
+            form_input_errors: BTreeMap::new(),
+            form_pending_field_types: BTreeMap::new(),
             revisions: Vec::new(),
             stage_capacity: None,
             compare_revision_id: None,
@@ -386,11 +397,54 @@ impl V2EditorState {
     }
 
     fn can_undo(&self) -> bool {
-        self.can_edit() && self.history_cursor > 0
+        self.can_edit() && !self.has_uncommitted_form_inputs() && self.history_cursor > 0
     }
 
     fn can_redo(&self) -> bool {
-        self.can_edit() && self.history_cursor + 1 < self.history.len()
+        self.can_edit()
+            && !self.has_uncommitted_form_inputs()
+            && self.history_cursor + 1 < self.history.len()
+    }
+
+    fn has_uncommitted_form_inputs(&self) -> bool {
+        !self.form_input_drafts.is_empty()
+            || !self.form_input_errors.is_empty()
+            || !self.form_pending_field_types.is_empty()
+    }
+
+    fn prune_form_ui_state(&mut self, document: &DocumentV2) {
+        let is_active = |key: &str| {
+            let mut parts = key.split(':');
+            if parts.next() != Some("form") {
+                return false;
+            }
+            let Some(form_id) = parts.next() else {
+                return false;
+            };
+            let Some(kind) = parts.next() else {
+                return false;
+            };
+            let Some(form) = document
+                .forms()
+                .iter()
+                .find(|form| form.id().as_str() == form_id)
+            else {
+                return false;
+            };
+            match kind {
+                "setting" => true,
+                "field" => parts.next().is_some_and(|field_id| {
+                    form.fields()
+                        .iter()
+                        .any(|field| field.id().as_str() == field_id)
+                }),
+                _ => false,
+            }
+        };
+        self.form_input_drafts.retain(|key, _| is_active(key));
+        self.form_input_errors.retain(|key, _| is_active(key));
+        self.form_pending_field_types
+            .retain(|key, _| is_active(key));
     }
 
     fn can_save(&self) -> bool {
@@ -399,6 +453,7 @@ impl V2EditorState {
                 && !self.pending
                 && !self.saving
                 && !self.stale
+                && !self.has_uncommitted_form_inputs()
                 && self.stage_capacity.is_some()
                 && !document.has_images()
                 && (self.save_retryable || self.has_unsaved_changes())
@@ -414,6 +469,7 @@ impl V2EditorState {
             && !self.publication_pending
             && !self.publication_refreshing
             && !self.publication_state_unknown
+            && !self.has_uncommitted_form_inputs()
             && (retrying_publish || !self.has_unsaved_changes())
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
@@ -477,11 +533,22 @@ impl V2EditorState {
             operation_id: operation_id.clone(),
             next: 0,
         };
-        let outcome = document.apply(edit.clone(), &mut ids).ok()?;
+        let outcome = match document.apply(edit.clone(), &mut ids) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.error = Some(format!(
+                    "This change cannot be applied yet ({})",
+                    error.code()
+                ));
+                self.status = None;
+                return None;
+            }
+        };
         let document_json = outcome.document.canonical_json();
         if document_json == document.canonical_json() {
             return None;
         }
+        self.prune_form_ui_state(&outcome.document);
         self.select_focus(&outcome.focus);
         self.document = Some(outcome.document);
         self.push_history(document_json.clone());
@@ -1881,6 +1948,13 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                 .find(|section| Some(section.id().as_str()) == view.selected_section.as_deref())
         })
         .cloned();
+    let add_block_location = selected_section.as_ref().map(|section| {
+        (
+            section.id().clone(),
+            section.blocks().last().map(|block| block.id().clone()),
+        )
+    });
+    let add_form_location = add_block_location.clone();
     let locked = !view.can_edit();
     let dirty = view.has_unsaved_changes();
     let recovered_document = view
@@ -1994,6 +2068,14 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                 }
                 if let Some(error) = view.error.as_ref() {
                     p { class: "error-message editor-save-error", role: "alert", "{error}" }
+                }
+                if view.has_uncommitted_form_inputs() {
+                    p {
+                        class: "error-message editor-form-draft-note",
+                        role: "status",
+                        aria_live: "polite",
+                        "The preview and saved revision show the last valid form settings. Correct these form edits before saving or publishing."
+                    }
                 }
                 if view.stale {
                     p { class: "error-message", role: "status", "Your draft is still in this browser. Reload the current revision to compare it or restore it as a new draft." }
@@ -2373,13 +2455,23 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                         disabled: locked,
                                         onclick: move |_| {
                                             let kind = state.with(|state| state.new_block_kind);
-                                            dispatch_v2_edit(state, Edit::AddBlock {
-                                                section: section.id().clone(),
-                                                after: section.blocks().last().map(|block| block.id().clone()),
-                                                block: kind.create(),
-                                            });
+                                            let block = kind.create();
+                                            if let Some((section, after)) = add_block_location.clone() {
+                                                dispatch_v2_edit(state, Edit::AddBlock { section, after, block });
+                                            }
                                         },
                                         "Add block"
+                                    }
+                                    button {
+                                        class: "secondary-button",
+                                        r#type: "button",
+                                        disabled: locked,
+                                        onclick: move |_| {
+                                            if let Some((section, after)) = add_form_location.clone() {
+                                                dispatch_v2_edit(state, Edit::CreateForm { section, after });
+                                            }
+                                        },
+                                        "Add form"
                                     }
                                 }
                             }
@@ -2496,6 +2588,15 @@ fn V2BlockEditor(
 ) -> Element {
     let block_id = block.id().clone();
     let text = block_text(&block);
+    let form = match &block {
+        BlockV2::Form { form_id, .. } => state.with(|state| {
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.form(form_id).cloned())
+        }),
+        _ => None,
+    };
     let label = block_kind_label(&block);
     let control_label = format!("{label} content");
     let section_up = section_id.clone();
@@ -2523,8 +2624,10 @@ fn V2BlockEditor(
                 strong { "{label}" }
                 code { "{block.id().as_str()}" }
             }
-            if matches!(block, BlockV2::Image { .. } | BlockV2::Form { .. }) {
+            if matches!(block, BlockV2::Image { .. }) {
                 p { class: "editor-keyboard-help", "{text}" }
+            } else if let Some(form) = form {
+                V2FormEditor { state, form, locked }
             } else {
                 label { class: "editor-setting-control",
                     "{control_label}"
@@ -2903,6 +3006,57 @@ mod tests {
 
         state.stage_capacity = Some(stage_capacity());
         assert!(state.can_save());
+    }
+
+    #[test]
+    fn unresolved_form_inputs_block_save_publish_and_history_actions() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document(), Some(stage_capacity()))),
+        );
+        assert!(state.can_publish());
+
+        state
+            .form_input_drafts
+            .insert("form:lead:setting:purpose".to_owned(), String::new());
+        state.form_input_errors.insert(
+            "form:lead:setting:purpose".to_owned(),
+            "Enter a purpose.".to_owned(),
+        );
+        assert!(!state.can_publish());
+        assert!(state.has_uncommitted_form_inputs());
+
+        state.form_input_drafts.clear();
+        state.form_input_errors.clear();
+        state
+            .apply_local_edit(
+                Edit::SetThemePreset {
+                    preset: ThemePreset::Bold,
+                },
+                "form-draft-gating-test".to_owned(),
+            )
+            .expect("saved document accepts a theme edit");
+        state.pending = false;
+        assert!(state.can_save());
+        assert!(state.can_undo());
+
+        state.form_pending_field_types.insert(
+            "form:lead:field:field-name:type".to_owned(),
+            "checkbox".to_owned(),
+        );
+        assert!(!state.can_save());
+        assert!(!state.can_undo());
+
+        state.form_pending_field_types.clear();
+        state.history_cursor = 0;
+        assert!(state.can_redo());
+        state.form_pending_field_types.insert(
+            "form:lead:field:field-name:type".to_owned(),
+            "checkbox".to_owned(),
+        );
+        assert!(!state.can_redo());
     }
 
     #[test]

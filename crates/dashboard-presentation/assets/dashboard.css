@@ -890,6 +890,102 @@ h1 {
   resize: vertical;
 }
 
+.editor-form-builder {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e5e9f1;
+  border-radius: 9px;
+}
+
+.editor-form-builder > legend,
+.editor-form-field > legend {
+  padding: 0 5px;
+  color: #35415c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.editor-form-field-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.editor-form-field {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e5e9f1;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.editor-form-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 28px;
+  color: #35415c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.editor-form-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: #315ea8;
+}
+
+.editor-form-length-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.editor-form-add-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.editor-form-input-error {
+  color: #a43442;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.editor-form-input-error:empty {
+  display: none;
+}
+
+.editor-setting-control input[aria-invalid="true"],
+.editor-setting-control textarea[aria-invalid="true"],
+.editor-setting-control select[aria-invalid="true"] {
+  border-color: #a43442;
+}
+
+.editor-form-conversion-confirmation {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d9dfeb;
+  border-radius: 8px;
+  background: #fff;
+  color: #35415c;
+  font-size: 12px;
+}
+
+.editor-form-conversion-confirmation p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .editor-color-control {
   display: flex;
   align-items: center;
