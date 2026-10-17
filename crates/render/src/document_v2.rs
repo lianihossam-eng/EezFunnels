@@ -394,16 +394,9 @@ fn canonical_asset_records(
     document: &DocumentV2,
     assets: &[AssetDigestRecord],
 ) -> Result<Vec<AssetDigestRecord>, V2RenderError> {
-    let mut expected = BTreeSet::new();
-    for page in document.pages() {
-        for section in page.sections() {
-            for block in section.blocks() {
-                if let BlockV2::Image { asset_id, .. } = block {
-                    expected.insert(asset_id.as_str().to_owned());
-                }
-            }
-        }
-    }
+    let expected = referenced_asset_ids(document)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     if expected.is_empty() && assets.is_empty() {
         return Ok(Vec::new());
     }
@@ -432,6 +425,20 @@ fn canonical_asset_records(
     let mut records = assets.to_vec();
     records.sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
     Ok(records)
+}
+
+pub fn referenced_asset_ids(document: &DocumentV2) -> Vec<String> {
+    let mut asset_ids = BTreeSet::new();
+    for page in document.pages() {
+        for section in page.sections() {
+            for block in section.blocks() {
+                if let BlockV2::Image { asset_id, .. } = block {
+                    asset_ids.insert(asset_id.as_str().to_owned());
+                }
+            }
+        }
+    }
+    asset_ids.into_iter().collect()
 }
 
 fn is_lower_sha256(value: &str) -> bool {

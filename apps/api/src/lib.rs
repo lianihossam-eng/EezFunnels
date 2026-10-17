@@ -10,7 +10,7 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
-use eez_render::document_v2::validate_revision_v2;
+use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
 use serde::Serialize;
 use serde_json::Value;
@@ -914,12 +914,34 @@ async fn public_form_submission_response(
     if revision.id != submission_identity.revision_id {
         return form_submission_stale_revision_error(&correlation_id);
     }
-    let document = match validate_revision_v2(
+    let unvalidated_document =
+        match DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id) {
+            Ok(document) => document,
+            Err(_) => return funnel_slug_not_found_response(&correlation_id),
+        };
+    let asset_ids = eez_render::document_v2::referenced_asset_ids(&unvalidated_document);
+    let media_records = match bindings
+        .media_asset_repository()
+        .get_many_ready(&asset_ids)
+        .await
+    {
+        Ok(records) if records.len() == asset_ids.len() => records,
+        _ => return funnel_slug_not_found_response(&correlation_id),
+    };
+    let assets = media_records
+        .into_iter()
+        .map(|record| AssetDigestRecord {
+            asset_id: record.id,
+            sha256: record.sha256,
+        })
+        .collect::<Vec<_>>();
+    let document = match validate_revision_v2_with_assets(
         revision.schema_version,
         &revision.funnel_id,
         &revision.id,
         &revision.data_json,
         &revision.render_manifest_json,
+        &assets,
     ) {
         Ok(document) => document,
         Err(_) => return funnel_slug_not_found_response(&correlation_id),

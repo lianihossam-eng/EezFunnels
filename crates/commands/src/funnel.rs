@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
@@ -1044,7 +1044,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
         &self,
         document: &DocumentV2,
     ) -> Result<Vec<render_v2::AssetDigestRecord>, FunnelCommandError> {
-        let asset_ids = document_image_asset_ids(document);
+        let asset_ids = render_v2::referenced_asset_ids(document);
         if asset_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -2627,20 +2627,6 @@ fn render_published_revision_with_assets(
         }),
         _ => Err(FunnelCommandError::Internal),
     }
-}
-
-fn document_image_asset_ids(document: &DocumentV2) -> Vec<String> {
-    let mut asset_ids = BTreeSet::new();
-    for page in document.pages() {
-        for section in page.sections() {
-            for block in section.blocks() {
-                if let eez_domain::document_v2::BlockV2::Image { asset_id, .. } = block {
-                    asset_ids.insert(asset_id.as_str().to_owned());
-                }
-            }
-        }
-    }
-    asset_ids.into_iter().collect()
 }
 
 pub(super) fn reorder_snapshot(

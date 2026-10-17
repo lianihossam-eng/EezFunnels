@@ -1,6 +1,8 @@
 ALTER TABLE assets ADD COLUMN sha256 TEXT;
 ALTER TABLE assets ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'
     CHECK (status IN ('pending', 'ready'));
+ALTER TABLE assets ADD COLUMN upload_token TEXT;
+ALTER TABLE assets ADD COLUMN upload_started_at INTEGER;
 
 CREATE INDEX IF NOT EXISTS assets_status_created_idx
     ON assets(status, created_at DESC, id);

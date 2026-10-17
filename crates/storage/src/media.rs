@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
+use std::io::Cursor;
 
+use image::{ImageFormat, ImageReader, Limits};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
@@ -12,6 +14,9 @@ pub const MAX_MEDIA_LIBRARY_BYTES: u64 = 512 * 1024 * 1024;
 
 const MEDIA_LIST_LIMIT: i32 = 1_000;
 const MEDIA_QUERY_ID_LIMIT: usize = 100;
+const MEDIA_UPLOAD_LEASE_SECONDS: i32 = 300;
+const MAX_IMAGE_DIMENSION: u32 = 4_096;
+const MAX_DECODE_ALLOCATION: u64 = 64 * 1024 * 1024;
 const R2_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -86,6 +91,7 @@ struct MediaAssetRow {
     sha256: Option<String>,
     status: String,
     created_at: String,
+    upload_token: Option<String>,
 }
 
 impl MediaAssetRow {
@@ -131,7 +137,7 @@ impl<'a> MediaAssetRepository<'a> {
         let result = self
             .database
             .prepare(
-                "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at FROM assets WHERE status = 'ready' AND sha256 IS NOT NULL ORDER BY created_at DESC, id LIMIT ?",
+                "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at, upload_token, upload_started_at FROM assets WHERE status = 'ready' AND sha256 IS NOT NULL ORDER BY created_at DESC, id LIMIT ?",
             )
             .bind_refs([&limit])
             .map_err(MediaAssetError::Database)?
@@ -169,7 +175,7 @@ impl<'a> MediaAssetRepository<'a> {
                 .collect::<Vec<_>>()
                 .join(",");
             let query = format!(
-                "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at FROM assets WHERE status = 'ready' AND sha256 IS NOT NULL AND id IN ({placeholders}) ORDER BY id"
+                "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at, upload_token, upload_started_at FROM assets WHERE status = 'ready' AND sha256 IS NOT NULL AND id IN ({placeholders}) ORDER BY id"
             );
             let arguments = asset_ids
                 .iter()
@@ -207,7 +213,7 @@ impl<'a> MediaAssetRepository<'a> {
         if bytes.len() > MAX_MEDIA_ASSET_BYTES {
             return Err(MediaAssetError::UploadTooLarge);
         }
-        let Some(mime) = sniff_supported_image(bytes) else {
+        let Some(mime) = validate_supported_image(bytes) else {
             return Err(MediaAssetError::InvalidUpload);
         };
         if declared_mime != mime {
@@ -216,26 +222,66 @@ impl<'a> MediaAssetRepository<'a> {
 
         let sha256 = sha256_hex(bytes);
         let id_value = D1Type::Text(&sha256);
+        let attempt_token = uuid::Uuid::new_v4().simple().to_string();
         let existing = self.find_any(&sha256).await?;
-        if let Some(asset) = &existing {
-            if asset.sha256.as_deref() != Some(&sha256)
-                || asset.mime != mime
-                || asset.size_bytes != bytes.len() as u64
-            {
-                return Err(MediaAssetError::Conflict);
+        match existing {
+            Some(asset) => {
+                if asset.sha256.as_deref() != Some(&sha256)
+                    || asset.mime != mime
+                    || asset.size_bytes != bytes.len() as u64
+                {
+                    return Err(MediaAssetError::Conflict);
+                }
+                match asset.status.as_str() {
+                    "ready" => return asset.public_record(),
+                    "pending" => {
+                        let token = D1Type::Text(&attempt_token);
+                        let lease = D1Type::Integer(MEDIA_UPLOAD_LEASE_SECONDS);
+                        let result = self
+                            .database
+                            .prepare(
+                                "UPDATE assets SET upload_token = ?, upload_started_at = unixepoch() WHERE id = ? AND status = 'pending' AND COALESCE(upload_started_at, 0) <= unixepoch() - ?",
+                            )
+                            .bind_refs([&token, &id_value, &lease])
+                            .map_err(MediaAssetError::Database)?
+                            .run()
+                            .await
+                            .map_err(MediaAssetError::Database)?;
+                        if result
+                            .meta()
+                            .map_err(MediaAssetError::Database)?
+                            .and_then(|meta| meta.changes)
+                            != Some(1)
+                        {
+                            let current = self
+                                .find_any(&sha256)
+                                .await?
+                                .ok_or(MediaAssetError::IntegrityFailure)?;
+                            if current.status == "ready" {
+                                return current.public_record();
+                            }
+                            let token = current.upload_token.as_deref();
+                            if token != Some(&attempt_token) {
+                                return Err(MediaAssetError::Conflict);
+                            }
+                        }
+                    }
+                    _ => return Err(MediaAssetError::IntegrityFailure),
+                }
             }
-        } else {
-            let key = format!("media/{sha256}");
-            let key_value = D1Type::Text(&key);
-            let mime_value = D1Type::Text(mime);
-            let size_value = D1Type::Integer(
-                i32::try_from(bytes.len()).map_err(|_| MediaAssetError::UploadTooLarge)?,
-            );
-            let digest_value = D1Type::Text(&sha256);
-            if let Err(error) = self
+            None => {
+                let key = format!("media/{sha256}");
+                let key_value = D1Type::Text(&key);
+                let mime_value = D1Type::Text(mime);
+                let size_value = D1Type::Integer(
+                    i32::try_from(bytes.len()).map_err(|_| MediaAssetError::UploadTooLarge)?,
+                );
+                let digest_value = D1Type::Text(&sha256);
+                let token_value = D1Type::Text(&attempt_token);
+                if let Err(error) = self
                 .database
                 .prepare(
-                    "INSERT OR IGNORE INTO assets (id, r2_key, mime, size_bytes, sha256, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+                    "INSERT OR IGNORE INTO assets (id, r2_key, mime, size_bytes, sha256, status, upload_token, upload_started_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, unixepoch())",
                 )
                 .bind_refs([
                     &id_value,
@@ -243,6 +289,7 @@ impl<'a> MediaAssetRepository<'a> {
                     &mime_value,
                     &size_value,
                     &digest_value,
+                    &token_value,
                 ])
                 .map_err(MediaAssetError::Database)?
                 .run()
@@ -252,21 +299,31 @@ impl<'a> MediaAssetRepository<'a> {
                     return Err(MediaAssetError::QuotaExceeded);
                 }
                 return Err(MediaAssetError::Database(error));
-            }
-            let inserted = self
-                .find_any(&sha256)
-                .await?
-                .ok_or(MediaAssetError::IntegrityFailure)?;
-            if inserted.sha256.as_deref() != Some(&sha256)
-                || inserted.mime != mime
-                || inserted.size_bytes != bytes.len() as u64
-            {
-                return Err(MediaAssetError::Conflict);
+                }
+                let inserted = self
+                    .find_any(&sha256)
+                    .await?
+                    .ok_or(MediaAssetError::IntegrityFailure)?;
+                if inserted.sha256.as_deref() != Some(&sha256)
+                    || inserted.mime != mime
+                    || inserted.size_bytes != bytes.len() as u64
+                {
+                    return Err(MediaAssetError::Conflict);
+                }
+                if inserted.status != "pending"
+                    || inserted.upload_token.as_deref() != Some(&attempt_token)
+                {
+                    return inserted.public_record().map_err(|error| match error {
+                        MediaAssetError::NotFound => MediaAssetError::Conflict,
+                        other => other,
+                    });
+                }
             }
         }
 
         let r2_key = format!("media/{sha256}");
-        self.bucket
+        if let Err(error) = self
+            .bucket
             .put(r2_key, bytes.to_vec())
             .http_metadata(HttpMetadata {
                 content_type: Some(mime.to_owned()),
@@ -275,17 +332,33 @@ impl<'a> MediaAssetRepository<'a> {
             })
             .execute()
             .await
-            .map_err(MediaAssetError::ObjectStore)?;
+        {
+            self.delete_pending_upload(&sha256, &attempt_token).await?;
+            return Err(MediaAssetError::ObjectStore(error));
+        }
 
         let ready_status = D1Type::Text("ready");
         let digest_value = D1Type::Text(&sha256);
-        self.database
-            .prepare("UPDATE assets SET status = ? WHERE id = ? AND sha256 = ?")
-            .bind_refs([&ready_status, &id_value, &digest_value])
+        let no_token = D1Type::Null;
+        let token_value = D1Type::Text(&attempt_token);
+        let ready = self.database
+            .prepare("UPDATE assets SET status = ?, upload_token = ?, upload_started_at = NULL WHERE id = ? AND sha256 = ? AND status = 'pending' AND upload_token = ?")
+            .bind_refs([&ready_status, &no_token, &id_value, &digest_value, &token_value])
             .map_err(MediaAssetError::Database)?
             .run()
             .await
             .map_err(MediaAssetError::Database)?;
+        if ready
+            .meta()
+            .map_err(MediaAssetError::Database)?
+            .and_then(|meta| meta.changes)
+            != Some(1)
+        {
+            return self
+                .find_ready(&sha256)
+                .await?
+                .ok_or(MediaAssetError::Conflict);
+        }
 
         self.find_ready(&sha256)
             .await?
@@ -322,7 +395,7 @@ impl<'a> MediaAssetRepository<'a> {
 
     async fn find_any(&self, asset_id: &str) -> Result<Option<MediaAssetRow>, MediaAssetError> {
         self.query_one(
-            "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at FROM assets WHERE id = ?",
+            "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at, upload_token, upload_started_at FROM assets WHERE id = ?",
             asset_id,
         )
         .await
@@ -343,10 +416,27 @@ impl<'a> MediaAssetRepository<'a> {
         asset_id: &str,
     ) -> Result<Option<MediaAssetRow>, MediaAssetError> {
         self.query_one(
-            "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at FROM assets WHERE id = ? AND status = 'ready' AND sha256 IS NOT NULL",
+            "SELECT id, r2_key, mime, size_bytes, sha256, status, created_at, upload_token, upload_started_at FROM assets WHERE id = ? AND status = 'ready' AND sha256 IS NOT NULL",
             asset_id,
         )
         .await
+    }
+
+    async fn delete_pending_upload(
+        &self,
+        asset_id: &str,
+        attempt_token: &str,
+    ) -> Result<(), MediaAssetError> {
+        let id = D1Type::Text(asset_id);
+        let token = D1Type::Text(attempt_token);
+        self.database
+            .prepare("DELETE FROM assets WHERE id = ? AND status = 'pending' AND upload_token = ?")
+            .bind_refs([&id, &token])
+            .map_err(MediaAssetError::Database)?
+            .run()
+            .await
+            .map_err(MediaAssetError::Database)?;
+        Ok(())
     }
 
     async fn query_one(
@@ -413,38 +503,67 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-pub fn sniff_supported_image(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("image/png")
+pub fn validate_supported_image(bytes: &[u8]) -> Option<&'static str> {
+    let (mime, format) = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        ("image/png", ImageFormat::Png)
     } else if bytes.starts_with(b"\xff\xd8\xff") && bytes.ends_with(b"\xff\xd9") {
-        Some("image/jpeg")
+        ("image/jpeg", ImageFormat::Jpeg)
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("image/webp")
+        ("image/webp", ImageFormat::WebP)
     } else {
-        None
-    }
+        return None;
+    };
+
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODE_ALLOCATION);
+    reader.limits(limits);
+    reader.decode().ok().map(|_| mime)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::DynamicImage;
+
+    fn encoded_image(format: ImageFormat) -> Vec<u8> {
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut bytes, format)
+            .expect("valid image can be encoded");
+        bytes.into_inner()
+    }
 
     #[test]
-    fn accepts_only_supported_image_signatures_with_matching_mime_types() {
+    fn decodes_only_valid_supported_image_files() {
         assert_eq!(
-            sniff_supported_image(b"\x89PNG\r\n\x1a\nimage"),
+            validate_supported_image(&encoded_image(ImageFormat::Png)),
             Some("image/png")
         );
         assert_eq!(
-            sniff_supported_image(b"\xff\xd8\xffjpeg\xff\xd9"),
+            validate_supported_image(&encoded_image(ImageFormat::Jpeg)),
             Some("image/jpeg")
         );
         assert_eq!(
-            sniff_supported_image(b"RIFFxxxxWEBPdata"),
+            validate_supported_image(&encoded_image(ImageFormat::WebP)),
             Some("image/webp")
         );
-        assert_eq!(sniff_supported_image(b"<svg></svg>"), None);
-        assert_eq!(sniff_supported_image(b"not an image"), None);
+        assert_eq!(validate_supported_image(b"\x89PNG\r\n\x1a\n"), None);
+        assert_eq!(validate_supported_image(b"\xff\xd8\xffjpeg\xff\xd9"), None);
+        assert_eq!(validate_supported_image(b"RIFFxxxxWEBPdata"), None);
+        assert_eq!(validate_supported_image(b"<svg></svg>"), None);
+        assert_eq!(validate_supported_image(b"not an image"), None);
+    }
+
+    #[test]
+    fn rejects_images_that_exceed_decode_dimension_limits() {
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::new_rgb8(MAX_IMAGE_DIMENSION + 1, 1)
+            .write_to(&mut bytes, ImageFormat::Png)
+            .expect("valid image can be encoded");
+        assert_eq!(validate_supported_image(bytes.get_ref()), None);
     }
 
     #[test]
