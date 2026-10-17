@@ -592,21 +592,29 @@ PY
   --command "DELETE FROM revisions WHERE id = 'pr029-v2-publish-revision';" >/dev/null
 
 expired_stage_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+expired_attempt_id="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+expired_receiving_attempt_id="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
   --command "INSERT INTO v2_document_stages (stage_id_hash, funnel_id, base_revision_id, purpose, document_type, document_version, schema_version, manifest_version, maximum_bytes, expected_length, expected_sha256, expires_at, state) VALUES ('$expired_stage_hash', '$funnel_id', '$revision_id', 'full_snapshot', 'eezfunnel.document', 2, 2, 2, 1048576, 1, '0000000000000000000000000000000000000000000000000000000000000000', CAST(strftime('%s', 'now') AS INTEGER) - 1, 'issued');" >/dev/null
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --command "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at, tombstone_expires_at) VALUES ('$expired_attempt_id', '$expired_stage_hash', 'abandoned', 1, '0000000000000000000000000000000000000000000000000000000000000000', CAST(strftime('%s', 'now') AS INTEGER) - 3600, CAST(strftime('%s', 'now') AS INTEGER) - 1);" >/dev/null
+./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" \
+  --command "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at) VALUES ('$expired_receiving_attempt_id', '$expired_stage_hash', 'receiving', 1, '0000000000000000000000000000000000000000000000000000000000000000', CAST(strftime('%s', 'now') AS INTEGER) - 3600);" >/dev/null
 scheduled_status="$(request GET '/__scheduled?cron=%2A%2F15+%2A+%2A+%2A+%2A' "$state_dir/scheduled.txt" "$state_dir/scheduled.headers")"
 test "$scheduled_status" = 200
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
-  --command "SELECT COUNT(*) AS held_count FROM v2_document_stages WHERE stage_id_hash = '$expired_stage_hash' AND slot_held = 1;" > "$state_dir/scheduled-cleanup.json"
+  --command "SELECT (SELECT COUNT(*) FROM v2_document_stages WHERE stage_id_hash = '$expired_stage_hash' AND slot_held = 1) AS held_stage_count, (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE attempt_id IN ('$expired_attempt_id', '$expired_receiving_attempt_id') AND quota_held = 1) AS held_attempt_count;" > "$state_dir/scheduled-cleanup.json"
 python3 - "$state_dir/scheduled-cleanup.json" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as result_file:
     result = json.load(result_file)
-assert result[-1]["results"][0]["held_count"] == 0, result
+state = result[-1]["results"][0]
+assert state["held_stage_count"] == 0, state
+assert state["held_attempt_count"] == 0, state
 PY
-printf 'scheduled-stage-cleanup=expired-stage-released\n'
+printf 'scheduled-stage-cleanup=expired-stage-and-both-attempt-quotas-released\n'
 
 foreign_create_status="$(request POST /api/funnels "$state_dir/foreign-create.json" "$state_dir/foreign-create.headers" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pr014-foreign-create' \

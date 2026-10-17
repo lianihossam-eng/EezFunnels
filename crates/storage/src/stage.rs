@@ -82,9 +82,9 @@ pub struct StageCleanupProgress {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct StageCapacitySnapshot {
     pub orphan_byte_budget: u64,
-    pub orphan_bytes_spent: u64,
+    pub orphan_bytes_held: u64,
     pub orphan_key_budget: u64,
-    pub orphan_keys_spent: u64,
+    pub orphan_keys_held: u64,
     pub worst_case_orphan_bytes: u64,
     pub worst_case_orphan_keys: u64,
 }
@@ -101,9 +101,12 @@ struct StageControl {
     format_version: u8,
     sequence: String,
     orphan_byte_budget: u64,
-    orphan_bytes_spent: u64,
+    // Retained in the stored v1 control shape; live reservations are tracked in D1 now.
+    #[serde(rename = "orphan_bytes_spent")]
+    _legacy_orphan_bytes_spent: u64,
     orphan_key_budget: u64,
-    orphan_keys_spent: u64,
+    #[serde(rename = "orphan_keys_spent")]
+    _legacy_orphan_keys_spent: u64,
 }
 
 impl StageControl {
@@ -112,9 +115,9 @@ impl StageControl {
             format_version: STAGE_CONTROL_FORMAT_VERSION,
             sequence: "00000000000000000000".to_owned(),
             orphan_byte_budget: capacity.orphan_byte_budget,
-            orphan_bytes_spent: 0,
+            _legacy_orphan_bytes_spent: 0,
             orphan_key_budget: capacity.orphan_key_budget,
-            orphan_keys_spent: 0,
+            _legacy_orphan_keys_spent: 0,
         }
     }
 
@@ -122,9 +125,7 @@ impl StageControl {
         self.format_version == STAGE_CONTROL_FORMAT_VERSION
             && is_sequence(&self.sequence)
             && self.orphan_byte_budget > 0
-            && self.orphan_bytes_spent <= self.orphan_byte_budget
             && self.orphan_key_budget > 0
-            && self.orphan_keys_spent <= self.orphan_key_budget
     }
 
     fn increase_capacity(&mut self, capacity: StageCapacity) -> RepositoryResult<bool> {
@@ -140,31 +141,10 @@ impl StageControl {
         Ok(changed)
     }
 
-    fn allocate_attempt(
-        &mut self,
-        expected_bytes: u64,
-        capacity: StageCapacity,
-    ) -> RepositoryResult<String> {
-        self.increase_capacity(capacity)?;
+    fn allocate_sequence(&mut self) -> RepositoryResult<String> {
         let sequence =
             increment_sequence(&self.sequence).ok_or(RepositoryError::StageControlUnavailable)?;
-        let bytes_spent = self
-            .orphan_bytes_spent
-            .checked_add(expected_bytes)
-            .ok_or(RepositoryError::StageCapacityReached)?;
-        let keys_spent = self
-            .orphan_keys_spent
-            .checked_add(1)
-            .ok_or(RepositoryError::StageCapacityReached)?;
-        if expected_bytes == 0
-            || bytes_spent > self.orphan_byte_budget
-            || keys_spent > self.orphan_key_budget
-        {
-            return Err(RepositoryError::StageCapacityReached);
-        }
         self.sequence = sequence.clone();
-        self.orphan_bytes_spent = bytes_spent;
-        self.orphan_keys_spent = keys_spent;
         Ok(sequence)
     }
 }
@@ -182,6 +162,12 @@ struct StageAdmissionState {
     base_matches: i64,
     active_stage_exists: i64,
     held_slots: i64,
+}
+
+#[derive(Deserialize)]
+struct StageAttemptUsage {
+    held_bytes: i64,
+    held_keys: i64,
 }
 
 #[derive(Deserialize)]
@@ -219,6 +205,12 @@ struct SweepStateRecord {
 #[derive(Deserialize)]
 struct TerminalStageRecord {
     stage_id_hash: String,
+    object_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AbandonedAttemptRecord {
+    attempt_id: String,
     object_key: Option<String>,
 }
 
@@ -384,7 +376,7 @@ impl<'a> DocumentStageRepository<'a> {
 
         let attempt_id = random_stage_id().map_err(|_| RepositoryError::StageIdGenerationFailed)?;
         self.reserve_attempt(&stage, &attempt_id).await?;
-        let sequence = match self.allocate_sequence(stage.expected_length as u64).await {
+        let sequence = match self.allocate_sequence().await {
             Ok(sequence) => sequence,
             Err(error) => {
                 self.release_unwritten_attempt(&attempt_id).await?;
@@ -439,14 +431,19 @@ impl<'a> DocumentStageRepository<'a> {
 
     pub async fn capacity_snapshot(&self) -> RepositoryResult<StageCapacitySnapshot> {
         self.ensure_sequence_control().await?;
-        let (control, _) = self.read_sequence_control().await?;
+        let capacity = self
+            .capacity
+            .ok_or(RepositoryError::StageControlUnavailable)?;
+        let usage = self.attempt_usage().await?;
         Ok(StageCapacitySnapshot {
-            orphan_byte_budget: control.orphan_byte_budget,
-            orphan_bytes_spent: control.orphan_bytes_spent,
-            orphan_key_budget: control.orphan_key_budget,
-            orphan_keys_spent: control.orphan_keys_spent,
-            worst_case_orphan_bytes: control.orphan_byte_budget,
-            worst_case_orphan_keys: control.orphan_key_budget,
+            orphan_byte_budget: capacity.orphan_byte_budget,
+            orphan_bytes_held: u64::try_from(usage.held_bytes)
+                .map_err(|_| RepositoryError::StageControlUnavailable)?,
+            orphan_key_budget: capacity.orphan_key_budget,
+            orphan_keys_held: u64::try_from(usage.held_keys)
+                .map_err(|_| RepositoryError::StageControlUnavailable)?,
+            worst_case_orphan_bytes: capacity.orphan_byte_budget,
+            worst_case_orphan_keys: capacity.orphan_key_budget,
         })
     }
 
@@ -508,13 +505,17 @@ impl<'a> DocumentStageRepository<'a> {
                     "UPDATE v2_document_stages SET state = 'expired' WHERE state IN ('issued', 'uploaded') AND (expires_at <= ? OR NOT EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = v2_document_stages.funnel_id AND revision_id = v2_document_stages.base_revision_id))",
                 ).bind_refs([&now_value])?,
                 self.database.prepare(
-                    "UPDATE v2_document_stage_attempts SET state = 'abandoned', tombstone_expires_at = ?, quota_held = 1 WHERE state = 'receiving' AND deadline_at <= ? AND quota_held = 1",
+                    "UPDATE v2_document_stage_attempts SET state = 'abandoned', tombstone_expires_at = ?, quota_held = 1 WHERE state = 'receiving' AND object_key IS NOT NULL AND deadline_at <= ? AND quota_held = 1",
                 ).bind_refs([&tombstone_value, &grace_value])?,
+                self.database.prepare(
+                    "DELETE FROM v2_document_stage_attempts WHERE state = 'receiving' AND object_key IS NULL AND deadline_at <= ? AND quota_held = 1",
+                ).bind_refs([&grace_value])?,
             ])
             .await?;
 
         self.cleanup_terminal_stages().await?;
-        self.retire_terminal_attempts(now).await?;
+        self.cleanup_abandoned_attempts(now).await?;
+        self.retire_terminal_attempts().await?;
 
         let current_state = self.read_sweep_state().await?;
         let start_new_pass = current_state.high_water_sequence.is_none();
@@ -858,13 +859,9 @@ impl<'a> DocumentStageRepository<'a> {
         Err(RepositoryError::StageUnavailable)
     }
 
-    async fn retire_terminal_attempts(&self, now: i64) -> RepositoryResult<()> {
-        let now_value = D1Type::Real(now as f64);
+    async fn retire_terminal_attempts(&self) -> RepositoryResult<()> {
         self.database
             .batch(vec![
-                self.database.prepare(
-                    "DELETE FROM v2_document_stage_attempts WHERE state = 'abandoned' AND tombstone_expires_at <= ?",
-                ).bind_refs([&now_value])?,
                 self.database.prepare(
                     "DELETE FROM v2_document_stage_attempts WHERE state = 'complete' AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = v2_document_stage_attempts.stage_id_hash AND slot_held = 0)",
                 ),
@@ -873,6 +870,62 @@ impl<'a> DocumentStageRepository<'a> {
                 ),
             ])
             .await?;
+        Ok(())
+    }
+
+    async fn cleanup_abandoned_attempts(&self, now: i64) -> RepositoryResult<()> {
+        let now_value = D1Type::Real(now as f64);
+        let limit = D1Type::Integer(V2_DOCUMENT_STAGE_ATTEMPT_LIMIT);
+        let attempts = self
+            .database
+            .prepare(
+                "SELECT attempt_id, object_key FROM v2_document_stage_attempts WHERE state = 'abandoned' AND tombstone_expires_at <= ? ORDER BY tombstone_expires_at, attempt_id LIMIT ?",
+            )
+            .bind_refs([&now_value, &limit])?
+            .all()
+            .await?
+            .results::<AbandonedAttemptRecord>()?;
+        for attempt in attempts {
+            if let Some(object_key) = attempt.object_key.as_deref() {
+                if self.is_live_stage_reference(object_key).await? {
+                    continue;
+                }
+                if self
+                    .bucket
+                    .head(object_key.to_owned())
+                    .await
+                    .map_err(|_| RepositoryError::StageStorageUnavailable)?
+                    .is_some()
+                {
+                    self.bucket
+                        .delete(object_key.to_owned())
+                        .await
+                        .map_err(|_| RepositoryError::StageStorageUnavailable)?;
+                    if self
+                        .bucket
+                        .head(object_key.to_owned())
+                        .await
+                        .map_err(|_| RepositoryError::StageStorageUnavailable)?
+                        .is_some()
+                    {
+                        return Err(RepositoryError::StageStorageUnavailable);
+                    }
+                }
+            }
+            let attempt_id = D1Type::Text(&attempt.attempt_id);
+            let object_key = attempt
+                .object_key
+                .as_deref()
+                .map(D1Type::Text)
+                .unwrap_or(D1Type::Null);
+            self.database
+                .prepare(
+                    "DELETE FROM v2_document_stage_attempts WHERE attempt_id = ? AND state = 'abandoned' AND tombstone_expires_at <= ? AND object_key IS ?",
+                )
+                .bind_refs([&attempt_id, &now_value, &object_key])?
+                .run()
+                .await?;
+        }
         Ok(())
     }
 
@@ -1021,6 +1074,9 @@ impl<'a> DocumentStageRepository<'a> {
         stage: &StageUploadRecord,
         attempt_id: &str,
     ) -> RepositoryResult<()> {
+        let capacity = self
+            .capacity
+            .ok_or(RepositoryError::StageControlUnavailable)?;
         let now = self.database_now().await?;
         let deadline = now
             .checked_add(V2_DOCUMENT_STAGE_ATTEMPT_TTL_SECONDS)
@@ -1035,9 +1091,11 @@ impl<'a> DocumentStageRepository<'a> {
         );
         let expected_digest = D1Type::Text(&stage.expected_sha256);
         let attempt_limit = D1Type::Integer(V2_DOCUMENT_STAGE_ATTEMPT_LIMIT);
+        let byte_budget = D1Type::Real(capacity.orphan_byte_budget as f64);
+        let key_budget = D1Type::Real(capacity.orphan_key_budget as f64);
         self.database
             .prepare(
-                "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at) SELECT ?, ?, 'receiving', ?, ?, ? WHERE EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ?) AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) < ?",
+                "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at) SELECT ?, ?, 'receiving', ?, ?, ? WHERE EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ?) AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) < ? AND (SELECT COALESCE(SUM(expected_length), 0) FROM v2_document_stage_attempts WHERE quota_held = 1) + ? <= ? AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) + 1 <= ?",
             )
             .bind_refs([
                 &attempt_id_value,
@@ -1048,6 +1106,9 @@ impl<'a> DocumentStageRepository<'a> {
                 &stage_hash,
                 &now_value,
                 &attempt_limit,
+                &expected_length,
+                &byte_budget,
+                &key_budget,
             ])?
             .run()
             .await?;
@@ -1062,7 +1123,19 @@ impl<'a> DocumentStageRepository<'a> {
         if state.base_matches == 0 || state.active_stage_exists == 0 {
             return Err(RepositoryError::StageUnavailable);
         }
+        if stage.expires_at <= self.database_now().await? {
+            return Err(RepositoryError::StageUnavailable);
+        }
         if self.attempt_slots_held().await? >= i64::from(V2_DOCUMENT_STAGE_ATTEMPT_LIMIT) {
+            return Err(RepositoryError::StageCapacityReached);
+        }
+        let usage = self.attempt_usage().await?;
+        if !stage_quota_fits(
+            usage.held_bytes,
+            usage.held_keys,
+            stage.expected_length as u64,
+            capacity,
+        ) {
             return Err(RepositoryError::StageCapacityReached);
         }
         Err(RepositoryError::StageUnavailable)
@@ -1086,17 +1159,16 @@ impl<'a> DocumentStageRepository<'a> {
     }
 
     async fn attempt_slots_held(&self) -> RepositoryResult<i64> {
-        #[derive(Deserialize)]
-        struct Count {
-            count: i64,
-        }
+        Ok(self.attempt_usage().await?.held_keys)
+    }
+
+    async fn attempt_usage(&self) -> RepositoryResult<StageAttemptUsage> {
         self.database
             .prepare(
-                "SELECT COUNT(*) AS count FROM v2_document_stage_attempts WHERE quota_held = 1",
+                "SELECT COALESCE(SUM(expected_length), 0) AS held_bytes, COUNT(*) AS held_keys FROM v2_document_stage_attempts WHERE quota_held = 1",
             )
-            .first::<Count>(None)
+            .first::<StageAttemptUsage>(None)
             .await?
-            .map(|count| count.count)
             .ok_or_else(|| {
                 Error::RustError("stage attempt quota could not be read".to_owned()).into()
             })
@@ -1244,13 +1316,12 @@ impl<'a> DocumentStageRepository<'a> {
             .ok_or_else(|| Error::RustError("database time could not be read".to_owned()).into())
     }
 
-    async fn allocate_sequence(&self, expected_bytes: u64) -> RepositoryResult<String> {
-        let capacity = self
-            .capacity
+    async fn allocate_sequence(&self) -> RepositoryResult<String> {
+        self.capacity
             .ok_or(RepositoryError::StageControlUnavailable)?;
         for _ in 0..R2_SEQUENCE_RETRIES {
             let (mut current, etag) = self.read_sequence_control().await?;
-            let next = current.allocate_attempt(expected_bytes, capacity)?;
+            let next = current.allocate_sequence()?;
             let encoded = serde_json::to_vec(&current).map_err(|_| RepositoryError::InvalidJson)?;
             if conditional_r2_put(self.bucket, R2_SEQUENCE_KEY, &encoded, r2_if_match(&etag))
                 .await
@@ -1396,6 +1467,24 @@ fn is_live_uploaded_retry(
         && stage.uploaded_sha256.as_deref() == Some(digest)
 }
 
+fn stage_quota_fits(
+    held_bytes: i64,
+    held_keys: i64,
+    expected_bytes: u64,
+    capacity: StageCapacity,
+) -> bool {
+    let (Ok(held_bytes), Ok(held_keys)) = (u64::try_from(held_bytes), u64::try_from(held_keys))
+    else {
+        return false;
+    };
+    held_bytes
+        .checked_add(expected_bytes)
+        .is_some_and(|total| total <= capacity.orphan_byte_budget)
+        && held_keys
+            .checked_add(1)
+            .is_some_and(|total| total <= capacity.orphan_key_budget)
+}
+
 fn valid_idempotency_key(value: &str) -> bool {
     (1..=128).contains(&value.len())
         && value
@@ -1531,8 +1620,9 @@ fn r2_if_absent() -> Conditional {
 mod tests {
     use super::{
         encode_hex, increment_sequence, is_live_uploaded_retry, is_lower_hex_digest, is_sequence,
-        r2_if_absent, r2_if_match, sha256_hex, stage_object_key, stage_sequence_from_key,
-        validate_finalize, StageCapacity, StageControl, StageFinalizeMutation, StageUploadRecord,
+        r2_if_absent, r2_if_match, sha256_hex, stage_object_key, stage_quota_fits,
+        stage_sequence_from_key, validate_finalize, StageCapacity, StageControl,
+        StageFinalizeMutation, StageUploadRecord,
     };
     use crate::repository::{NewRevision, RepositoryError};
 
@@ -1620,39 +1710,16 @@ mod tests {
     }
 
     #[test]
-    fn external_attempt_budget_is_monotone_and_charges_bytes_and_keys() {
+    fn stage_quota_tracks_only_live_attempt_reservations() {
         let capacity = StageCapacity {
             orphan_byte_budget: 4,
             orphan_key_budget: 2,
         };
-        let mut control = StageControl::initial(capacity);
-
-        assert_eq!(
-            control.allocate_attempt(3, capacity).unwrap(),
-            "00000000000000000001"
-        );
-        assert_eq!(control.orphan_bytes_spent, 3);
-        assert_eq!(control.orphan_keys_spent, 1);
-        assert!(matches!(
-            control.allocate_attempt(2, capacity),
-            Err(RepositoryError::StageCapacityReached)
-        ));
-        assert_eq!(control.sequence, "00000000000000000001");
-        assert_eq!(control.orphan_bytes_spent, 3);
-        assert_eq!(
-            control.allocate_attempt(1, capacity).unwrap(),
-            "00000000000000000002"
-        );
-        assert_eq!(control.orphan_bytes_spent, 4);
-        assert_eq!(control.orphan_keys_spent, 2);
-        assert!(matches!(
-            control.allocate_attempt(1, capacity),
-            Err(RepositoryError::StageCapacityReached)
-        ));
-        assert!(matches!(
-            control.allocate_attempt(0, capacity),
-            Err(RepositoryError::StageCapacityReached)
-        ));
+        assert!(stage_quota_fits(0, 0, 4, capacity));
+        assert!(!stage_quota_fits(0, 0, 5, capacity));
+        assert!(!stage_quota_fits(4, 0, 1, capacity));
+        assert!(!stage_quota_fits(0, 2, 1, capacity));
+        assert!(stage_quota_fits(0, 0, 1, capacity));
     }
 
     #[test]
@@ -1675,7 +1742,7 @@ mod tests {
             control.increase_capacity(initial),
             Err(RepositoryError::StageControlUnavailable)
         ));
-        control.orphan_bytes_spent = control.orphan_byte_budget + 1;
+        control.sequence = "not-a-sequence".to_owned();
         assert!(!control.validate());
     }
 
