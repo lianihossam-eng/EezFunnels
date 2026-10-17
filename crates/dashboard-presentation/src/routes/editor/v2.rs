@@ -1,7 +1,7 @@
 use super::*;
 use eez_domain::document_v2::{
-    ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult, IdKind, IdSource,
-    NewBlock, SectionKind,
+    is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult,
+    IdKind, IdSource, NewBlock, SectionKind,
 };
 #[cfg(feature = "browser")]
 use eez_domain::document_v2::{BlockId, PageId, SectionId};
@@ -100,6 +100,12 @@ struct V2EditorState {
     preview_html: String,
     selected_page: String,
     selected_section: Option<String>,
+    page_input_page: Option<String>,
+    page_title_input: String,
+    page_slug_input: String,
+    page_input_error: Option<String>,
+    page_input_error_field: Option<PageInputErrorField>,
+    delete_page_confirmation: Option<String>,
     new_section_kind: SectionKind,
     new_block_kind: V2NewBlockKind,
     history: Vec<String>,
@@ -144,6 +150,12 @@ struct V2EditorState {
     publication_body: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageInputErrorField {
+    Title,
+    Slug,
+}
+
 impl Default for V2EditorState {
     fn default() -> Self {
         Self {
@@ -165,6 +177,12 @@ impl Default for V2EditorState {
             preview_html: String::new(),
             selected_page: String::new(),
             selected_section: None,
+            page_input_page: None,
+            page_title_input: String::new(),
+            page_slug_input: String::new(),
+            page_input_error: None,
+            page_input_error_field: None,
+            delete_page_confirmation: None,
             new_section_kind: SectionKind::Features,
             new_block_kind: V2NewBlockKind::default(),
             history: Vec::new(),
@@ -363,6 +381,7 @@ impl V2EditorState {
                 self.preview_html = loaded.preview_html;
                 self.selected_page = loaded.selected_page;
                 self.selected_section = loaded.selected_section;
+                self.clear_page_inputs();
                 self.revisions = loaded.revisions;
                 self.stage_capacity = loaded.stage_capacity;
                 self.recovered_draft = loaded.recovered_draft;
@@ -398,19 +417,136 @@ impl V2EditorState {
     }
 
     fn can_undo(&self) -> bool {
-        self.can_edit() && !self.has_uncommitted_form_inputs() && self.history_cursor > 0
+        self.can_edit() && !self.has_uncommitted_editor_inputs() && self.history_cursor > 0
     }
 
     fn can_redo(&self) -> bool {
         self.can_edit()
-            && !self.has_uncommitted_form_inputs()
+            && !self.has_uncommitted_editor_inputs()
             && self.history_cursor + 1 < self.history.len()
     }
 
-    fn has_uncommitted_form_inputs(&self) -> bool {
+    fn has_uncommitted_editor_inputs(&self) -> bool {
         !self.form_input_drafts.is_empty()
             || !self.form_input_errors.is_empty()
             || !self.form_pending_field_types.is_empty()
+            || self.has_page_input_draft()
+            || self.page_input_error.is_some()
+    }
+
+    fn has_page_input_draft(&self) -> bool {
+        let Some(page_id) = self.page_input_page.as_deref() else {
+            return false;
+        };
+        self.document
+            .as_ref()
+            .and_then(|document| {
+                document
+                    .pages()
+                    .iter()
+                    .find(|page| page.id().as_str() == page_id)
+            })
+            .is_some_and(|page| {
+                self.page_title_input != page.title() || self.page_slug_input != page.slug()
+            })
+    }
+
+    fn page_input_values(&self, page_id: &str, title: &str, slug: &str) -> (String, String) {
+        if self.page_input_page.as_deref() == Some(page_id) {
+            (self.page_title_input.clone(), self.page_slug_input.clone())
+        } else {
+            (title.to_owned(), slug.to_owned())
+        }
+    }
+
+    fn update_page_input(&mut self, page_id: &str, field: &str, value: String) {
+        let Some((title, slug)) = self.document.as_ref().and_then(|document| {
+            document
+                .pages()
+                .iter()
+                .find(|page| page.id().as_str() == page_id)
+                .map(|page| (page.title().to_owned(), page.slug().to_owned()))
+        }) else {
+            return;
+        };
+        if self.page_input_page.as_deref() != Some(page_id) {
+            self.page_input_page = Some(page_id.to_owned());
+            self.page_title_input = title;
+            self.page_slug_input = slug;
+        }
+        match field {
+            "title" => self.page_title_input = value,
+            "slug" => self.page_slug_input = value,
+            _ => return,
+        }
+        let Some(document) = self.document.as_ref() else {
+            return;
+        };
+        let Some(page) = document
+            .pages()
+            .iter()
+            .find(|page| page.id().as_str() == page_id)
+        else {
+            return;
+        };
+        if self.page_title_input == page.title() && self.page_slug_input == page.slug() {
+            self.clear_page_inputs();
+            return;
+        }
+        let (error, field) = if self.page_title_input.trim().is_empty()
+            || self.page_title_input.len() > 8192
+        {
+            (
+                Some("Enter a page title with 1 to 8192 bytes.".to_owned()),
+                Some(PageInputErrorField::Title),
+            )
+        } else if page.id() != document.entry_page_id()
+            && !is_valid_page_slug(&self.page_slug_input)
+        {
+            (
+                Some("Use a lowercase page slug with letters, numbers, and hyphens.".to_owned()),
+                Some(PageInputErrorField::Slug),
+            )
+        } else if page.id() != document.entry_page_id()
+            && document
+                .pages()
+                .iter()
+                .any(|other| other.id() != page.id() && other.slug() == self.page_slug_input)
+        {
+            (
+                Some("Each page must have a unique slug.".to_owned()),
+                Some(PageInputErrorField::Slug),
+            )
+        } else {
+            (None, None)
+        };
+        self.page_input_error = error;
+        self.page_input_error_field = field;
+    }
+
+    fn clear_page_inputs(&mut self) {
+        self.page_input_page = None;
+        self.page_title_input.clear();
+        self.page_slug_input.clear();
+        self.page_input_error = None;
+        self.page_input_error_field = None;
+    }
+
+    fn prune_page_inputs(&mut self, document: &DocumentV2) {
+        let Some(page_id) = self.page_input_page.as_deref() else {
+            return;
+        };
+        let Some(page) = document
+            .pages()
+            .iter()
+            .find(|page| page.id().as_str() == page_id)
+        else {
+            self.clear_page_inputs();
+            return;
+        };
+        if self.page_title_input == page.title() && self.page_slug_input == page.slug() {
+            self.clear_page_inputs();
+        }
     }
 
     fn prune_form_ui_state(&mut self, document: &DocumentV2) {
@@ -494,7 +630,7 @@ impl V2EditorState {
                 && !self.pending
                 && !self.saving
                 && !self.stale
-                && !self.has_uncommitted_form_inputs()
+                && !self.has_uncommitted_editor_inputs()
                 && self.stage_capacity.is_some()
                 && !document.has_images()
                 && (self.save_retryable || self.has_unsaved_changes())
@@ -510,7 +646,7 @@ impl V2EditorState {
             && !self.publication_pending
             && !self.publication_refreshing
             && !self.publication_state_unknown
-            && !self.has_uncommitted_form_inputs()
+            && !self.has_uncommitted_editor_inputs()
             && (retrying_publish || !self.has_unsaved_changes())
             && self.document.is_some()
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
@@ -577,10 +713,10 @@ impl V2EditorState {
         let outcome = match document.apply(edit.clone(), &mut ids) {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.error = Some(format!(
-                    "This change cannot be applied yet ({})",
-                    error.code()
-                ));
+                self.error = Some(match error.code() {
+                    "validation/page_unreachable" => "This page cannot be deleted because it is the only route to a later step. Reconnect those steps before deleting it.".to_owned(),
+                    _ => format!("This change cannot be applied yet ({})", error.code()),
+                });
                 self.status = None;
                 return None;
             }
@@ -590,6 +726,7 @@ impl V2EditorState {
             return None;
         }
         self.prune_form_ui_state(&outcome.document);
+        self.prune_page_inputs(&outcome.document);
         self.select_focus(&outcome.focus);
         self.document = Some(outcome.document);
         self.push_history(document_json.clone());
@@ -669,6 +806,7 @@ impl V2EditorState {
         let document = DocumentV2::decode(snapshot.as_bytes(), &self.funnel_id).ok()?;
         self.history_cursor = next;
         self.selected_page = document.entry_page_id().as_str().to_owned();
+        self.clear_page_inputs();
         self.selected_section = document
             .pages()
             .iter()
@@ -692,6 +830,9 @@ impl V2EditorState {
     }
 
     fn select_page(&mut self, page_id: &str) -> Option<(u64, String, String, String)> {
+        if self.has_page_input_draft() || self.page_input_error.is_some() {
+            return None;
+        }
         let document = self.document.as_ref()?;
         let page = document
             .pages()
@@ -718,6 +859,7 @@ impl V2EditorState {
         let document =
             DocumentV2::decode(self.saved_document_json.as_bytes(), &self.funnel_id).ok()?;
         self.selected_page = document.entry_page_id().as_str().to_owned();
+        self.clear_page_inputs();
         self.selected_section = document
             .pages()
             .iter()
@@ -926,6 +1068,7 @@ impl V2EditorState {
             return None;
         }
         self.selected_page = document.entry_page_id().as_str().to_owned();
+        self.clear_page_inputs();
         self.selected_section = document
             .pages()
             .iter()
@@ -2110,12 +2253,12 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                 if let Some(error) = view.error.as_ref() {
                     p { class: "error-message editor-save-error", role: "alert", "{error}" }
                 }
-                if view.has_uncommitted_form_inputs() {
+                if view.has_uncommitted_editor_inputs() {
                     p {
-                        class: "error-message editor-form-draft-note",
+                        class: "error-message editor-input-draft-note",
                         role: "status",
                         aria_live: "polite",
-                        "The preview and saved revision show the last valid form settings. Correct these form edits before saving or publishing."
+                        "The preview and saved revision show the last valid settings. Correct unfinished form or page edits before saving or publishing."
                     }
                 }
                 if view.stale {
@@ -2294,6 +2437,60 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                         }
                     }
                 }
+                if let Some(page_id) = view.delete_page_confirmation.as_ref() {
+                    {
+                        let confirming_page_id = page_id.clone();
+                        let confirming_page_title = document
+                            .pages()
+                            .iter()
+                            .find(|page| page.id().as_str() == page_id)
+                            .map(|page| page.title().to_owned())
+                            .unwrap_or_else(|| "this page".to_owned());
+                        rsx! {
+                            dialog {
+                                id: "v2-delete-page-dialog",
+                                class: "funnel-dialog confirmation-dialog",
+                                "aria-modal": "true",
+                                "aria-labelledby": "v2-delete-page-title",
+                                "aria-describedby": "v2-delete-page-description",
+                                oncancel: move |event| {
+                                    event.prevent_default();
+                                    state.with_mut(|state| state.delete_page_confirmation = None);
+                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                                },
+                                h2 { id: "v2-delete-page-title", "Delete {confirming_page_title}?" }
+                                p { id: "v2-delete-page-description", "Buttons that navigate to this page will be removed. Forms that redirect here will show the inline message ‘Thank you.’ Forms placed on this page will also be removed. Other steps must remain reachable. You can undo these changes before saving." }
+                                div { class: "dialog-actions",
+                                    button {
+                                        class: "secondary-button",
+                                        r#type: "button",
+                                        autofocus: true,
+                                        onclick: move |_| {
+                                            state.with_mut(|state| state.delete_page_confirmation = None);
+                                            spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                                        },
+                                        "Cancel"
+                                    }
+                                    button {
+                                        class: "primary-button danger-button",
+                                        r#type: "button",
+                                        onclick: move |_| {
+                                            state.with_mut(|state| state.delete_page_confirmation = None);
+                                            let page_id = PageId::parse(confirming_page_id.clone()).ok();
+                                            spawn(async move {
+                                                super::super::set_modal_dialog("v2-delete-page-dialog", false).await;
+                                                if let Some(page) = page_id {
+                                                    dispatch_v2_edit(state, Edit::DeletePage { page });
+                                                }
+                                            });
+                                        },
+                                        "Delete page"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 section { class: "editor-workspace", "aria-label": "Typed visual editor",
                     div { class: "editor-outline-panel",
                         div { class: "section-heading",
@@ -2305,13 +2502,111 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 "Current page"
                                 select {
                                     value: "{view.selected_page}",
-                                    disabled: view.pending || view.saving,
+                                    disabled: view.pending || view.saving || view.has_page_input_draft() || view.page_input_error.is_some(),
                                     onchange: move |event| {
                                         let request = state.with_mut(|state| state.select_page(&event.value()));
                                         schedule_v2_preview(state, request);
                                     },
                                     for page in document.pages() {
                                         option { value: "{page.id().as_str()}", "{page.title()}" }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(page) = current_page.as_ref() {
+                            {
+                                let page_id = page.id().as_str().to_owned();
+                                let page_id_title = page.id().as_str().to_owned();
+                                let page_id_slug = page.id().as_str().to_owned();
+                                let page_id_add = page.id().clone();
+                                let page_id_update = page.id().clone();
+                                let page_id_delete = page.id().clone();
+                                let page_title = page.title().to_owned();
+                                let page_slug = page.slug().to_owned();
+                                let (page_title_input, page_slug_input) = view.page_input_values(
+                                    &page_id,
+                                    &page_title,
+                                    &page_slug,
+                                );
+                                let page_input_error_message =
+                                    view.page_input_error.clone().unwrap_or_default();
+                                let is_entry_page = page.id() == document.entry_page_id();
+                                let page_is_referenced = page_is_referenced(&document, page.id());
+                                rsx! {
+                                    fieldset { class: "editor-setting-group editor-page-settings",
+                                        legend { "Page settings" }
+                                        label { class: "editor-setting-control",
+                                            "Page title"
+                                            input {
+                                                r#type: "text",
+                                                value: "{page_title_input}",
+                                                maxlength: "8192",
+                                                disabled: locked,
+                                                "aria-label": "Page title",
+                                                "aria-invalid": "{view.page_input_error_field == Some(PageInputErrorField::Title)}",
+                                                "aria-describedby": "page-settings-error",
+                                                oninput: move |event| state.with_mut(|state| state.update_page_input(&page_id_title, "title", event.value())),
+                                            }
+                                        }
+                                        if !is_entry_page {
+                                            label { class: "editor-setting-control",
+                                                "Page slug"
+                                                input {
+                                                    r#type: "text",
+                                                    value: "{page_slug_input}",
+                                                    maxlength: "64",
+                                                    disabled: locked,
+                                                    "aria-label": "Page slug",
+                                                    "aria-invalid": "{view.page_input_error_field == Some(PageInputErrorField::Slug)}",
+                                                    "aria-describedby": "page-settings-error",
+                                                    oninput: move |event| state.with_mut(|state| state.update_page_input(&page_id_slug, "slug", event.value())),
+                                                }
+                                            }
+                                        } else {
+                                            p { class: "editor-keyboard-help", "The entry page uses the funnel URL and keeps its route fixed." }
+                                        }
+                                        p { id: "page-settings-error", class: "editor-form-input-error editor-page-input-error", role: "alert", aria_live: "polite", "{page_input_error_message}" }
+                                        button {
+                                            class: "secondary-button",
+                                            r#type: "button",
+                                            disabled: locked || !view.has_page_input_draft() || view.page_input_error.is_some(),
+                                            onclick: move |_| dispatch_v2_edit(state, Edit::SetPage {
+                                                page: page_id_update.clone(),
+                                                title: page_title_input.clone(),
+                                                slug: page_slug_input.clone(),
+                                            }),
+                                            "Apply page settings"
+                                        }
+                                        if !is_entry_page {
+                                            button {
+                                                class: "secondary-button danger-button",
+                                                r#type: "button",
+                                                disabled: locked || view.has_page_input_draft() || view.page_input_error.is_some(),
+                                                "aria-label": "Delete page {page.title()}",
+                                                onclick: move |_| {
+                                                    state.with_mut(|state| state.delete_page_confirmation = Some(page_id_delete.as_str().to_owned()));
+                                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", true).await; });
+                                                },
+                                                "Delete page"
+                                            }
+                                            p { class: "editor-keyboard-help", if page_is_referenced { "Deleting this page removes buttons that navigate here and changes its form confirmations to inline text." } else { "Deleting this page also removes forms placed on it. You can undo before saving." } }
+                                        }
+                                        button {
+                                            class: "secondary-button",
+                                            r#type: "button",
+                                            disabled: locked || view.has_uncommitted_editor_inputs() || document.pages().len() >= 50,
+                                            onclick: move |_| {
+                                                let defaults = state.with(|state| state.document.as_ref().and_then(next_page_defaults));
+                                                if let Some((title, slug)) = defaults {
+                                                    dispatch_v2_edit(state, Edit::AddPage {
+                                                        from: page_id_add.clone(),
+                                                        title,
+                                                        slug,
+                                                    });
+                                                }
+                                            },
+                                            "Add page"
+                                        }
                                     }
                                 }
                             }
@@ -2821,6 +3116,37 @@ fn section_kind_id(kind: SectionKind) -> &'static str {
 }
 
 #[cfg(feature = "browser")]
+fn next_page_defaults(document: &DocumentV2) -> Option<(String, String)> {
+    (2..=50).find_map(|number| {
+        let slug = format!("step-{number}");
+        (!document.pages().iter().any(|page| page.slug() == slug))
+            .then(|| (format!("Step {number}"), slug))
+    })
+}
+
+#[cfg(feature = "browser")]
+fn page_is_referenced(document: &DocumentV2, page_id: &PageId) -> bool {
+    document.pages().iter().any(|page| {
+        page.sections().iter().any(|section| {
+            section.blocks().iter().any(|block| {
+                matches!(
+                    block,
+                    BlockV2::Button {
+                        action: ActionV2::NavigatePage { page_id: target },
+                        ..
+                    } if target == page_id
+                )
+            })
+        })
+    }) || document.forms().iter().any(|form| {
+        matches!(
+            form.result(),
+            FormResult::SuccessPage { page_id: target } if target == page_id
+        )
+    })
+}
+
+#[cfg(feature = "browser")]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
@@ -2957,7 +3283,7 @@ async fn refresh_v2_publication_state(funnel_id: &str) -> Result<Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eez_domain::document_v2::{BlueprintId, SectionId};
+    use eez_domain::document_v2::{BlueprintId, PageId, SectionId};
 
     struct TestIds(u32);
 
@@ -3079,6 +3405,54 @@ mod tests {
     }
 
     #[test]
+    fn invalid_page_settings_remain_visible_and_block_actions_until_applied() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(
+                document_with_secondary_page(),
+                Some(stage_capacity()),
+            )),
+        );
+        let _ = state.select_page("page-thanks");
+        state.update_page_input("page-thanks", "slug", "Invalid/slug".to_owned());
+
+        assert_eq!(
+            state.page_input_error.as_deref(),
+            Some("Use a lowercase page slug with letters, numbers, and hyphens.")
+        );
+        assert!(state.has_uncommitted_editor_inputs());
+        assert!(!state.can_save());
+        assert!(!state.can_publish());
+        assert!(state.select_page("page-home").is_none());
+
+        state.update_page_input("page-thanks", "slug", "thanks-next".to_owned());
+        assert!(state.page_input_error.is_none());
+        assert!(!state.can_save());
+        let capture = state
+            .apply_local_edit(
+                Edit::SetPage {
+                    page: PageId::parse("page-thanks").expect("page id"),
+                    title: "Thanks".to_owned(),
+                    slug: "thanks-next".to_owned(),
+                },
+                "operation-page-settings".to_owned(),
+            )
+            .expect("valid page settings can be applied");
+        assert_eq!(capture.page_id, "page-thanks");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .and_then(|document| document.page(&PageId::parse("page-thanks").ok()?))
+                .map(|page| page.slug()),
+            Some("thanks-next")
+        );
+        assert!(!state.has_uncommitted_editor_inputs());
+    }
+
+    #[test]
     fn unresolved_form_inputs_block_save_publish_and_history_actions() {
         let mut state = V2EditorState::for_route("funnel-a".to_owned());
         state.finish_load(
@@ -3096,7 +3470,7 @@ mod tests {
             "Enter a purpose.".to_owned(),
         );
         assert!(!state.can_publish());
-        assert!(state.has_uncommitted_form_inputs());
+        assert!(state.has_uncommitted_editor_inputs());
 
         state.form_input_drafts.clear();
         state.form_input_errors.clear();
@@ -3235,7 +3609,7 @@ mod tests {
                 .form_input_errors
                 .insert(key.to_owned(), message.to_owned());
         }
-        assert!(state.has_uncommitted_form_inputs());
+        assert!(state.has_uncommitted_editor_inputs());
         assert!(!state.can_save());
         assert!(!state.can_undo());
 
@@ -3279,7 +3653,7 @@ mod tests {
         assert!(!state.form_input_drafts.contains_key(&max_key));
         assert!(!state.form_input_errors.contains_key(&min_key));
         assert!(!state.form_input_errors.contains_key(&max_key));
-        assert!(!state.has_uncommitted_form_inputs());
+        assert!(!state.has_uncommitted_editor_inputs());
         state.pending = false;
 
         assert!(state.can_save());
@@ -3363,7 +3737,7 @@ mod tests {
 
         assert!(!state.form_input_drafts.contains_key(&marketing_key));
         assert!(!state.form_input_errors.contains_key(&marketing_key));
-        assert!(!state.has_uncommitted_form_inputs());
+        assert!(!state.has_uncommitted_editor_inputs());
     }
 
     #[test]

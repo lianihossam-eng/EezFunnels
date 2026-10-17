@@ -10,6 +10,7 @@ use crate::ThemePreset;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdKind {
+    Page,
     Section,
     Block,
     Form,
@@ -89,6 +90,19 @@ pub enum NewFormField {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
+    AddPage {
+        from: PageId,
+        title: String,
+        slug: String,
+    },
+    SetPage {
+        page: PageId,
+        title: String,
+        slug: String,
+    },
+    DeletePage {
+        page: PageId,
+    },
     SetThemePreset {
         preset: ThemePreset,
     },
@@ -197,6 +211,107 @@ impl DocumentV2 {
     pub fn apply(&self, edit: Edit, ids: &mut impl IdSource) -> Result<EditOutcome, DocumentError> {
         let mut data = self.data.clone();
         let focus = match edit {
+            Edit::AddPage { from, title, slug } => {
+                if data.pages.len() >= 50 {
+                    return Err(DocumentError::at("validation/page_count", "pages"));
+                }
+                let source_index = data
+                    .pages
+                    .iter()
+                    .position(|page| page.id == from)
+                    .ok_or_else(|| DocumentError::at("validation/page_missing", "page_id"))?;
+                let id = PageId::from_validated(allocate_id(ids, IdKind::Page, page_ids(&data))?);
+                data.pages.push(PageV2 {
+                    id: id.clone(),
+                    slug,
+                    title,
+                    sections: Vec::new(),
+                });
+                let block_id =
+                    BlockId::from_validated(allocate_id(ids, IdKind::Block, block_ids(&data))?);
+                let cta_section_index =
+                    data.pages[source_index]
+                        .sections
+                        .iter()
+                        .rposition(|section| {
+                            section.section_type == SectionKind::Cta && section.blocks.len() < 50
+                        });
+                if let Some(section_index) = cta_section_index {
+                    data.pages[source_index].sections[section_index]
+                        .blocks
+                        .push(BlockV2::Button {
+                            id: block_id,
+                            label: "Continue".to_owned(),
+                            action: super::ActionV2::NavigatePage {
+                                page_id: id.clone(),
+                            },
+                        });
+                } else {
+                    let section_id = SectionId::from_validated(allocate_id(
+                        ids,
+                        IdKind::Section,
+                        section_ids(&data),
+                    )?);
+                    data.pages[source_index].sections.push(SectionV2 {
+                        id: section_id,
+                        section_type: SectionKind::Cta,
+                        blocks: vec![BlockV2::Button {
+                            id: block_id,
+                            label: "Continue".to_owned(),
+                            action: super::ActionV2::NavigatePage {
+                                page_id: id.clone(),
+                            },
+                        }],
+                    });
+                }
+                FocusTarget::Page(id)
+            }
+            Edit::SetPage { page, title, slug } => {
+                let target = page_mut(&mut data, &page)?;
+                target.title = title;
+                target.slug = slug;
+                FocusTarget::Page(page)
+            }
+            Edit::DeletePage { page } => {
+                if page == data.entry_page_id {
+                    return Err(DocumentError::at("validation/entry_page_delete", "page_id"));
+                }
+                let page_exists = data.pages.iter().any(|candidate| candidate.id == page);
+                if !page_exists {
+                    return Err(DocumentError::at("validation/page_missing", "page_id"));
+                }
+                for source_page in &mut data.pages {
+                    for section in &mut source_page.sections {
+                        section.blocks.retain(|block| {
+                            !matches!(
+                                block,
+                                BlockV2::Button {
+                                    action: super::ActionV2::NavigatePage { page_id },
+                                    ..
+                                } if page_id == &page
+                            )
+                        });
+                    }
+                }
+                for form in &mut data.forms {
+                    if matches!(
+                        &form.result,
+                        FormResult::SuccessPage { page_id } if page_id == &page
+                    ) {
+                        form.result = FormResult::Inline {
+                            message: "Thank you.".to_owned(),
+                        };
+                    }
+                }
+                let index = data
+                    .pages
+                    .iter()
+                    .position(|candidate| candidate.id == page)
+                    .ok_or_else(|| DocumentError::at("validation/page_missing", "page_id"))?;
+                data.pages.remove(index);
+                prune_unplaced_forms(&mut data);
+                FocusTarget::Page(data.entry_page_id.clone())
+            }
             Edit::SetThemePreset { preset } => {
                 data.theme.preset_id = preset;
                 FocusTarget::Page(data.entry_page_id.clone())
@@ -787,6 +902,13 @@ fn section_ids(data: &DocumentData) -> BTreeSet<String> {
         .collect()
 }
 
+fn page_ids(data: &DocumentData) -> BTreeSet<String> {
+    data.pages
+        .iter()
+        .map(|page| page.id.as_str().to_owned())
+        .collect()
+}
+
 fn block_ids(data: &DocumentData) -> BTreeSet<String> {
     data.pages
         .iter()
@@ -1011,6 +1133,253 @@ mod tests {
             .apply(edit, ids)
             .expect("valid typed edit")
             .document
+    }
+
+    #[test]
+    fn page_creation_and_metadata_edits_keep_the_entry_route_stable() {
+        let document = starter();
+        let entry_page_id = document.entry_page_id().clone();
+        let mut ids = TestIds(0);
+        let created = document
+            .apply(
+                Edit::AddPage {
+                    from: document.entry_page_id().clone(),
+                    title: "Step 2".to_owned(),
+                    slug: "step-2".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("page can be added");
+        let page_id = created
+            .document
+            .pages()
+            .last()
+            .expect("new page")
+            .id()
+            .clone();
+        assert_eq!(page_id.as_str(), "edit-test-1");
+        assert_eq!(created.document.pages()[1].title(), "Step 2");
+        assert_eq!(created.document.pages()[1].slug(), "step-2");
+        assert_eq!(created.focus, FocusTarget::Page(page_id.clone()));
+        assert_eq!(created.document.entry_page_id(), &entry_page_id);
+
+        let renamed = created
+            .document
+            .apply(
+                Edit::SetPage {
+                    page: page_id.clone(),
+                    title: "Order details".to_owned(),
+                    slug: "order-details".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("page metadata can be edited");
+        let updated_page = renamed.document.page(&page_id).expect("updated page");
+        assert_eq!(updated_page.title(), "Order details");
+        assert_eq!(updated_page.slug(), "order-details");
+        assert_eq!(renamed.focus, FocusTarget::Page(page_id));
+        assert_eq!(renamed.document.entry_page_id(), &entry_page_id);
+    }
+
+    #[test]
+    fn page_deletion_protects_the_entry_page_and_removes_inbound_navigation() {
+        let mut ids = TestIds(0);
+        let entry = starter();
+        let entry_error = entry
+            .apply(
+                Edit::DeletePage {
+                    page: entry.entry_page_id().clone(),
+                },
+                &mut ids,
+            )
+            .expect_err("entry page cannot be removed");
+        assert_eq!(entry_error.code(), "validation/entry_page_delete");
+
+        let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../tests/fixtures/document_v2_minimal.json"
+        ))
+        .expect("minimal fixture JSON");
+        value["pages"]
+            .as_array_mut()
+            .expect("pages array")
+            .push(serde_json::json!({
+                "id": "page-next",
+                "slug": "next",
+                "title": "Next",
+                "sections": []
+            }));
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "block-next",
+                "kind": "button",
+                "label": "Continue",
+                "action": { "kind": "navigate_page", "page_id": "page-next" }
+            }));
+        let raw = serde_json::to_vec(&value).expect("document JSON");
+        let document = DocumentV2::decode(&raw, "funnel-01").expect("valid linked page");
+        let deleted = document
+            .apply(
+                Edit::DeletePage {
+                    page: PageId::parse("page-next").expect("page id"),
+                },
+                &mut ids,
+            )
+            .expect("linked page can be deleted with its navigation link");
+        assert_eq!(deleted.document.pages().len(), 1);
+        assert_eq!(
+            deleted.focus,
+            FocusTarget::Page(deleted.document.entry_page_id().clone())
+        );
+        assert!(!deleted.document.pages()[0]
+            .sections()
+            .iter()
+            .flat_map(|section| section.blocks())
+            .any(|block| matches!(block, BlockV2::Button { action: super::super::ActionV2::NavigatePage { page_id }, .. } if page_id.as_str() == "page-next")));
+    }
+
+    #[test]
+    fn deleting_a_page_removes_its_unplaced_form() {
+        let mut ids = TestIds(0);
+        let document = starter();
+        let created_page = document
+            .apply(
+                Edit::AddPage {
+                    from: document.entry_page_id().clone(),
+                    title: "Step 2".to_owned(),
+                    slug: "step-2".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("page can be added");
+        let page_id = created_page.document.pages()[1].id().clone();
+        let section = created_page
+            .document
+            .apply(
+                Edit::AddSection {
+                    page: page_id.clone(),
+                    after: None,
+                    section_type: SectionKind::Hero,
+                },
+                &mut ids,
+            )
+            .expect("section can be added");
+        let section_id = match &section.focus {
+            FocusTarget::Section(id) => id.clone(),
+            _ => panic!("new section should be focused"),
+        };
+        let with_form = section
+            .document
+            .apply(
+                Edit::CreateForm {
+                    section: section_id,
+                    after: None,
+                },
+                &mut ids,
+            )
+            .expect("form can be placed on new page");
+        assert_eq!(with_form.document.forms().len(), 1);
+
+        let deleted = with_form
+            .document
+            .apply(Edit::DeletePage { page: page_id }, &mut ids)
+            .expect("unreferenced page can be deleted");
+        assert_eq!(deleted.document.pages().len(), 1);
+        assert!(deleted.document.forms().is_empty());
+        assert_eq!(
+            deleted.focus,
+            FocusTarget::Page(deleted.document.entry_page_id().clone())
+        );
+    }
+
+    #[test]
+    fn deleting_a_page_moves_form_confirmation_inline() {
+        let mut ids = TestIds(0);
+        let entry = starter();
+        let page = entry
+            .apply(
+                Edit::AddPage {
+                    from: entry.entry_page_id().clone(),
+                    title: "Thanks".to_owned(),
+                    slug: "thanks".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("success page can be added");
+        let page_id = page.document.pages()[1].id().clone();
+        let section_id = page.document.pages()[0].sections()[0].id().clone();
+        let form = page
+            .document
+            .apply(
+                Edit::CreateForm {
+                    section: section_id,
+                    after: None,
+                },
+                &mut ids,
+            )
+            .expect("form can be placed on the entry page");
+        let form_id = form.document.forms()[0].id().clone();
+        let configured = form
+            .document
+            .apply(
+                Edit::SetFormResult {
+                    form: form_id.clone(),
+                    result: FormResult::SuccessPage {
+                        page_id: page_id.clone(),
+                    },
+                },
+                &mut ids,
+            )
+            .expect("form can redirect to the new page");
+
+        let deleted = configured
+            .document
+            .apply(Edit::DeletePage { page: page_id }, &mut ids)
+            .expect("deleting the success page keeps the form usable");
+        assert!(matches!(
+            deleted.document.form(&form_id).expect("retained form").result(),
+            FormResult::Inline { message } if message == "Thank you."
+        ));
+    }
+
+    #[test]
+    fn page_deletion_fails_atomically_when_it_would_orphan_a_later_step() {
+        let mut ids = TestIds(0);
+        let entry = starter();
+        let first_step = entry
+            .apply(
+                Edit::AddPage {
+                    from: entry.entry_page_id().clone(),
+                    title: "Step 2".to_owned(),
+                    slug: "step-2".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("first step can be added");
+        let first_step_id = first_step.document.pages()[1].id().clone();
+        let later_step = first_step
+            .document
+            .apply(
+                Edit::AddPage {
+                    from: first_step_id.clone(),
+                    title: "Step 3".to_owned(),
+                    slug: "step-3".to_owned(),
+                },
+                &mut ids,
+            )
+            .expect("later step can be added");
+        let error = later_step
+            .document
+            .apply(
+                Edit::DeletePage {
+                    page: first_step_id,
+                },
+                &mut ids,
+            )
+            .expect_err("deletion must not orphan the later step");
+        assert_eq!(error.code(), "validation/page_unreachable");
+        assert_eq!(later_step.document.pages().len(), 3);
     }
 
     #[test]
