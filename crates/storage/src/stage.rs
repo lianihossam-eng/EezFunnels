@@ -1094,7 +1094,7 @@ impl<'a> DocumentStageRepository<'a> {
         let key_budget = D1Type::Real(capacity.orphan_key_budget as f64);
         self.database
             .prepare(
-                "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at) SELECT ?, ?, 'receiving', ?, ?, ? WHERE EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ?) AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) < ? AND (SELECT COALESCE(SUM(expected_length), 0) FROM v2_document_stage_attempts WHERE quota_held = 1) + ? <= ? AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) + 1 <= ?",
+                "INSERT INTO v2_document_stage_attempts (attempt_id, stage_id_hash, state, expected_length, expected_sha256, deadline_at) SELECT ?, ?, 'receiving', ?, ?, ? WHERE EXISTS (SELECT 1 FROM v2_document_stages AS stage WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ? AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = stage.funnel_id AND revision_id = stage.base_revision_id)) AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) < ? AND (SELECT COALESCE(SUM(expected_length), 0) FROM v2_document_stage_attempts WHERE quota_held = 1) + ? <= ? AND (SELECT COUNT(*) FROM v2_document_stage_attempts WHERE quota_held = 1) + 1 <= ?",
             )
             .bind_refs([
                 &attempt_id_value,
@@ -1200,7 +1200,7 @@ impl<'a> DocumentStageRepository<'a> {
         let stage_hash = D1Type::Text(&stage.stage_id_hash);
         self.database
             .prepare(
-                "UPDATE v2_document_stage_attempts SET sequence = ?, object_key = ? WHERE attempt_id = ? AND state = 'receiving' AND sequence IS NULL AND deadline_at > ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ?)",
+                "UPDATE v2_document_stage_attempts SET sequence = ?, object_key = ? WHERE attempt_id = ? AND state = 'receiving' AND sequence IS NULL AND deadline_at > ? AND EXISTS (SELECT 1 FROM v2_document_stages AS stage WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ? AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = stage.funnel_id AND revision_id = stage.base_revision_id))",
             )
             .bind_refs([
                 &sequence_value,
@@ -1244,7 +1244,7 @@ impl<'a> DocumentStageRepository<'a> {
         let update_attempt = self
             .database
             .prepare(
-                "UPDATE v2_document_stage_attempts SET state = 'complete' WHERE attempt_id = ? AND state = 'receiving' AND deadline_at > ? AND object_key = ? AND EXISTS (SELECT 1 FROM v2_document_stages WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ?)",
+                "UPDATE v2_document_stage_attempts SET state = 'complete' WHERE attempt_id = ? AND state = 'receiving' AND deadline_at > ? AND object_key = ? AND EXISTS (SELECT 1 FROM v2_document_stages AS stage WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ? AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = stage.funnel_id AND revision_id = stage.base_revision_id))",
             )
             .bind_refs([
                 &attempt_id_value,
@@ -1256,7 +1256,7 @@ impl<'a> DocumentStageRepository<'a> {
         let update_stage = self
             .database
             .prepare(
-                "UPDATE v2_document_stages SET state = 'uploaded', object_key = ?, uploaded_length = ?, uploaded_sha256 = ? WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ? AND expected_length = ? AND expected_sha256 = ? AND EXISTS (SELECT 1 FROM v2_document_stage_attempts WHERE attempt_id = ? AND state = 'complete' AND object_key = ?)",
+                "UPDATE v2_document_stages SET state = 'uploaded', object_key = ?, uploaded_length = ?, uploaded_sha256 = ? WHERE stage_id_hash = ? AND state = 'issued' AND expires_at > ? AND expected_length = ? AND expected_sha256 = ? AND EXISTS (SELECT 1 FROM v2_document_stage_attempts WHERE attempt_id = ? AND state = 'complete' AND object_key = ?) AND EXISTS (SELECT 1 FROM funnel_editor_heads WHERE funnel_id = v2_document_stages.funnel_id AND revision_id = v2_document_stages.base_revision_id)",
             )
             .bind_refs([
                 &object_key_value,
