@@ -6,6 +6,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+pub mod document_v2;
+
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -67,10 +69,16 @@ struct CompatibilityEntry {
     status: CompatibilityStatus,
 }
 
-const COMPATIBILITY_ENTRIES: [CompatibilityEntry; 1] = [CompatibilityEntry {
-    version: 1,
-    status: CompatibilityStatus::Supported,
-}];
+const COMPATIBILITY_ENTRIES: [CompatibilityEntry; 2] = [
+    CompatibilityEntry {
+        version: 1,
+        status: CompatibilityStatus::Supported,
+    },
+    CompatibilityEntry {
+        version: 2,
+        status: CompatibilityStatus::Supported,
+    },
+];
 
 impl CompatibilityRegistry {
     pub fn status(version: i64) -> CompatibilityStatus {
@@ -661,6 +669,11 @@ impl Revision {
         render_manifest: RenderManifest,
     ) -> Result<Self, DomainError> {
         let schema_version = CompatibilityRegistry::validate(schema_version)?;
+        if schema_version.value() != 1 {
+            return Err(DomainError::UnsupportedSchemaVersion(i64::from(
+                schema_version.value(),
+            )));
+        }
         if render_manifest.revision_id != id {
             return Err(DomainError::ManifestRevisionMismatch);
         }
@@ -930,16 +943,17 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", CompatibilityRegistry::status(2)),
-            "Unsupported"
+            "Supported"
         );
         assert!(CompatibilityRegistry::validate(Some(1)).is_ok());
+        assert!(CompatibilityRegistry::validate(Some(2)).is_ok());
         assert_eq!(
             CompatibilityRegistry::validate(None)
                 .expect_err("missing schema version must be rejected")
                 .to_string(),
             "validation/schema_version_missing"
         );
-        for version in [0, -1, 2, i64::MAX] {
+        for version in [0, -1, 3, i64::MAX] {
             assert_eq!(
                 CompatibilityRegistry::validate(Some(version))
                     .expect_err("unsupported schema version must be rejected")
@@ -978,7 +992,7 @@ mod tests {
                 Vec::new(),
                 manifest(unsupported_id),
             )
-            .expect_err("unsupported schema version must be rejected")
+            .expect_err("the V1 revision model must reject V2 data")
             .to_string(),
             "validation/schema_version_unsupported: 2"
         );

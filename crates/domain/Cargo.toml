@@ -11,3 +11,5 @@ layer = 0
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+serde_json_canonicalizer.workspace = true
+url.workspace = true
