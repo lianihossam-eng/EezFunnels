@@ -4,9 +4,11 @@ Eez Funnel v0.1 is a single-user application and does not include a login, user 
 
 ## Protect administrative routes
 
-Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*`, and `/api/funnels` (including its subroutes). Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
+Before making the Worker reachable from the public Internet, use Cloudflare Access or another network perimeter to require authentication for the dashboard and API routes, including `/`, `/funnels`, `/funnels/*`, `/api/funnels` (including its subroutes), and `/api/media`. Protect `/mcp` as well if you enable it. Static dashboard assets under `/assets/*` can be public.
 
 Published entry pages use `GET /f/:slug`; additional V2 pages use `GET /f/:slug/:page_slug`. Add an Access bypass/public policy for those published-page paths only if those funnels should be public. If the bypass is omitted, visitors will also need to authenticate before seeing a published funnel.
+
+Published image delivery uses `GET /media/:sha256`. This route is public so published pages can load their images. Uploaded files are content-addressed and become publicly retrievable as soon as upload completes, including images not yet used by a published page. The dashboard warns about this; never upload private images.
 
 Published forms post to `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions`. If a funnel is public, allow this route to receive POST requests along with its published-page paths. The Worker rejects a supplied `Origin` that does not match the request scheme and host. Requests without `Origin` remain accepted for compatibility. Origin is not authentication.
 

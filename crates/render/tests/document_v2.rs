@@ -1,6 +1,8 @@
 use eez_domain::document_v2::{BlueprintId, DocumentV2};
 use eez_render::document_v2::{
-    prepare_revision, render_owner_preview, render_published, validate_revision_v2, V2RenderError,
+    prepare_revision, prepare_revision_with_assets, render_owner_preview,
+    render_owner_preview_with_assets, render_published, render_published_route_with_assets,
+    validate_revision_v2, AssetDigestRecord, PublishedRevisionInput, V2RenderError,
 };
 
 fn document() -> DocumentV2 {
@@ -21,7 +23,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v5_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v6_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -30,7 +32,7 @@ fn exact_renderer_v5_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v5");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v6");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -159,7 +161,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v5", "renderer-v5-next");
+        .replace("renderer-v6", "renderer-v6-next");
     assert!(matches!(
         render_published(
             2,
@@ -247,6 +249,87 @@ fn v2_images_remain_blocked_and_form_previews_are_inert_until_published() {
     assert!(preview.contains("data-preview=\"true\""));
     assert!(preview.contains("type=\"button\" aria-disabled=\"true\""));
     assert!(!preview.contains("/submissions?key="));
+}
+
+#[test]
+fn v2_images_render_only_with_a_complete_digest_bound_asset_manifest() {
+    let asset_id = "a".repeat(64);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("canonical document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {
+            "id":"image-block",
+            "kind":"image",
+            "asset_id":asset_id,
+            "alt":{"kind":"text", "value":"An image & <description>"}
+        }
+    ]);
+    let encoded = serde_json::to_vec(&value).expect("document serialization");
+    let image_document = DocumentV2::decode(&encoded, "funnel-01").expect("image document");
+    let assets = vec![AssetDigestRecord {
+        asset_id: asset_id.clone(),
+        sha256: asset_id.clone(),
+    }];
+    let prepared = prepare_revision_with_assets(&image_document, "revision-image", &assets)
+        .expect("asset-backed revision");
+    let preview =
+        render_owner_preview_with_assets(&image_document, image_document.entry_page_id(), &assets)
+            .expect("asset-backed owner preview");
+
+    assert!(preview.contains(&format!("src=\"/media/{asset_id}\"")));
+    assert!(preview.contains("alt=\"An image &amp; &lt;description&gt;\""));
+    assert!(preview.contains("loading=\"lazy\" decoding=\"async\""));
+    assert!(render_published_route_with_assets(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-image",
+            data_json: &prepared.data_json,
+            render_manifest_json: &prepared.render_manifest_json,
+        },
+        "lead-funnel",
+        None,
+        &assets,
+    )
+    .expect("asset-backed published page")
+    .contains(&format!("src=\"/media/{asset_id}\"")));
+
+    assert_eq!(
+        prepare_revision_with_assets(&image_document, "revision-no-asset", &[])
+            .expect_err("missing assets fail closed"),
+        V2RenderError::ImagesNotEnabled
+    );
+    assert_eq!(
+        render_owner_preview_with_assets(
+            &image_document,
+            image_document.entry_page_id(),
+            &[AssetDigestRecord {
+                asset_id: asset_id.clone(),
+                sha256: "b".repeat(64),
+            }],
+        )
+        .expect_err("mismatched immutable identity is rejected"),
+        V2RenderError::InvalidManifest
+    );
+    assert_eq!(
+        render_published_route_with_assets(
+            PublishedRevisionInput {
+                schema_version: 2,
+                funnel_id: "funnel-01",
+                revision_id: "revision-image",
+                data_json: &prepared.data_json,
+                render_manifest_json: &prepared.render_manifest_json,
+            },
+            "lead-funnel",
+            None,
+            &[AssetDigestRecord {
+                asset_id: asset_id.clone(),
+                sha256: "b".repeat(64),
+            }],
+        )
+        .expect_err("a changed asset cannot satisfy the saved manifest"),
+        V2RenderError::InvalidManifest
+    );
 }
 
 #[test]

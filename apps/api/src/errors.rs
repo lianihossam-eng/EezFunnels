@@ -43,11 +43,19 @@ impl ApiError {
             | "validation/schema_version_missing"
             | "validation/schema_version_unsupported"
             | "validation/section_type_unknown"
-            | "validation/section_missing_id" => (
+            | "validation/section_missing_id"
+            | "validation/media_asset_invalid" => (
                 code.to_owned(),
                 ErrorCategory::Validation,
                 400,
                 "The request is invalid.",
+                false,
+            ),
+            "validation/media_asset_too_large" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                413,
+                "The uploaded image exceeds the size limit.",
                 false,
             ),
             "validation/operation_not_supported" => (
@@ -78,7 +86,7 @@ impl ApiError {
                 "The request Origin is not allowed.",
                 false,
             ),
-            "not_found/funnel" | "not_found/slug" | "not_found/revision" => (
+            "not_found/funnel" | "not_found/slug" | "not_found/revision" | "not_found/asset" => (
                 code.to_owned(),
                 ErrorCategory::NotFound,
                 404,
@@ -101,7 +109,8 @@ impl ApiError {
             | "conflict/v2_conversion_blocked"
             | "conflict/v2_publication_blocked"
             | "conflict/v2_typed_command_required"
-            | "conflict/v2_stage_active" => (
+            | "conflict/v2_stage_active"
+            | "conflict/media_asset_conflict" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
@@ -188,6 +197,16 @@ mod tests {
 
     const CONTRACT_CODES: &[(&str, ErrorCategory, u16)] = &[
         ("validation/invalid_json", ErrorCategory::Validation, 400),
+        (
+            "validation/media_asset_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/media_asset_too_large",
+            ErrorCategory::Validation,
+            413,
+        ),
         ("validation/missing_field", ErrorCategory::Validation, 400),
         ("validation/order_duplicate", ErrorCategory::Validation, 400),
         (
@@ -234,6 +253,7 @@ mod tests {
         ("not_found/funnel", ErrorCategory::NotFound, 404),
         ("not_found/slug", ErrorCategory::NotFound, 404),
         ("not_found/revision", ErrorCategory::NotFound, 404),
+        ("not_found/asset", ErrorCategory::NotFound, 404),
         ("not_found/route", ErrorCategory::NotFound, 404),
         (
             "conflict/publish_stale_revision",
@@ -272,6 +292,11 @@ mod tests {
             409,
         ),
         ("conflict/v2_stage_active", ErrorCategory::Conflict, 409),
+        (
+            "conflict/media_asset_conflict",
+            ErrorCategory::Conflict,
+            409,
+        ),
         ("rate_limit/exceeded", ErrorCategory::RateLimit, 429),
         ("external/timeout", ErrorCategory::External, 504),
         ("external/unavailable", ErrorCategory::External, 503),

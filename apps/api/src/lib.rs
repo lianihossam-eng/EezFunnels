@@ -10,7 +10,7 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
-use eez_render::document_v2::validate_revision_v2;
+use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{NewPublicFormSubmission, PublicFormSubmissionResult};
 use serde::Serialize;
 use serde_json::Value;
@@ -103,6 +103,10 @@ pub async fn fetch(
         error_response(&error, correlation_id.clone())
     } else if request_path == "/mcp" {
         mcp::handle(&env, request, &correlation_id).await
+    } else if request_path == "/api/media" {
+        media_collection_response(&env, request, correlation_id.clone()).await
+    } else if let Some(asset_id) = request_path.strip_prefix("/media/") {
+        media_asset_response(&env, request, asset_id, correlation_id.clone()).await
     } else if request_path == "/api/v2/stage-capacity" {
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/funnels" {
@@ -253,6 +257,158 @@ async fn asset_response(
     Ok(Response::from_parts(parts, axum::body::Body::new(body)))
 }
 
+async fn media_collection_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    match request.method().as_str() {
+        "GET" => {
+            let bindings = match eez_storage::Bindings::from_env(env) {
+                Ok(bindings) => bindings,
+                Err(_) => return media_error_response("external/unavailable", &correlation_id),
+            };
+            match bindings.media_asset_repository().list().await {
+                Ok(assets) => {
+                    let mut response = json_success_response(
+                        serde_json::json!({ "assets": assets }),
+                        StatusCode::OK,
+                        &correlation_id,
+                        None,
+                    );
+                    response
+                        .headers_mut()
+                        .insert("cache-control", HeaderValue::from_static("no-store"));
+                    response
+                }
+                Err(error) => media_error_response(error.code(), &correlation_id),
+            }
+        }
+        "POST" => {
+            let content_types = request.headers().get_all("content-type");
+            let content_type = content_types
+                .iter()
+                .next()
+                .and_then(|value| value.to_str().ok());
+            if content_types.iter().count() != 1
+                || !matches!(
+                    content_type,
+                    Some("image/png" | "image/jpeg" | "image/webp")
+                )
+            {
+                return media_error_response("validation/media_asset_invalid", &correlation_id);
+            }
+            let content_type = content_type.unwrap_or_default().to_owned();
+            let body = match to_bytes(
+                axum::body::Body::new(request.into_body()),
+                MAX_MEDIA_UPLOAD_BYTES,
+            )
+            .await
+            {
+                Ok(body) => body,
+                Err(_) => {
+                    return media_error_response(
+                        "validation/media_asset_too_large",
+                        &correlation_id,
+                    )
+                }
+            };
+            let bindings = match eez_storage::Bindings::from_env(env) {
+                Ok(bindings) => bindings,
+                Err(_) => return media_error_response("external/unavailable", &correlation_id),
+            };
+            match bindings
+                .media_asset_repository()
+                .upload(&content_type, &body)
+                .await
+            {
+                Ok(asset) => {
+                    let mut response = json_success_response(
+                        serde_json::json!({ "asset": asset }),
+                        StatusCode::CREATED,
+                        &correlation_id,
+                        None,
+                    );
+                    response
+                        .headers_mut()
+                        .insert("cache-control", HeaderValue::from_static("no-store"));
+                    response
+                }
+                Err(error) => media_error_response(error.code(), &correlation_id),
+            }
+        }
+        _ => method_not_allowed_for(&correlation_id, "GET, POST"),
+    }
+}
+
+async fn media_asset_response(
+    env: &Env,
+    request: HttpRequest,
+    asset_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    let is_head = request.method() == Method::HEAD;
+    if request.method() != Method::GET && !is_head {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
+    }
+    if !eez_storage::media::is_lower_sha256(asset_id) {
+        return media_error_response("not_found/asset", &correlation_id);
+    }
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return media_error_response("external/unavailable", &correlation_id),
+    };
+    let content = match bindings.media_asset_repository().read(asset_id).await {
+        Ok(content) => content,
+        Err(error) => return media_error_response(error.code(), &correlation_id),
+    };
+    let content_type = match content.record.mime.as_str() {
+        "image/png" => HeaderValue::from_static("image/png"),
+        "image/jpeg" => HeaderValue::from_static("image/jpeg"),
+        "image/webp" => HeaderValue::from_static("image/webp"),
+        _ => return media_error_response("external/unavailable", &correlation_id),
+    };
+    let Ok(etag) = HeaderValue::from_str(&format!("\"{}\"", content.record.sha256)) else {
+        return media_error_response("external/unavailable", &correlation_id);
+    };
+    let Ok(content_length) = HeaderValue::from_str(&content.record.size_bytes.to_string()) else {
+        return media_error_response("external/unavailable", &correlation_id);
+    };
+    let mut response = Response::new(if is_head {
+        axum::body::Body::empty()
+    } else {
+        axum::body::Body::from(content.bytes)
+    });
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert(axum::http::header::CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(axum::http::header::CONTENT_LENGTH, content_length);
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    response
+        .headers_mut()
+        .insert(axum::http::header::ETAG, etag);
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    response
+}
+
+fn media_error_response(code: &str, correlation_id: &str) -> Response<axum::body::Body> {
+    let error = ApiError::from_code(code);
+    log_api_error(&error, correlation_id, error.code());
+    error_response(&error, correlation_id.to_owned())
+}
+
 fn dashboard_response(document: String) -> Response<axum::body::Body> {
     let mut response = Response::new(axum::body::Body::from(document));
     response.headers_mut().insert(
@@ -275,6 +431,7 @@ const MAX_EDITOR_REQUEST_BYTES: usize = 16 * 1_024;
 const MAX_V2_DOCUMENT_BYTES: usize = 1_048_576;
 const MAX_V2_STAGE_REQUEST_BYTES: usize = 16_384;
 const MAX_V2_STAGE_UPLOAD_BYTES: usize = eez_storage::stage::V2_DOCUMENT_STAGE_MAX_BYTES;
+const MAX_MEDIA_UPLOAD_BYTES: usize = eez_storage::media::MAX_MEDIA_ASSET_BYTES;
 const MAX_V2_PREVIEW_ENVELOPE_BYTES: usize = MAX_V2_DOCUMENT_BYTES * 6 + 4 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -757,12 +914,34 @@ async fn public_form_submission_response(
     if revision.id != submission_identity.revision_id {
         return form_submission_stale_revision_error(&correlation_id);
     }
-    let document = match validate_revision_v2(
+    let unvalidated_document =
+        match DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id) {
+            Ok(document) => document,
+            Err(_) => return funnel_slug_not_found_response(&correlation_id),
+        };
+    let asset_ids = eez_render::document_v2::referenced_asset_ids(&unvalidated_document);
+    let media_records = match bindings
+        .media_asset_repository()
+        .get_many_ready(&asset_ids)
+        .await
+    {
+        Ok(records) if records.len() == asset_ids.len() => records,
+        _ => return funnel_slug_not_found_response(&correlation_id),
+    };
+    let assets = media_records
+        .into_iter()
+        .map(|record| AssetDigestRecord {
+            asset_id: record.id,
+            sha256: record.sha256,
+        })
+        .collect::<Vec<_>>();
+    let document = match validate_revision_v2_with_assets(
         revision.schema_version,
         &revision.funnel_id,
         &revision.id,
         &revision.data_json,
         &revision.render_manifest_json,
+        &assets,
     ) {
         Ok(document) => document,
         Err(_) => return funnel_slug_not_found_response(&correlation_id),
@@ -2093,7 +2272,8 @@ async fn execute_funnel_command(
     let document_stages = bindings.document_stage_repository();
     // Stage control is initialized by stage endpoints; V2 creation and its receipt replays do not
     // depend on it, so a temporary R2 sequence-control outage must not block funnel creation.
-    Session::with_document_stages(&repository, &document_stages)
+    let media_assets = bindings.media_asset_repository();
+    Session::with_document_stages_and_media_assets(&repository, &document_stages, &media_assets)
         .execute(actor, command_id, parameters, idempotency_key)
         .await
         .map_err(|error| ApiError::from_code(error.code()))

@@ -4,7 +4,7 @@ use eez_domain::document_v2::{
     IdKind, IdSource, NewBlock, SectionKind,
 };
 #[cfg(feature = "browser")]
-use eez_domain::document_v2::{BlockId, PageId, SectionId};
+use eez_domain::document_v2::{AssetId, BlockId, ImageAlt, PageId, SectionId};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,27 @@ struct V2RevisionSummary {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct V2RevisionHistory {
     revisions: Vec<V2RevisionSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+struct V2MediaAsset {
+    id: String,
+    mime: String,
+    size_bytes: u64,
+    sha256: String,
+    created_at: String,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Debug, Deserialize)]
+struct V2MediaLibraryResponse {
+    assets: Vec<V2MediaAsset>,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Debug, Deserialize)]
+struct V2MediaUploadResponse {
+    asset: V2MediaAsset,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -108,6 +129,11 @@ struct V2EditorState {
     delete_page_confirmation: Option<String>,
     new_section_kind: SectionKind,
     new_block_kind: V2NewBlockKind,
+    media_assets: Vec<V2MediaAsset>,
+    media_loading: bool,
+    media_uploading: bool,
+    media_error: Option<String>,
+    selected_media_asset: Option<String>,
     history: Vec<String>,
     history_cursor: usize,
     form_input_drafts: BTreeMap<String, String>,
@@ -185,6 +211,11 @@ impl Default for V2EditorState {
             delete_page_confirmation: None,
             new_section_kind: SectionKind::Features,
             new_block_kind: V2NewBlockKind::default(),
+            media_assets: Vec::new(),
+            media_loading: true,
+            media_uploading: false,
+            media_error: None,
+            selected_media_asset: None,
             history: Vec::new(),
             history_cursor: 0,
             form_input_drafts: BTreeMap::new(),
@@ -398,6 +429,43 @@ impl V2EditorState {
                 self.load_error = false;
             }
             _ => self.load_error = true,
+        }
+    }
+
+    fn finish_media_load(
+        &mut self,
+        route_epoch: u64,
+        funnel_id: &str,
+        result: Result<Vec<V2MediaAsset>, String>,
+    ) {
+        if self.route_epoch != route_epoch || self.funnel_id != funnel_id {
+            return;
+        }
+        self.media_loading = false;
+        match result {
+            Ok(assets) => {
+                let mut assets_by_id = assets
+                    .into_iter()
+                    .map(|asset| (asset.id.clone(), asset))
+                    .collect::<BTreeMap<_, _>>();
+                for asset in self.media_assets.drain(..) {
+                    assets_by_id.entry(asset.id.clone()).or_insert(asset);
+                }
+                self.media_assets = assets_by_id.into_values().collect();
+                self.media_assets.sort_by(|left, right| {
+                    right
+                        .created_at
+                        .cmp(&left.created_at)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                if self.selected_media_asset.as_ref().is_some_and(|selected| {
+                    !self.media_assets.iter().any(|asset| &asset.id == selected)
+                }) {
+                    self.selected_media_asset = None;
+                }
+                self.media_error = None;
+            }
+            Err(message) => self.media_error = Some(message),
         }
     }
 
@@ -625,16 +693,15 @@ impl V2EditorState {
     }
 
     fn can_save(&self) -> bool {
-        self.document.as_ref().is_some_and(|document| {
+        self.document.is_some() && {
             !self.loading
                 && !self.pending
                 && !self.saving
                 && !self.stale
                 && !self.has_uncommitted_editor_inputs()
                 && self.stage_capacity.is_some()
-                && !document.has_images()
                 && (self.save_retryable || self.has_unsaved_changes())
-        })
+        }
     }
 
     fn can_publish(&self) -> bool {
@@ -1328,6 +1395,28 @@ try {
 "#;
 
 #[cfg(feature = "browser")]
+const V2_MEDIA_UPLOAD: &str = r#"
+const request = await dioxus.recv();
+try {
+    const input = document.getElementById("v2-media-upload");
+    const file = input?.files?.[0];
+    if (!file) {
+        dioxus.send({status: 0, body: ""});
+    } else {
+        const response = await fetch("/api/media", {
+            method: "POST",
+            headers: {"Content-Type": file.type},
+            body: file
+        });
+        dioxus.send({status: response.status, body: await response.text()});
+        input.value = "";
+    }
+} catch (_) {
+    dioxus.send({status: 0, body: ""});
+}
+"#;
+
+#[cfg(feature = "browser")]
 async fn load_v2_editor(funnel_id: &str) -> Result<V2LoadedEditor, ()> {
     let metadata_response = api_request("GET", &format!("/api/funnels/{funnel_id}"), None, None)
         .await
@@ -1482,6 +1571,19 @@ async fn fetch_v2_preview(
 }
 
 #[cfg(feature = "browser")]
+async fn fetch_v2_media_assets() -> Result<Vec<V2MediaAsset>, String> {
+    let response = api_request("GET", "/api/media", None, None)
+        .await
+        .map_err(|_| "The media library could not be reached.".to_owned())?;
+    if response.status != 200 {
+        return Err(error_message(&response.body));
+    }
+    serde_json::from_str::<V2MediaLibraryResponse>(&response.body)
+        .map(|response| response.assets)
+        .map_err(|_| "The media library returned an invalid response.".to_owned())
+}
+
+#[cfg(feature = "browser")]
 async fn read_v2_local_draft(funnel_id: &str) -> Option<String> {
     let mut request = document::eval(V2_DRAFT_STORAGE);
     request
@@ -1556,6 +1658,78 @@ async fn upload_v2_stage(
 }
 
 #[cfg(feature = "browser")]
+async fn load_v2_media_assets(
+    mut state: Signal<V2EditorState>,
+    funnel_id: String,
+    route_epoch: u64,
+) {
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            if state.route_epoch == route_epoch && state.funnel_id == funnel_id {
+                state.media_loading = true;
+                state.media_error = None;
+            }
+        });
+    }
+    let result = fetch_v2_media_assets().await;
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| state.finish_media_load(route_epoch, &funnel_id, result));
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn upload_v2_media(mut state: Signal<V2EditorState>) {
+    let capture = state.with_mut(|state| {
+        if state.media_uploading || !state.can_edit() {
+            return None;
+        }
+        state.media_uploading = true;
+        state.media_error = None;
+        Some((state.route_epoch, state.funnel_id.clone()))
+    });
+    let Some((route_epoch, funnel_id)) = capture else {
+        return;
+    };
+    let mut request = document::eval(V2_MEDIA_UPLOAD);
+    let response = if request.send(serde_json::json!({})).is_ok() {
+        request.recv::<super::super::BrowserResponse>().await.ok()
+    } else {
+        None
+    };
+    if state.try_peek().is_err() {
+        return;
+    }
+    state.with_mut(|state| {
+        if state.route_epoch != route_epoch || state.funnel_id != funnel_id {
+            return;
+        }
+        state.media_uploading = false;
+        match response {
+            Some(response) if response.status == 201 => {
+                match serde_json::from_str::<V2MediaUploadResponse>(&response.body) {
+                    Ok(result) => {
+                        state.media_assets.retain(|asset| asset.id != result.asset.id);
+                        state.media_assets.insert(0, result.asset.clone());
+                        state.selected_media_asset = Some(result.asset.id);
+                        state.media_error = None;
+                        state.announcement = "Image uploaded and selected in the media library.".to_owned();
+                    }
+                    Err(_) => state.media_error = Some("The Worker returned an invalid image record.".to_owned()),
+                }
+            }
+            Some(response) => {
+                state.media_error = Some(if response.status == 0 || response.status >= 500 {
+                    "The image upload result is uncertain. Refresh the media library before retrying.".to_owned()
+                } else {
+                    error_message(&response.body)
+                });
+            }
+            None => state.media_error = Some("The image upload result is uncertain. Refresh the media library before retrying.".to_owned()),
+        }
+    });
+}
+
+#[cfg(feature = "browser")]
 fn v2_failure(response: &super::super::BrowserResponse) -> V2RequestFailure {
     let code = serde_json::from_str::<serde_json::Value>(&response.body)
         .ok()
@@ -1583,6 +1757,11 @@ async fn load_v2_editor_state(
     funnel_id: String,
     route_epoch: u64,
 ) {
+    let media_state = state;
+    let media_funnel_id = funnel_id.clone();
+    spawn(async move {
+        load_v2_media_assets(media_state, media_funnel_id, route_epoch).await;
+    });
     let loaded = load_v2_editor(&funnel_id).await;
     if state.try_peek().is_ok() {
         state.with_mut(|state| state.finish_load(route_epoch, &funnel_id, loaded));
@@ -2751,6 +2930,11 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 }
                             }
                         }
+                        V2MediaLibrary {
+                            state,
+                            add_block_location: add_block_location.clone(),
+                            locked,
+                        }
                         if let Some(section) = selected_section {
                             fieldset { class: "editor-setting-group",
                                 legend { "{section_kind_label(section.section_type())}" }
@@ -2913,6 +3097,218 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
 
 #[cfg(feature = "browser")]
 #[component]
+fn V2MediaLibrary(
+    state: Signal<V2EditorState>,
+    add_block_location: Option<(SectionId, Option<BlockId>)>,
+    locked: bool,
+) -> Element {
+    let view = state();
+    let selected_asset = view.selected_media_asset.clone();
+    let refresh_funnel_id = view.funnel_id.clone();
+    let refresh_route_epoch = view.route_epoch;
+    rsx! {
+        fieldset { class: "editor-setting-group editor-media-library",
+            legend { "Media library" }
+            p { class: "editor-keyboard-help", "Upload PNG, JPEG, or WebP images up to 8 MiB, then add one to the selected section." }
+            p { class: "editor-media-privacy", role: "note", "Uploaded images are publicly retrievable by their content-addressed URL. Do not upload private images." }
+            if let Some(error) = view.media_error.as_ref() {
+                p { class: "error-message", role: "alert", "{error}" }
+            }
+            if view.media_loading {
+                p { role: "status", "Loading images…" }
+            } else if view.media_assets.is_empty() {
+                p { class: "editor-keyboard-help", "No images yet. Upload an image to start your library." }
+            } else {
+                div { class: "editor-media-grid", role: "list", "aria-label": "Media images",
+                    for asset in view.media_assets.clone() {
+                        {
+                            let asset_id = asset.id.clone();
+                            let short_id = asset.id.chars().take(8).collect::<String>();
+                            let selected = selected_asset.as_deref() == Some(asset_id.as_str());
+                            let source = format!("/media/{}", asset.id);
+                            rsx! {
+                                div { class: "editor-media-card", role: "listitem",
+                                    button {
+                                        class: "editor-media-select",
+                                        r#type: "button",
+                                        disabled: locked,
+                                        "aria-pressed": "{selected}",
+                                        "aria-label": "Select image {short_id}",
+                                        onclick: move |_| state.with_mut(|state| {
+                                            state.selected_media_asset = Some(asset_id.clone());
+                                        }),
+                                        img { src: "{source}", alt: "", loading: "lazy" }
+                                        span { "Image {short_id}" }
+                                    }
+                                    small { "{media_size_label(asset.size_bytes)} · {asset.mime}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "editor-media-actions",
+                label { class: "secondary-button editor-media-upload",
+                    if view.media_uploading { "Uploading…" } else { "Upload image" }
+                    input {
+                        id: "v2-media-upload",
+                        r#type: "file",
+                        accept: "image/png,image/jpeg,image/webp",
+                        disabled: locked || view.media_uploading,
+                        onchange: move |_| { spawn(async move { upload_v2_media(state).await; }); },
+                    }
+                }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    disabled: view.media_loading,
+                    onclick: move |_| {
+                        let funnel_id = refresh_funnel_id.clone();
+                        spawn(async move { load_v2_media_assets(state, funnel_id, refresh_route_epoch).await; });
+                    },
+                    "Refresh library"
+                }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    disabled: locked || selected_asset.is_none() || add_block_location.is_none(),
+                    onclick: move |_| {
+                        let (Some(asset_id), Some((section, after))) = (
+                            state.with(|state| state.selected_media_asset.clone()),
+                            add_block_location.clone(),
+                        ) else { return; };
+                        if let Ok(asset_id) = AssetId::parse(asset_id) {
+                            dispatch_v2_edit(state, Edit::AddBlock {
+                                section,
+                                after,
+                                block: NewBlock::Image { asset_id, alt: ImageAlt::Decorative },
+                            });
+                        }
+                    },
+                    "Add selected image to section"
+                }
+            }
+            if add_block_location.is_none() {
+                p { class: "editor-keyboard-help", "Select a section before adding an image." }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2ImageBlockEditor(state: Signal<V2EditorState>, block: BlockV2, locked: bool) -> Element {
+    let BlockV2::Image { id, asset_id, alt } = block else {
+        return rsx! {};
+    };
+    let block_id = id.clone();
+    let assets = state.with(|state| state.media_assets.clone());
+    let current_asset_id = asset_id.as_str().to_owned();
+    let alt_text = match &alt {
+        ImageAlt::Text { value } => value.clone(),
+        ImageAlt::Decorative => String::new(),
+    };
+    let alt_kind = if matches!(alt, ImageAlt::Decorative) {
+        "decorative"
+    } else {
+        "text"
+    };
+    let block_for_asset = BlockV2::Image {
+        id,
+        asset_id: asset_id.clone(),
+        alt: alt.clone(),
+    };
+    let block_for_alt = block_for_asset.clone();
+    let block_for_kind = block_for_asset.clone();
+    let asset_for_kind = asset_id.clone();
+    let asset_for_alt = asset_id;
+    let alt_text_for_kind = alt_text.clone();
+    let assets_empty = assets.is_empty();
+    let current_asset_is_available = assets.iter().any(|asset| asset.id == current_asset_id);
+    rsx! {
+        div { class: "editor-image-settings",
+            label { class: "editor-setting-control",
+                "Image source"
+                select {
+                    value: "{current_asset_id}",
+                    disabled: locked || assets_empty,
+                    "aria-label": "Image source for {block_id.as_str()}",
+                    onchange: move |event| {
+                        if let Ok(next_asset_id) = AssetId::parse(event.value()) {
+                            if let Some(value) = block_value_with_image(&block_for_asset, next_asset_id, alt.clone()) {
+                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_asset.id().clone(), value });
+                            }
+                        }
+                    },
+                    if !current_asset_is_available {
+                        option { value: "{current_asset_id}", "Unavailable image" }
+                    }
+                    for asset in assets.iter() {
+                        option { value: "{asset.id}", "{asset.mime} · {media_size_label(asset.size_bytes)}" }
+                    }
+                }
+            }
+            label { class: "editor-setting-control",
+                "Alternative text"
+                select {
+                    value: "{alt_kind}",
+                    disabled: locked,
+                    "aria-label": "Alternative text type for {block_id.as_str()}",
+                    onchange: move |event| {
+                        let next_alt = if event.value() == "decorative" {
+                            Some(ImageAlt::Decorative)
+                        } else if event.value() == "text" {
+                            Some(ImageAlt::Text { value: if alt_text_for_kind.is_empty() { "Describe this image".to_owned() } else { alt_text_for_kind.clone() } })
+                        } else { None };
+                        if let Some(next_alt) = next_alt {
+                            if let Some(value) = block_value_with_image(&block_for_kind, asset_for_kind.clone(), next_alt) {
+                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_kind.id().clone(), value });
+                            }
+                        }
+                    },
+                    option { value: "text", "Meaningful image" }
+                    option { value: "decorative", "Decorative image" }
+                }
+            }
+            label { class: "editor-setting-control",
+                "Text alternative"
+                input {
+                    r#type: "text",
+                    value: "{alt_text}",
+                    maxlength: "8192",
+                    disabled: locked || alt_kind == "decorative",
+                    "aria-label": "Alternative text for {block_id.as_str()}",
+                    onchange: move |event| {
+                        let value = event.value();
+                        if !value.trim().is_empty() {
+                            if let Some(next) = block_value_with_image(&block_for_alt, asset_for_alt.clone(), ImageAlt::Text { value }) {
+                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_alt.id().clone(), value: next });
+                            }
+                        }
+                    },
+                }
+            }
+            p { class: "editor-keyboard-help", "Choose decorative for visual flourish; meaningful images need a concise text alternative." }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+fn media_size_label(size_bytes: u64) -> String {
+    if size_bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", size_bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KiB", size_bytes.div_ceil(1024))
+    }
+}
+
+#[cfg(feature = "browser")]
+fn block_value_with_image(block: &BlockV2, asset_id: AssetId, alt: ImageAlt) -> Option<NewBlock> {
+    matches!(block, BlockV2::Image { .. }).then_some(NewBlock::Image { asset_id, alt })
+}
+
+#[cfg(feature = "browser")]
+#[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     page_options: Vec<(String, String)>,
@@ -2961,7 +3357,7 @@ fn V2BlockEditor(
                 code { "{block.id().as_str()}" }
             }
             if matches!(block, BlockV2::Image { .. }) {
-                p { class: "editor-keyboard-help", "{text}" }
+                V2ImageBlockEditor { state, block: block.clone(), locked }
             } else if let Some(form) = form {
                 V2FormEditor { state, form, locked }
             } else {
