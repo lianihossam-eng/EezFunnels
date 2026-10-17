@@ -42,6 +42,10 @@ fn exact_renderer_v3_manifest_binds_row_document_theme_and_assets() {
     assert!(html.contains("Welcome to your new funnel"));
     assert!(html.contains("--color-background:#f8fafc"));
     assert!(html.contains("--font-family:system-ui, sans-serif"));
+    assert!(html.contains("--shadow-card:0 1px 3px rgba(15, 23, 42, 0.08)"));
+    assert!(html.contains(
+        ".v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}"
+    ));
     for section in ["hero", "features", "testimonials", "cta", "footer"] {
         assert!(html.contains(&format!("class=\"v2-section v2-section--{section}\"")));
     }
