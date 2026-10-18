@@ -51,7 +51,7 @@ pub(crate) fn empty_sitemap() -> String {
 
 pub(crate) fn build_robots(origin: Option<&Url>) -> String {
     let mut robots = String::from(
-        "User-agent: *\nDisallow: /\nDisallow: /api/\nDisallow: /funnels\nDisallow: /submissions\nDisallow: /mcp\nAllow: /f/\nAllow: /assets/\nAllow: /media/\n",
+        "User-agent: *\nDisallow: /\nAllow: /sitemap.xml\nDisallow: /api/\nDisallow: /funnels\nDisallow: /submissions\nDisallow: /mcp\nAllow: /f/\nAllow: /assets/\nAllow: /media/\n",
     );
     if let Some(origin) = origin.and_then(|origin| origin.join("sitemap.xml").ok()) {
         robots.push_str("Sitemap: ");
@@ -189,6 +189,7 @@ mod tests {
         let origin = Url::parse("https://funnels.example/").expect("valid origin");
         let robots = build_robots(Some(&origin));
         assert!(robots.contains("Disallow: /\n"));
+        assert!(robots.contains("Allow: /sitemap.xml\n"));
         assert!(robots.contains("Allow: /f/\n"));
         assert!(robots.contains("Allow: /assets/\n"));
         assert!(robots.contains("Allow: /media/\n"));

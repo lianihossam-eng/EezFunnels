@@ -183,6 +183,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert status == 200, (status, robots)
         assert robots_headers.get("content-type") == "text/plain; charset=utf-8", robots_headers
         assert b"Disallow: /api/" in robots and b"Disallow: /mcp" in robots, robots
+        assert b"Allow: /sitemap.xml" in robots, robots
         assert b"Allow: /f/" in robots and b"Allow: /assets/" in robots, robots
         assert b"Sitemap: https://funnels.example/sitemap.xml" in robots, robots
         assert request("HEAD", "/sitemap.xml")[0] == 200
