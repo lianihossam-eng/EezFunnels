@@ -1,6 +1,6 @@
 # Eez Funnel
 
-An open source, single-owner funnel builder that you run on your own Cloudflare account. The v0.1.0 GitHub Release is published with CLI binaries for Linux, macOS, and Windows; it predates the typed editor described below. The application is still under development, and the release does not verify a Cloudflare production deployment. Cloudflare usage is billed under your account where applicable.
+An open-source, Rust-first, single-owner funnel builder that you run on your own Cloudflare account. The current `main` branch includes the typed dashboard, public forms, aggregate reports, canonical URLs, sitemap and crawler guidance, and mapped custom hosts described below. The published `v0.1.0` release contains CLI binaries for Linux, macOS, and Windows but predates the typed dashboard. Repository checks do not verify a production Cloudflare deployment. Cloudflare usage is billed under your account where applicable.
 
 [![CI](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -13,6 +13,7 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Upload PNG, JPEG, and WebP images to the R2-backed media library, add them to typed pages, and set meaningful or decorative alternative text. Uploaded images have public, content-addressed URLs; do not upload private images.
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
+- Publish canonical links for public pages and serve a generated sitemap and crawler guidance using operator-configured HTTPS origins. Map custom hostnames from an operator-controlled Cloudflare zone to individual funnels. See [SEO and crawler guidance](docs/seo.md) and [Deploy](docs/deploy.md).
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
 - Review retained submissions in the inbox and track follow-up as new, contacted, qualified, or closed.
 - Review retained form completion counts by UTC date, stable form ID, and a closed campaign-channel category derived from `utm_medium` on the page containing the form. The report contains counts only; it does not track visits or calculate conversion rates.
@@ -20,11 +21,9 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Optional consent-based page and form interaction events can be collected when configured; see [Interaction measurement](docs/analytics.md). See [Security](docs/security.md) before exposing an instance publicly.
+## Scope and current limits
 
-## Scope
-
-Eez Funnel is an open source funnel builder designed for self-hosted use on Cloudflare. The current release provides a single-owner dashboard without built-in accounts or multi-user roles.
+Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly.
 
 ## Demo
 
@@ -77,12 +76,15 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/v2/stage-capacity` | Read the configured staged-save capacity |
 | `/api/media` | List and upload images in the R2-backed media library |
 | `/media/:sha256` | Read a public, content-addressed image |
-| `/f/:slug` | Render a published funnel |
+| `/f/:slug` and `/f/:slug/:page_slug` | Render a published entry page and its V2 pages |
+| Mapped custom funnel host `/` and `/:page_slug` | Render one mapped funnel; dashboard, owner APIs, and MCP are not available on that host |
 | `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
 | `/api/submissions` and `/api/submissions/:submission_id/status` | Read retained submissions and update their follow-up status |
 | `/api/funnels/:funnel_id/completions?period=7|30|90` | Read retained form completion counts for one funnel |
+| `/funnels/:id/completions` | View aggregate form completion counts for one funnel |
 | `/api/funnels/:funnel_id/interaction-report?period=7|30|90` | Read consented, retained interaction event aggregates for one funnel |
 | `/funnels/:id/interaction-report` | View aggregate interaction counts for one funnel |
+| `/robots.txt` and `/sitemap.xml` | Provide crawler hints and list published, indexable pages only when a configured HTTPS origin is valid |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |
 
