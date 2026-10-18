@@ -60,7 +60,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr017-") as directory:
         process = subprocess.Popen(
             [
                 str(wrangler), "dev", "--local", "--env", "dev", "--port", str(worker_port),
-                "--ip", "127.0.0.1", "--var", f"ALLOWED_HOSTS:localhost:{worker_port}",
+                "--ip", "127.0.0.1", "--var",
+                f"ALLOWED_HOSTS:localhost:{worker_port},127.0.0.1:{worker_port}",
                 "--env-file", str(env_file), "--persist-to", str(storage), "--log-level", "error",
             ],
             cwd=root,
@@ -179,6 +180,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr017-") as directory:
     worker, log = launch(port, token_file)
     try:
         wait_for_worker(worker, port)
+
+        client_env = os.environ.copy()
+        client_env["EEZ_MCP_SMOKE_URL"] = f"http://127.0.0.1:{port}/mcp"
+        client_env["EEZ_MCP_SMOKE_TOKEN"] = token
+        subprocess.run(
+            ["npm", "run", "--silent", "test:pr063:mcp-client"],
+            cwd=root,
+            env=client_env,
+            check=True,
+            timeout=60,
+        )
 
         status, body = request(port, "GET", "/mcp", auth="wrong-token")
         assert status == 401 and b"wrong-token" not in body, (status, body)
