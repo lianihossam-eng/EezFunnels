@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ElementTree
 from urllib.parse import urlencode
 
 root = Path(sys.argv[1])
@@ -50,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         [
             str(wrangler), "dev", "--local", "--env", "dev", "--port", str(port),
             "--ip", "127.0.0.1", "--var", f"ALLOWED_HOSTS:localhost:{port}",
+            "--var", "PUBLIC_BASE_URL:https://funnels.example",
             "--var", "PUBLIC_FORM_SUBMISSIONS_PER_MINUTE:3",
             "--var", "PUBLIC_FORM_RETENTION_DAYS:1",
             "--persist-to", str(persist), "--test-scheduled", "--log-level", "error",
@@ -171,6 +173,22 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
 
     try:
         wait_for_worker()
+        status, empty_sitemap, sitemap_headers = request("GET", "/sitemap.xml")
+        assert status == 200, (status, empty_sitemap)
+        assert sitemap_headers.get("content-type") == "application/xml; charset=utf-8", sitemap_headers
+        assert ElementTree.fromstring(empty_sitemap).findall(
+            "{http://www.sitemaps.org/schemas/sitemap/0.9}url"
+        ) == []
+        status, robots, robots_headers = request("GET", "/robots.txt")
+        assert status == 200, (status, robots)
+        assert robots_headers.get("content-type") == "text/plain; charset=utf-8", robots_headers
+        assert b"Disallow: /api/" in robots and b"Disallow: /mcp" in robots, robots
+        assert b"Allow: /sitemap.xml" in robots, robots
+        assert b"Allow: /f/" in robots and b"Allow: /assets/" in robots, robots
+        assert b"Sitemap: https://funnels.example/sitemap.xml" in robots, robots
+        assert request("HEAD", "/sitemap.xml")[0] == 200
+        assert request("POST", "/robots.txt")[0] == 405
+
         status, content, _ = post_json(
             "/api/funnels/v2",
             {"name": "PR-033 local form smoke", "blueprint": "lead_gen"},
@@ -181,6 +199,36 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         funnel_id = created["funnel"]["id"]
         slug = created["funnel"]["slug"]
         base_revision_id = created["initial_revision"]["id"]
+
+        status, unpublished_content, _ = post_json(
+            "/api/funnels/v2",
+            {"name": "PR-059 unpublished sitemap smoke", "blueprint": "lead_gen"},
+            "pr059-create-unpublished-v2",
+        )
+        assert status == 201, (status, unpublished_content)
+        unpublished_slug = json.loads(unpublished_content)["funnel"]["slug"]
+
+        status, legacy_content, _ = post_json(
+            "/api/funnels",
+            {"name": "PR-059 legacy sitemap smoke", "blueprint": "lead_gen"},
+            "pr059-create-published-v1",
+        )
+        assert status == 201, (status, legacy_content)
+        legacy_created = json.loads(legacy_content)
+        legacy_slug = legacy_created["funnel"]["slug"]
+        status, legacy_publish_content, _ = request(
+            "POST",
+            f"/api/funnels/{legacy_created['funnel']['id']}/publish",
+            json.dumps(
+                {
+                    "revision_id": legacy_created["initial_revision"]["id"],
+                    "expected_published_revision_id": None,
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json", "Idempotency-Key": "pr059-publish-v1"},
+        )
+        assert status == 200, (status, legacy_publish_content)
 
         document = json.loads(
             (root / "crates/domain/tests/fixtures/document_v2_minimal.json").read_bytes()
@@ -204,10 +252,12 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         saved_base_revision_id = json.loads(content)["revision_id"]
         current_document = [data.decode()]
 
-        def edit_document(operation_id, edit):
+        def edit_document(
+            operation_id, edit, page_id="page-home", base_revision_id=saved_base_revision_id
+        ):
             edit_request = {
-                "base_revision_id": saved_base_revision_id,
-                "page_id": "page-home",
+                "base_revision_id": base_revision_id,
+                "page_id": page_id,
                 "document_json": current_document[0],
                 "operation_id": operation_id,
                 "edit": edit,
@@ -221,6 +271,37 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             assert edit_status == 200, (operation_id, edit_status, edit_content)
             current_document[0] = json.loads(edit_content)["document_json"]
             return json.loads(current_document[0])
+
+        document = edit_document(
+            "1" * 32,
+            {
+                "operation": "add_page",
+                "from": "page-home",
+                "title": "Thank you",
+                "slug": "thank-you",
+            },
+        )
+        thank_you_page_id = document["pages"][1]["id"]
+        document = edit_document(
+            "2" * 32,
+            {
+                "operation": "add_page",
+                "from": thank_you_page_id,
+                "title": "Internal step",
+                "slug": "internal-step",
+            },
+            thank_you_page_id,
+        )
+        internal_page_id = document["pages"][2]["id"]
+        edit_document(
+            "3" * 32,
+            {
+                "operation": "set_page_no_index",
+                "page": internal_page_id,
+                "noindex": True,
+            },
+            internal_page_id,
+        )
 
         document = edit_document(
             "a" * 32,
@@ -329,6 +410,29 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert status == 200, (status, content)
 
+        status, sitemap, _ = request(
+            "GET", "/sitemap.xml", headers={"X-Forwarded-Host": "attacker.example"}
+        )
+        assert status == 200, sitemap
+        sitemap_urls = [
+            item.text
+            for item in ElementTree.fromstring(sitemap).findall(
+                "{http://www.sitemaps.org/schemas/sitemap/0.9}url/"
+                "{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+            )
+        ]
+        assert f"https://funnels.example/f/{legacy_slug}" in sitemap_urls, sitemap_urls
+        assert f"https://funnels.example/f/{slug}" in sitemap_urls, sitemap_urls
+        assert f"https://funnels.example/f/{slug}/thank-you" in sitemap_urls, sitemap_urls
+        assert not any("internal-step" in url for url in sitemap_urls), sitemap_urls
+        assert not any(unpublished_slug in url for url in sitemap_urls), sitemap_urls
+        assert all("attacker.example" not in url for url in sitemap_urls), sitemap_urls
+        assert len(sitemap_urls) == 3, sitemap_urls
+
+        noindex_status, noindex_html, _ = request("GET", f"/f/{slug}/internal-step")
+        assert noindex_status == 200, noindex_html
+        assert b'<meta name="robots" content="noindex">' in noindex_html, noindex_html
+
         status, html, headers = request(
             "GET", f"/f/{slug}?utm_medium=organic&utm_campaign=campaign-fixture"
         )
@@ -361,7 +465,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"name": "Ada Lovelace", "email": "ada@example.test", "_request_consent": "on"}
         ).encode()
 
-        document = json.loads(current_document[0])
+        document = edit_document(
+            "4" * 32,
+            {
+                "operation": "add_page",
+                "from": internal_page_id,
+                "title": "Draft only",
+                "slug": "draft-only",
+            },
+            internal_page_id,
+            saved_revision_id,
+        )
         document["forms"][0]["request_consent"]["copy_version"] = "request-v2"
         document["forms"][0]["request_consent"]["copy"] = (
             "I agree to be contacted about this updated request."
@@ -383,6 +497,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert status == 201, (status, content)
         updated_revision_id = json.loads(content)["revision_id"]
+        status, draft_sitemap, _ = request("GET", "/sitemap.xml")
+        assert status == 200, draft_sitemap
+        assert b"draft-only" not in draft_sitemap, draft_sitemap
         status, content, _ = request(
             "POST",
             f"/api/funnels/{funnel_id}/publish",
@@ -396,6 +513,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"Content-Type": "application/json", "Idempotency-Key": "pr033-form-publish-v2"},
         )
         assert status == 200, (status, content)
+        status, published_sitemap, _ = request("GET", "/sitemap.xml")
+        assert status == 200, published_sitemap
+        assert b"draft-only" in published_sitemap, published_sitemap
 
         stale_status, stale_body, _ = request_form_with_transport_retry(
             action_path,

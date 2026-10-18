@@ -129,6 +129,23 @@ pub struct RevisionRecord {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PublishedRevisionRecord {
+    pub slug: String,
+    pub revision: RevisionRecord,
+}
+
+#[derive(Deserialize)]
+struct PublishedRevisionJoin {
+    slug: String,
+    id: String,
+    funnel_id: String,
+    schema_version: i64,
+    data_json: String,
+    render_manifest_json: String,
+    created_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RevisionSummary {
     pub id: String,
@@ -915,6 +932,35 @@ impl<'a> Repository<'a> {
             .all()
             .await?;
         result.results::<FunnelRecord>().map_err(Into::into)
+    }
+
+    pub async fn list_published_revisions(&self) -> RepositoryResult<Vec<PublishedRevisionRecord>> {
+        let limit = D1Type::Integer(MAX_FUNNELS);
+        let rows = self
+            .database
+            .prepare(
+                "SELECT funnels.slug, revisions.id, revisions.funnel_id, revisions.schema_version, revisions.data_json, revisions.render_manifest_json, revisions.created_at FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.published_revision_id IS NOT NULL ORDER BY funnels.slug LIMIT ?",
+            )
+            .bind_refs([&limit])?
+            .all()
+            .await?
+            .results::<PublishedRevisionJoin>()?;
+        rows.into_iter()
+            .map(|row| {
+                validate_schema_version(row.schema_version)?;
+                Ok(PublishedRevisionRecord {
+                    slug: row.slug,
+                    revision: RevisionRecord {
+                        id: row.id,
+                        funnel_id: row.funnel_id,
+                        schema_version: row.schema_version,
+                        data_json: row.data_json,
+                        render_manifest_json: row.render_manifest_json,
+                        created_at: row.created_at,
+                    },
+                })
+            })
+            .collect()
     }
 
     async fn funnel_count(&self) -> RepositoryResult<i64> {
