@@ -121,8 +121,8 @@ try {
   );
   await statusFilter.selectOption("qualified");
   await combinedFilters;
-  assert.equal(await entries.count(), 1);
   await entries.filter({ hasText: "Grace Hopper" }).waitFor({ state: "visible" });
+  assert.equal(await entries.count(), 1);
 
   const filteredPages = page.waitForResponse((response) =>
     response.request().method() === "GET" &&
@@ -130,6 +130,7 @@ try {
   );
   await statusFilter.selectOption("new");
   await filteredPages;
+  await page.waitForFunction(() => document.querySelectorAll("details.submission-entry").length === 25);
   assert.equal(await entries.count(), 25);
   const filteredOlderPage = page.waitForResponse((response) =>
     response.request().method() === "GET" &&
