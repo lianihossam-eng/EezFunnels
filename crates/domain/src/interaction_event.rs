@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 pub const INTERACTION_EVENT_SCHEMA_VERSION: u16 = 1;
 pub const MAX_INTERACTION_EVENT_BYTES: usize = 2_048;
@@ -8,6 +10,9 @@ pub const DEFAULT_INTERACTION_RETENTION_DAYS: u8 = 30;
 pub const MAX_INTERACTION_RETENTION_DAYS: u8 = 90;
 
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
+const MIN_REPLAY_KEY_BYTES: usize = 32;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Consent to interaction measurement is separate from form processing and marketing consent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +110,7 @@ impl CampaignRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractionEvent {
     event_id: InteractionEventId,
+    replay_fingerprint: ReplayFingerprint,
     kind: InteractionEventKind,
     observed_at_unix_seconds: u64,
     funnel_id: InteractionResourceId,
@@ -153,6 +159,7 @@ impl InteractionEvent {
 pub enum InteractionContractError {
     PayloadTooLarge,
     InvalidPayload,
+    InvalidReplayKey,
     UnsupportedSchemaVersion,
     InvalidEventId,
     InvalidResourceId,
@@ -171,12 +178,16 @@ pub fn decode_interaction_event(
     payload: &[u8],
     consent: InteractionConsent,
     campaigns: &CampaignRegistry,
+    replay_key: &[u8],
 ) -> Result<Option<InteractionEvent>, InteractionContractError> {
     if consent != InteractionConsent::Granted {
         return Ok(None);
     }
     if payload.len() > MAX_INTERACTION_EVENT_BYTES {
         return Err(InteractionContractError::PayloadTooLarge);
+    }
+    if replay_key.len() < MIN_REPLAY_KEY_BYTES {
+        return Err(InteractionContractError::InvalidReplayKey);
     }
 
     let raw: RawInteractionEvent =
@@ -187,6 +198,9 @@ pub fn decode_interaction_event(
     if raw.observed_at_unix_seconds == 0 {
         return Err(InteractionContractError::InvalidEventTimestamp);
     }
+    let canonical_payload =
+        serde_json::to_vec(&raw).map_err(|_| InteractionContractError::InvalidPayload)?;
+    let replay_fingerprint = fingerprint(replay_key, &canonical_payload);
 
     let form_id = raw.form_id.map(InteractionResourceId::parse).transpose()?;
     let requires_form = matches!(
@@ -199,6 +213,7 @@ pub fn decode_interaction_event(
 
     let event = InteractionEvent {
         event_id: InteractionEventId::parse(raw.event_id)?,
+        replay_fingerprint,
         kind: raw.kind,
         observed_at_unix_seconds: raw.observed_at_unix_seconds,
         funnel_id: InteractionResourceId::parse(raw.funnel_id)?,
@@ -210,7 +225,7 @@ pub fn decode_interaction_event(
     Ok(Some(event))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawInteractionEvent {
     schema_version: u16,
@@ -241,8 +256,21 @@ pub fn classify_replay(
     match existing {
         None => ReplayDisposition::NewEvent,
         Some(existing) if existing.event_id != incoming.event_id => ReplayDisposition::NewEvent,
-        Some(existing) if existing == incoming => ReplayDisposition::ExactDuplicate,
+        Some(existing) if existing.replay_fingerprint == incoming.replay_fingerprint => {
+            ReplayDisposition::ExactDuplicate
+        }
         Some(_) => ReplayDisposition::ConflictingEventId,
+    }
+}
+
+/// An installation-keyed fingerprint of the recognized, validated request fields.
+/// It allows replay comparison without retaining unregistered campaign input.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ReplayFingerprint([u8; 32]);
+
+impl ReplayFingerprint {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 }
 
@@ -357,6 +385,16 @@ fn is_stable_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+fn fingerprint(key: &[u8], canonical_payload: &[u8]) -> ReplayFingerprint {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts keys of any length");
+    mac.update(b"eezfunnel:interaction-event:v1\0");
+    mac.update(canonical_payload);
+    let digest = mac.finalize().into_bytes();
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(&digest);
+    ReplayFingerprint(bytes)
+}
+
 fn is_uuid_v4(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 36
@@ -378,6 +416,7 @@ mod tests {
 
     const EVENT_ID: &str = "018f47a2-8b3c-4d61-8e2a-7f4c9b12d6a0";
     const CAMPAIGN_ID: &str = "spring-launch";
+    const REPLAY_KEY: &[u8] = b"contract-test-replay-key-32-bytes";
 
     fn registry() -> CampaignRegistry {
         CampaignRegistry::new([CAMPAIGN_ID]).expect("valid registry")
@@ -403,7 +442,7 @@ mod tests {
     }
 
     fn decode(bytes: &[u8]) -> Result<Option<InteractionEvent>, InteractionContractError> {
-        decode_interaction_event(bytes, InteractionConsent::Granted, &registry())
+        decode_interaction_event(bytes, InteractionConsent::Granted, &registry(), REPLAY_KEY)
     }
 
     fn page_view() -> InteractionEvent {
@@ -416,7 +455,7 @@ mod tests {
     fn missing_or_refused_consent_creates_no_event_without_reading_body() {
         for consent in [InteractionConsent::Missing, InteractionConsent::Refused] {
             assert_eq!(
-                decode_interaction_event(b"not json", consent, &registry()),
+                decode_interaction_event(b"not json", consent, &registry(), REPLAY_KEY),
                 Ok(None)
             );
         }
@@ -535,6 +574,78 @@ mod tests {
         assert_eq!(
             classify_replay(Some(&original), &changed),
             ReplayDisposition::ConflictingEventId
+        );
+    }
+
+    #[test]
+    fn replay_identity_is_stable_across_campaign_registry_changes() {
+        let bytes = payload("page_viewed", None, Some(CAMPAIGN_ID));
+        let before_registration = decode_interaction_event(
+            &bytes,
+            InteractionConsent::Granted,
+            &CampaignRegistry::default(),
+            REPLAY_KEY,
+        )
+        .unwrap()
+        .unwrap();
+        let after_registration =
+            decode_interaction_event(&bytes, InteractionConsent::Granted, &registry(), REPLAY_KEY)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(before_registration.campaign_id(), None);
+        assert_eq!(
+            after_registration.campaign_id().map(CampaignId::as_str),
+            Some(CAMPAIGN_ID)
+        );
+        assert_eq!(
+            classify_replay(Some(&before_registration), &after_registration),
+            ReplayDisposition::ExactDuplicate
+        );
+    }
+
+    #[test]
+    fn distinct_unknown_campaign_inputs_do_not_collapse_to_the_same_replay() {
+        let registry = CampaignRegistry::default();
+        let first = decode_interaction_event(
+            &payload("page_viewed", None, Some("unregistered-one")),
+            InteractionConsent::Granted,
+            &registry,
+            REPLAY_KEY,
+        )
+        .unwrap()
+        .unwrap();
+        let second = decode_interaction_event(
+            &payload("page_viewed", None, Some("unregistered-two")),
+            InteractionConsent::Granted,
+            &registry,
+            REPLAY_KEY,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(first.campaign_id(), None);
+        assert_eq!(second.campaign_id(), None);
+        assert_eq!(
+            classify_replay(Some(&first), &second),
+            ReplayDisposition::ConflictingEventId
+        );
+        assert_ne!(
+            first.replay_fingerprint.as_bytes(),
+            second.replay_fingerprint.as_bytes()
+        );
+    }
+
+    #[test]
+    fn replay_fingerprinting_requires_a_server_key_of_at_least_32_bytes() {
+        assert_eq!(
+            decode_interaction_event(
+                &payload("page_viewed", None, None),
+                InteractionConsent::Granted,
+                &registry(),
+                b"too-short",
+            ),
+            Err(InteractionContractError::InvalidReplayKey)
         );
     }
 
