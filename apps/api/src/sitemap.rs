@@ -61,6 +61,18 @@ pub(crate) fn build_robots(origin: Option<&Url>) -> String {
     robots
 }
 
+pub(crate) fn build_custom_robots(origin: Option<&Url>) -> String {
+    let mut robots = String::from(
+        "User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /assets/\nDisallow: /dashboard\nDisallow: /health\nDisallow: /mcp\nDisallow: /submissions\nDisallow: /admin\nDisallow: /__local/\n",
+    );
+    if let Some(sitemap) = origin.and_then(|origin| origin.join("sitemap.xml").ok()) {
+        robots.push_str("Sitemap: ");
+        robots.push_str(sitemap.as_str());
+        robots.push('\n');
+    }
+    robots
+}
+
 fn add_page_url(
     urls: &mut BTreeSet<String>,
     origin: &str,
@@ -92,7 +104,7 @@ mod tests {
     use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
     use url::Url;
 
-    use super::{build_robots, build_sitemap};
+    use super::{build_custom_robots, build_robots, build_sitemap};
 
     fn revision(
         slug: &str,
@@ -199,5 +211,16 @@ mod tests {
         assert!(robots.contains("Disallow: /mcp\n"));
         assert!(robots.contains("Sitemap: https://funnels.example/sitemap.xml\n"));
         assert!(!build_robots(None).contains("Sitemap:"));
+    }
+
+    #[test]
+    fn custom_robots_allow_public_paths_and_block_owner_routes() {
+        let origin = Url::parse("https://funnel.example").expect("valid origin");
+        let robots = build_custom_robots(Some(&origin));
+        assert!(robots.contains("Allow: /\n"));
+        assert!(robots.contains("Disallow: /api/\n"));
+        assert!(robots.contains("Disallow: /mcp\n"));
+        assert!(robots.contains("Sitemap: https://funnel.example/sitemap.xml\n"));
+        assert!(!build_custom_robots(None).contains("Sitemap:"));
     }
 }
