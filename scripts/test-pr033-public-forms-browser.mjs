@@ -14,9 +14,10 @@ const executablePath = await access("/usr/bin/chromium").then(
 );
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 try {
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
   const interactionRequests = [];
-  page.on("request", (request) => {
+  page.context().on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/interaction-events")) {
       interactionRequests.push(request);
     }
@@ -133,6 +134,37 @@ try {
       (request) => !("name" in request.postDataJSON()) && !("email" in request.postDataJSON()),
     ),
     "interaction payloads must not contain form answers",
+  );
+
+  const secondPage = await page.context().newPage();
+  const secondPageViewResponse = secondPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/interaction-events") &&
+      response.request().postDataJSON()?.kind === "page_viewed",
+  );
+  await secondPage.goto(pageUrl, { waitUntil: "networkidle" });
+  assert.equal((await secondPageViewResponse).status(), 204);
+  const requestsBeforeWithdrawal = interactionRequests.length;
+  const secondPageStorageUpdate = secondPage.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const onStorage = (event) => {
+          if (event.key !== "eezfunnel:interaction-consent:v1") return;
+          window.removeEventListener("storage", onStorage);
+          resolve(event.newValue);
+        };
+        window.addEventListener("storage", onStorage);
+      }),
+  );
+  await page.getByRole("button", { name: "Privacy choices" }).click();
+  await interactionPanel.getByRole("button", { name: "No thanks" }).click();
+  assert.equal(await secondPageStorageUpdate, "refused");
+  await secondPage.getByLabel("Name").fill("Not measured after withdrawal");
+  await secondPage.waitForTimeout(250);
+  assert.equal(
+    interactionRequests.length,
+    requestsBeforeWithdrawal,
+    "withdrawal in one tab must stop collection in every same-origin tab",
   );
   console.log("PR-067 consented interaction events and PR-033 browser forms passed");
 } finally {

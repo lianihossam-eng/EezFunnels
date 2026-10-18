@@ -210,6 +210,17 @@
   allow.addEventListener("click", () => saveChoice("granted"));
   refuse.addEventListener("click", () => saveChoice("refused"));
 
+  window.addEventListener("storage", (event) => {
+    if (event.key !== choiceKey && event.key !== null) return;
+    const storedChoice = event.key === null ? null : event.newValue;
+    choice = storedChoice === "granted" || storedChoice === "refused" ? storedChoice : null;
+    panel.hidden = choice !== null;
+    if (choice === "granted") {
+      recordPageView();
+      checkVisibleForms();
+    }
+  });
+
   if (choice === "granted") {
     recordPageView();
     checkVisibleForms();
