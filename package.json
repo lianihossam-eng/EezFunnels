@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "wrangler": "wrangler",
+    "demo:capture": "node scripts/capture-readme-demo.mjs",
     "test:pr063:mcp-client": "node scripts/test-pr063-mcp-client.mjs",
     "test:pr010:migration": "python3 scripts/test-pr010-migration.py",
     "test:pr052:migration": "python3 scripts/test-pr052-migration.py",

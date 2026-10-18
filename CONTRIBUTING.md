@@ -12,6 +12,9 @@ By participating, you agree to the Code of Conduct in CODE_OF_CONDUCT.md.
 4. Run cargo xtask check before every commit. It must pass.
 5. Open a PR with a clear description and verification summary.
 
+## Refreshing the README demos
+
+Build the local Worker and dashboard assets using the steps in the README, then install Playwright's Chromium and FFmpeg with `npx playwright install chromium ffmpeg` and run `npm run demo:capture`. The capture uses a temporary local D1 database and writes the GIFs to `docs/assets`; it does not use production data or Cloudflare credentials.
 
 
 ## Commit discipline

@@ -5,6 +5,14 @@ An open-source, Rust-first funnel builder for single-owner deployments on your o
 [![CI on main](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+## Demo
+
+These recordings show the current dashboard creating a webinar funnel, editing its content, previewing it at mobile width, and publishing it. The sample was created in the locally built application with disposable local data; it does not represent a production deployment.
+
+![Create a funnel, edit its typed content, preview the mobile layout, and publish it](docs/assets/dashboard-demo.gif)
+
+![The published sample funnel in a mobile browser, from its hero section through the call to action](docs/assets/published-page-demo.gif)
+
 ## What you can do
 
 - Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
