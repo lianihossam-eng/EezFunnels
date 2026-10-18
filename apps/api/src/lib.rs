@@ -14,6 +14,7 @@ use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStat
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
     NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
+    PublishedRevisionRecord,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -25,6 +26,7 @@ use crate::errors::ApiError;
 use crate::json::{validate_unique_json, JsonValidationError};
 
 mod canonical;
+mod custom_hosts;
 pub mod errors;
 pub mod host;
 mod json;
@@ -33,6 +35,8 @@ mod origin;
 mod sitemap;
 
 pub use host::HostAllowlist;
+
+use custom_hosts::{CustomHostMapping, CustomHostMappings};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -101,15 +105,27 @@ pub async fn fetch(
     let request_path = request.uri().path().to_owned();
     let method = request.method().as_str().to_owned();
     let correlation_id = normalize_correlation_id(request.headers_mut());
+    let (platform_hosts, custom_hosts) = request_host_configuration(&env);
+    let custom_host = custom_hosts.for_headers(request.headers());
+    let host_is_allowed = platform_hosts.allows_headers(request.headers()) || custom_host.is_some();
 
-    let mut response = if !request_host_allowed(&env, request.headers()) {
+    let mut response = if !host_is_allowed {
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
+    } else if let Some(mapping) = custom_host.as_ref() {
+        custom_host_response(
+            &env,
+            request,
+            mapping,
+            &custom_hosts,
+            correlation_id.clone(),
+        )
+        .await
     } else if request_path == "/robots.txt" {
         robots_response(&env, request, correlation_id.clone())
     } else if request_path == "/sitemap.xml" {
-        sitemap_response(&env, request, correlation_id.clone()).await
+        sitemap_response(&env, request, correlation_id.clone(), &custom_hosts, None).await
     } else if request_path == "/mcp" {
         mcp::handle(&env, request, &correlation_id).await
     } else if request_path == "/api/media" {
@@ -173,7 +189,17 @@ pub async fn fetch(
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/revisions") {
         funnel_editor_save_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(route) = public_route_from_path(&request_path) {
-        public_funnel_response(&env, request, route, correlation_id.clone()).await
+        let mapped_origin = custom_hosts
+            .mapping_for_funnel(route.funnel_slug)
+            .map(|mapping| CustomHostMappings::origin(&mapping));
+        public_funnel_response(
+            &env,
+            request,
+            route,
+            correlation_id.clone(),
+            mapped_origin.as_deref(),
+        )
+        .await
     } else if let Some(funnel_id) = request_path.strip_prefix("/api/funnels/") {
         funnel_item_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if request_path == "/__local/probe" && request.method() == Method::POST {
@@ -470,16 +496,131 @@ fn robots_response(
     response
 }
 
+async fn custom_host_response(
+    env: &Env,
+    request: HttpRequest,
+    mapping: &CustomHostMapping,
+    custom_hosts: &CustomHostMappings,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    let path = request.uri().path().to_owned();
+    let Some(route) = custom_host_route_from_path(&path, &mapping.funnel_slug) else {
+        return funnel_route_not_found_response(&correlation_id);
+    };
+    match route {
+        CustomHostRequestRoute::Page(route) => {
+            let origin = CustomHostMappings::origin(mapping);
+            public_funnel_response(env, request, route, correlation_id, Some(&origin)).await
+        }
+        CustomHostRequestRoute::FormSubmission(route) => {
+            public_form_submission_response(env, request, route, correlation_id).await
+        }
+        CustomHostRequestRoute::Media(asset_id) => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed_for(&correlation_id, "GET, HEAD");
+            }
+            if !mapped_funnel_references_asset(env, &mapping.funnel_slug, asset_id).await {
+                return funnel_route_not_found_response(&correlation_id);
+            }
+            media_asset_response(env, request, asset_id, correlation_id).await
+        }
+        CustomHostRequestRoute::Robots => {
+            if request.method() != Method::GET && request.method() != Method::HEAD {
+                return method_not_allowed_for(&correlation_id, "GET, HEAD");
+            }
+            custom_robots_response(mapping, &correlation_id, request.method() == Method::HEAD)
+        }
+        CustomHostRequestRoute::Sitemap => {
+            sitemap_response(env, request, correlation_id, custom_hosts, Some(mapping)).await
+        }
+    }
+}
+
+async fn mapped_funnel_references_asset(env: &Env, funnel_slug: &str, asset_id: &str) -> bool {
+    let Ok(bindings) = eez_storage::Bindings::from_env(env) else {
+        return false;
+    };
+    let Ok(Some(published)) = bindings
+        .repository()
+        .get_published_revision_by_slug(funnel_slug)
+        .await
+    else {
+        return false;
+    };
+    published_document_references_asset(
+        published.schema_version,
+        &published.data_json,
+        &published.funnel_id,
+        asset_id,
+    )
+}
+
+fn published_document_references_asset(
+    schema_version: i64,
+    data_json: &str,
+    funnel_id: &str,
+    asset_id: &str,
+) -> bool {
+    if schema_version != 2 || !eez_storage::media::is_lower_sha256(asset_id) {
+        return false;
+    }
+    let Ok(document) = DocumentV2::decode(data_json.as_bytes(), funnel_id) else {
+        return false;
+    };
+    eez_render::document_v2::referenced_asset_ids(&document)
+        .iter()
+        .any(|referenced| referenced == asset_id)
+}
+
+fn custom_robots_response(
+    mapping: &CustomHostMapping,
+    correlation_id: &str,
+    is_head: bool,
+) -> Response<axum::body::Body> {
+    let origin = CustomHostMappings::origin(mapping);
+    let origin = crate::canonical::public_origin_url(Some(&origin));
+    let body = sitemap::build_custom_robots(origin.as_ref());
+    let mut response = Response::new(if is_head {
+        axum::body::Body::empty()
+    } else {
+        axum::body::Body::from(body)
+    });
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    response
+}
+
 async fn sitemap_response(
     env: &Env,
     request: HttpRequest,
     correlation_id: String,
+    custom_hosts: &CustomHostMappings,
+    custom_host: Option<&CustomHostMapping>,
 ) -> Response<axum::body::Body> {
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return method_not_allowed_for(&correlation_id, "GET, HEAD");
     }
-    let configured_origin = env.var("PUBLIC_BASE_URL").ok();
-    let configured_origin = configured_origin.as_ref().map(|value| value.to_string());
+    let custom_origin = custom_host.map(CustomHostMappings::origin);
+    let configured_origin = if custom_origin.is_some() {
+        custom_origin
+    } else {
+        env.var("PUBLIC_BASE_URL")
+            .ok()
+            .map(|value| value.to_string())
+    };
     let origin = crate::canonical::public_origin_url(configured_origin.as_deref());
     let body = if let Some(origin) = origin.as_ref() {
         let bindings = match eez_storage::Bindings::from_env(env) {
@@ -506,6 +647,7 @@ async fn sitemap_response(
                 return error_response(&error, correlation_id);
             }
         };
+        let published_revisions = sitemap_revisions(published_revisions, custom_hosts, custom_host);
         match sitemap::build_sitemap(origin, &published_revisions) {
             Ok(sitemap) => sitemap,
             Err(()) => {
@@ -551,12 +693,49 @@ fn dashboard_response(document: String) -> Response<axum::body::Body> {
     response
 }
 
-fn request_host_allowed(env: &Env, headers: &HeaderMap<HeaderValue>) -> bool {
+fn request_host_configuration(env: &Env) -> (HostAllowlist, CustomHostMappings) {
     let configured_hosts = env
         .var("ALLOWED_HOSTS")
         .map(|value| value.to_string())
         .unwrap_or_default();
-    HostAllowlist::parse(&configured_hosts).allows_headers(headers)
+    let platform_hosts = HostAllowlist::parse(&configured_hosts);
+    let configured_mappings = env
+        .var("PUBLIC_FUNNEL_HOSTS")
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let public_base_hostname = env
+        .var("PUBLIC_BASE_URL")
+        .ok()
+        .and_then(|value| crate::canonical::public_origin_url(Some(&value.to_string())))
+        .and_then(|origin| origin.host_str().map(str::to_owned));
+    let custom_hosts = match CustomHostMappings::parse(
+        &configured_mappings,
+        &platform_hosts,
+        public_base_hostname.as_deref(),
+    ) {
+        Ok(mappings) => mappings,
+        Err(()) => {
+            worker::console_warn!(
+                "PUBLIC_FUNNEL_HOSTS is invalid; custom funnel host routing is disabled"
+            );
+            CustomHostMappings::default()
+        }
+    };
+    (platform_hosts, custom_hosts)
+}
+
+fn sitemap_revisions(
+    published_revisions: Vec<PublishedRevisionRecord>,
+    custom_hosts: &CustomHostMappings,
+    custom_host: Option<&CustomHostMapping>,
+) -> Vec<PublishedRevisionRecord> {
+    published_revisions
+        .into_iter()
+        .filter(|published| match custom_host {
+            Some(mapping) => published.slug == mapping.funnel_slug,
+            None => !custom_hosts.has_funnel(&published.slug),
+        })
+        .collect()
 }
 
 const MAX_CREATE_REQUEST_BYTES: usize = 16 * 1024;
@@ -578,6 +757,15 @@ struct PublicFormSubmissionRoute<'a> {
     funnel_slug: &'a str,
     page_id: &'a str,
     form_id: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CustomHostRequestRoute<'a> {
+    Page(PublicFunnelRoute<'a>),
+    FormSubmission(PublicFormSubmissionRoute<'a>),
+    Media(&'a str),
+    Robots,
+    Sitemap,
 }
 
 fn public_route_from_path(path: &str) -> Option<PublicFunnelRoute<'_>> {
@@ -624,7 +812,66 @@ fn public_form_submission_route_from_path(path: &str) -> Option<PublicFormSubmis
     })
 }
 
-fn valid_public_slug(slug: &str) -> bool {
+fn custom_host_route_from_path<'a>(
+    path: &'a str,
+    mapped_funnel_slug: &'a str,
+) -> Option<CustomHostRequestRoute<'a>> {
+    if path == "/robots.txt" {
+        return Some(CustomHostRequestRoute::Robots);
+    }
+    if path == "/sitemap.xml" {
+        return Some(CustomHostRequestRoute::Sitemap);
+    }
+    if let Some(route) = public_form_submission_route_from_path(path) {
+        return (route.funnel_slug == mapped_funnel_slug)
+            .then_some(CustomHostRequestRoute::FormSubmission(route));
+    }
+    if let Some(asset_id) = path.strip_prefix("/media/") {
+        if eez_storage::media::is_lower_sha256(asset_id) {
+            return Some(CustomHostRequestRoute::Media(asset_id));
+        }
+        return None;
+    }
+    if path == "/" {
+        return Some(CustomHostRequestRoute::Page(PublicFunnelRoute {
+            funnel_slug: mapped_funnel_slug,
+            page_slug: None,
+        }));
+    }
+    if let Some(route) = public_route_from_path(path) {
+        return (route.funnel_slug == mapped_funnel_slug)
+            .then_some(CustomHostRequestRoute::Page(route));
+    }
+    let page_slug = path.strip_prefix('/')?;
+    if page_slug.contains('/')
+        || !valid_public_slug(page_slug)
+        || reserved_custom_host_path(page_slug)
+    {
+        return None;
+    }
+    Some(CustomHostRequestRoute::Page(PublicFunnelRoute {
+        funnel_slug: mapped_funnel_slug,
+        page_slug: Some(page_slug),
+    }))
+}
+
+fn reserved_custom_host_path(path_segment: &str) -> bool {
+    matches!(
+        path_segment,
+        "admin"
+            | "api"
+            | "assets"
+            | "dashboard"
+            | "f"
+            | "funnels"
+            | "health"
+            | "mcp"
+            | "media"
+            | "submissions"
+    ) || path_segment.starts_with("__local")
+}
+
+pub(crate) fn valid_public_slug(slug: &str) -> bool {
     (1..=128).contains(&slug.len())
         && slug
             .bytes()
@@ -850,10 +1097,12 @@ async fn public_funnel_response(
     request: HttpRequest,
     route: PublicFunnelRoute<'_>,
     correlation_id: String,
+    canonical_origin: Option<&str>,
 ) -> Response<axum::body::Body> {
-    if request.method() != Method::GET {
-        return method_not_allowed_for(&correlation_id, "GET");
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
     }
+    let is_head = request.method() == Method::HEAD;
     if !valid_public_slug(route.funnel_slug) {
         return funnel_slug_not_found_response(&correlation_id);
     }
@@ -882,7 +1131,7 @@ async fn public_funnel_response(
     let configured_origin = env.var("PUBLIC_BASE_URL").ok();
     let configured_origin = configured_origin.as_ref().map(|value| value.to_string());
     if let Some(canonical_url) = crate::canonical::public_page_url(
-        configured_origin.as_deref(),
+        canonical_origin.or(configured_origin.as_deref()),
         route.funnel_slug,
         route.page_slug,
     ) {
@@ -914,7 +1163,19 @@ async fn public_funnel_response(
             revision_id,
             submission_channel,
         );
-        let mut response = Response::new(axum::body::Body::from(html));
+        let html_length = html.len();
+        let mut response = Response::new(if is_head {
+            axum::body::Body::empty()
+        } else {
+            axum::body::Body::from(html)
+        });
+        if is_head {
+            if let Ok(value) = HeaderValue::from_str(&html_length.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::CONTENT_LENGTH, value);
+            }
+        }
         response
             .headers_mut()
             .insert("cache-control", HeaderValue::from_static("no-store"));
@@ -950,7 +1211,16 @@ async fn public_funnel_response(
         *response.status_mut() = StatusCode::NOT_MODIFIED;
         return response;
     }
-    *response.body_mut() = axum::body::Body::from(html);
+    let html_length = html.len();
+    if is_head {
+        if let Ok(value) = HeaderValue::from_str(&html_length.to_string()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_LENGTH, value);
+        }
+    } else {
+        *response.body_mut() = axum::body::Body::from(html);
+    }
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
@@ -3320,22 +3590,25 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_public_form_submission_identity, correlation_id, editor_command_parameters,
-        form_completion_period, form_submission_status_command_parameters,
-        form_submission_status_id_from_path, funnel_subroute, is_json_content_type,
-        normalize_correlation_id, parse_public_form_body,
+        bind_public_form_submission_identity, correlation_id, custom_host_route_from_path,
+        editor_command_parameters, form_completion_period,
+        form_submission_status_command_parameters, form_submission_status_id_from_path,
+        funnel_subroute, is_json_content_type, normalize_correlation_id, parse_public_form_body,
         public_form_submission_channel_from_page_query, public_form_submission_identity,
         public_form_submission_query, public_form_submission_route_from_path,
         public_form_success_location, public_html_etag, public_route_from_path,
-        publication_command_parameters, request_if_none_match, stage_upload_token,
-        v1_conversion_command_parameters, v2_document_revision_query, v2_edit_command_parameters,
-        v2_preview_command_parameters, v2_save_command_parameters, v2_stage_command_parameters,
-        valid_public_slug, EditorCommandParametersError, PublicFormSubmissionCursor,
+        publication_command_parameters, published_document_references_asset, request_if_none_match,
+        sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
+        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
+        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
+        CustomHostRequestRoute, EditorCommandParametersError, PublicFormSubmissionCursor,
         PublicFormSubmissionIdentity,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
     use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
+    use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
+    use serde_json::Value;
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
@@ -3492,6 +3765,188 @@ mod tests {
         assert!(valid_public_slug("quick-offer-123"));
         assert!(!valid_public_slug("../private"));
         assert!(!valid_public_slug("quick_offer"));
+    }
+
+    #[test]
+    fn custom_hosts_only_resolve_the_mapped_funnels_public_routes() {
+        assert_eq!(
+            custom_host_route_from_path("/", "lead-gen"),
+            Some(CustomHostRequestRoute::Page(super::PublicFunnelRoute {
+                funnel_slug: "lead-gen",
+                page_slug: None,
+            }))
+        );
+        assert_eq!(
+            custom_host_route_from_path("/checkout", "lead-gen"),
+            Some(CustomHostRequestRoute::Page(super::PublicFunnelRoute {
+                funnel_slug: "lead-gen",
+                page_slug: Some("checkout"),
+            }))
+        );
+        assert_eq!(
+            custom_host_route_from_path("/f/lead-gen/checkout", "lead-gen"),
+            Some(CustomHostRequestRoute::Page(super::PublicFunnelRoute {
+                funnel_slug: "lead-gen",
+                page_slug: Some("checkout"),
+            }))
+        );
+        assert_eq!(
+            custom_host_route_from_path("/f/another-funnel", "lead-gen"),
+            None
+        );
+        assert_eq!(
+            custom_host_route_from_path(
+                "/api/public/funnels/lead-gen/pages/page-home/forms/form-contact/submissions",
+                "lead-gen"
+            ),
+            Some(CustomHostRequestRoute::FormSubmission(
+                super::PublicFormSubmissionRoute {
+                    funnel_slug: "lead-gen",
+                    page_id: "page-home",
+                    form_id: "form-contact",
+                }
+            ))
+        );
+        let asset_id = "a".repeat(64);
+        let media_path = format!("/media/{asset_id}");
+        assert_eq!(
+            custom_host_route_from_path(&media_path, "lead-gen"),
+            Some(CustomHostRequestRoute::Media(&asset_id))
+        );
+        assert_eq!(
+            custom_host_route_from_path("/media/aaaaaaaaaaaaaaaa", "lead-gen"),
+            None
+        );
+        assert_eq!(
+            custom_host_route_from_path("/robots.txt", "lead-gen"),
+            Some(CustomHostRequestRoute::Robots)
+        );
+        assert_eq!(
+            custom_host_route_from_path("/sitemap.xml", "lead-gen"),
+            Some(CustomHostRequestRoute::Sitemap)
+        );
+        for blocked in [
+            "/api/funnels",
+            "/api/media",
+            "/api/public/funnels/another-funnel/pages/page-home/forms/form-contact/submissions",
+            "/mcp",
+            "/admin",
+            "/dashboard",
+            "/health",
+            "/assets/index.js",
+            "/__local/probe",
+            "/unknown/nested/path",
+            "/f/lead-gen/",
+        ] {
+            assert_eq!(
+                custom_host_route_from_path(blocked, "lead-gen"),
+                None,
+                "{blocked}"
+            );
+        }
+    }
+
+    #[test]
+    fn sitemap_scope_follows_custom_host_mappings_and_published_rows() {
+        let hosts = super::CustomHostMappings::parse(
+            "funnel.example=lead-gen",
+            &super::HostAllowlist::parse("eezfunnel.workers.dev"),
+            Some("eezfunnel.workers.dev"),
+        )
+        .expect("valid mapping");
+        let mapping = hosts.mapping_for_funnel("lead-gen").expect("mapped funnel");
+        let published_revisions = vec![
+            PublishedRevisionRecord {
+                slug: "lead-gen".to_owned(),
+                revision: RevisionRecord {
+                    id: "revision-lead".to_owned(),
+                    funnel_id: "funnel-lead".to_owned(),
+                    schema_version: 1,
+                    data_json: "{}".to_owned(),
+                    render_manifest_json: String::new(),
+                    created_at: String::new(),
+                },
+            },
+            PublishedRevisionRecord {
+                slug: "other".to_owned(),
+                revision: RevisionRecord {
+                    id: "revision-other".to_owned(),
+                    funnel_id: "funnel-other".to_owned(),
+                    schema_version: 1,
+                    data_json: "{}".to_owned(),
+                    render_manifest_json: String::new(),
+                    created_at: String::new(),
+                },
+            },
+        ];
+
+        let custom_sitemap_rows =
+            sitemap_revisions(published_revisions.clone(), &hosts, Some(&mapping));
+        assert_eq!(
+            custom_sitemap_rows
+                .iter()
+                .map(|published| published.slug.as_str())
+                .collect::<Vec<_>>(),
+            ["lead-gen"]
+        );
+        let custom_sitemap = super::sitemap::build_sitemap(
+            &url::Url::parse("https://funnel.example").expect("valid origin"),
+            &custom_sitemap_rows,
+        )
+        .expect("valid custom-host sitemap");
+        assert!(custom_sitemap.contains("https://funnel.example/f/lead-gen"));
+        assert!(!custom_sitemap.contains("/f/other"));
+
+        let platform_sitemap_rows = sitemap_revisions(published_revisions, &hosts, None);
+        assert_eq!(
+            platform_sitemap_rows
+                .iter()
+                .map(|published| published.slug.as_str())
+                .collect::<Vec<_>>(),
+            ["other"]
+        );
+        assert!(sitemap_revisions(Vec::new(), &hosts, Some(&mapping)).is_empty());
+    }
+
+    #[test]
+    fn custom_host_media_requires_a_valid_asset_in_the_published_v2_document() {
+        let asset_id = "a".repeat(64);
+        let mut document: Value = serde_json::from_str(include_str!(
+            "../../../crates/domain/tests/fixtures/document_v2_minimal.json"
+        ))
+        .expect("minimal V2 fixture is valid JSON");
+        document["pages"][0]["sections"][0]["blocks"] = serde_json::json!([{
+            "id": "image-block",
+            "kind": "image",
+            "asset_id": asset_id.clone(),
+            "alt": {"kind": "decorative"}
+        }]);
+        let data_json = document.to_string();
+
+        assert!(published_document_references_asset(
+            2,
+            &data_json,
+            "funnel-01",
+            &asset_id,
+        ));
+        assert!(!published_document_references_asset(
+            2,
+            &data_json,
+            "funnel-01",
+            &"b".repeat(64),
+        ));
+        assert!(!published_document_references_asset(
+            1,
+            &data_json,
+            "funnel-01",
+            &asset_id,
+        ));
+        assert!(!published_document_references_asset(
+            2,
+            "not-json",
+            "funnel-01",
+            &asset_id,
+        ));
     }
 
     #[test]

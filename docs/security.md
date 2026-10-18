@@ -8,6 +8,8 @@ Before making the Worker reachable from the public Internet, use Cloudflare Acce
 
 Published entry pages use `GET /f/:slug`; additional V2 pages use `GET /f/:slug/:page_slug`. Add an Access bypass/public policy for those published-page paths only if those funnels should be public. If the bypass is omitted, visitors will also need to authenticate before seeing a published funnel.
 
+`PUBLIC_FUNNEL_HOSTS` maps exact custom hostnames to published funnels. On those hosts, the application serves only the mapped funnel's public pages, referenced published media, and public form submission route; dashboard, owner API, MCP, admin, and local-only paths return not found. The mapping controls routing, not user authentication. Put Cloudflare Access in front of a mapped hostname if its funnel must not be public.
+
 `/sitemap.xml` lists published, indexable page routes, and `/robots.txt` gives crawlers hints about public and owner paths. These files can reveal published route slugs and do not protect content. Page `noindex` and robots exclusions are not authorization; use Access or another network perimeter when a page or route must remain private.
 
 Published image delivery uses `GET /media/:sha256`. This route is public so published pages can load their images. Uploaded files are content-addressed and become publicly retrievable as soon as upload completes, including images not yet used by a published page. The dashboard warns about this; never upload private images.

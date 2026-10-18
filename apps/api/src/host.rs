@@ -31,7 +31,7 @@ impl HostAllowlist {
     }
 }
 
-fn normalize_host(host: &str) -> Option<String> {
+pub(crate) fn normalize_host(host: &str) -> Option<String> {
     if host.is_empty()
         || host
             .chars()
@@ -91,11 +91,27 @@ fn normalize_host(host: &str) -> Option<String> {
     Some(host.to_ascii_lowercase())
 }
 
+pub(crate) fn normalize_dns_hostname(host: &str) -> Option<String> {
+    if host.contains(':') {
+        return None;
+    }
+    let normalized = normalize_host(host)?;
+    let labels = normalized.split('.').collect::<Vec<_>>();
+    if normalized.len() > 253
+        || labels.len() < 2
+        || labels.iter().any(|label| label.len() > 63)
+        || normalized.parse::<std::net::Ipv4Addr>().is_ok()
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::HostAllowlist;
+    use super::{normalize_dns_hostname, HostAllowlist};
 
     #[test]
     fn allowlist_accepts_only_exact_hosts_and_ports() {
@@ -138,5 +154,18 @@ mod tests {
 
         assert!(!hosts.allows("localhost:bad"));
         assert!(!hosts.allows("example.com/path"));
+    }
+
+    #[test]
+    fn dns_hostnames_are_normalized_without_accepting_ports_or_ip_literals() {
+        assert_eq!(
+            normalize_dns_hostname("Funnels.Example"),
+            Some("funnels.example".to_owned())
+        );
+        assert_eq!(normalize_dns_hostname("funnels.example:443"), None);
+        assert_eq!(normalize_dns_hostname("[::1]"), None);
+        assert_eq!(normalize_dns_hostname("localhost"), None);
+        assert_eq!(normalize_dns_hostname("127.0.0.1"), None);
+        assert_eq!(normalize_dns_hostname("*.funnels.example"), None);
     }
 }
