@@ -91,7 +91,7 @@ openssl rand -hex 32 | npx wrangler secret put INTERACTION_REPLAY_KEY
 
 Without this secret, published pages do not load the interaction script and the collector fails closed. Keep the secret unchanged while event rows created with it may remain (up to 90 days); replay-key rotation is not automated. Do not put the key in `wrangler.toml`, source control, issue text, or shell history.
 
-`PUBLIC_INTERACTION_RETENTION_DAYS` defaults to 30 and accepts 1 through 90. `PUBLIC_INTERACTION_EVENTS_PER_MINUTE` defaults to 100 per funnel. These settings are in the top-level `[vars]` table and the separate `[env.dev.vars]` table. The local `dev` environment can use a private `.dev.vars` file for `INTERACTION_REPLAY_KEY`; do not commit that file. The scheduled cleanup removes expired event rows every 15 minutes. See [Interaction measurement](analytics.md) for the consent and data boundaries; no aggregate owner report is included yet.
+`PUBLIC_INTERACTION_RETENTION_DAYS` defaults to 30 and accepts 1 through 90. `PUBLIC_INTERACTION_EVENTS_PER_MINUTE` defaults to 100 per funnel. These settings are in the top-level `[vars]` table and the separate `[env.dev.vars]` table. The local `dev` environment can use a private `.dev.vars` file for `INTERACTION_REPLAY_KEY`; do not commit that file. The scheduled cleanup removes expired event rows every 15 minutes. The dashboard's **Interaction counts** view reports retained aggregates for each funnel; see [Interaction measurement](analytics.md) for its consent and data boundaries.
 
 ## CLI deployment
 

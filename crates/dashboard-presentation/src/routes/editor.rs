@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "browser"), allow(dead_code))]
 
 use super::section_label;
+use super::RouteView;
 #[cfg(feature = "browser")]
 use super::{
     api_request, clear_idempotency_storage, error_message, prepare_idempotency_key,
@@ -1836,6 +1837,7 @@ fn FunnelDetailV1(id: String) -> Element {
             h1 { "{title}" }
             p { class: "page-description", "Reorder sections and preview the funnel before saving a new revision." }
             code { class: "detail-id", "Funnel ID: {id}" }
+            Link { to: RouteView::FunnelInteractionReport { id: id.clone() }, class: "secondary-button completion-report-link", "View interaction counts" }
         }
         if view.loading {
             section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",

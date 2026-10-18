@@ -1822,13 +1822,18 @@ h1 {
   justify-self: center;
 }
 
-.completion-report {
+.completion-report,
+.interaction-report {
   display: grid;
   gap: 22px;
   max-width: 1040px;
 }
 
 .completion-report .page-heading {
+  margin-bottom: 0;
+}
+
+.interaction-report .page-heading {
   margin-bottom: 0;
 }
 
@@ -2036,6 +2041,14 @@ h1 {
   min-width: 320px;
 }
 
+.interaction-daily-table {
+  min-width: 640px;
+}
+
+.interaction-campaign-table {
+  min-width: 320px;
+}
+
 .completion-loading,
 .completion-error {
   padding: 18px 0;
@@ -2061,7 +2074,8 @@ h1 {
 }
 
 @media (max-width: 680px) {
-  .completion-report {
+  .completion-report,
+  .interaction-report {
     gap: 18px;
   }
 

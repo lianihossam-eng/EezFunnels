@@ -10,6 +10,7 @@ export WRANGLER_SEND_METRICS=false
 
 python3 "$repo_root/scripts/test-pr057-migration.py"
 python3 "$repo_root/scripts/test-pr067-interaction-migration.py"
+python3 "$repo_root/scripts/test-pr069-interaction-report-query.py"
 
 python3 - "$repo_root" <<'PY'
 import hashlib
@@ -798,6 +799,91 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert event_summary["retention_seconds"] == 86_400, event_summary
         assert event_summary["distinct_ids"] == event_summary["events"], event_summary
 
+        interaction_report_path = f"/api/funnels/{funnel_id}/interaction-report"
+        interaction_report_status, interaction_report_body, interaction_report_headers = request(
+            "GET", f"{interaction_report_path}?period=7"
+        )
+        assert interaction_report_status == 200, interaction_report_body
+        assert interaction_report_headers.get("cache-control") == "private, no-store", interaction_report_headers
+        interaction_report = json.loads(interaction_report_body)
+        assert interaction_report["command_id"] == "interaction.report.read", interaction_report
+        assert interaction_report["funnel_id"] == funnel_id, interaction_report
+        assert interaction_report["period_days"] == 7, interaction_report
+        assert interaction_report["total_events"] == event_summary["events"], interaction_report
+        assert len(interaction_report["days"]) == 7, interaction_report
+        assert interaction_report["days"][-1]["is_partial_today"] is True, interaction_report
+        assert all(not day["is_partial_today"] for day in interaction_report["days"][:-1]), interaction_report
+        assert sum(
+            day["page_viewed"] + day["form_viewed"] + day["form_started"]
+            for day in interaction_report["days"]
+        ) == event_summary["events"], interaction_report
+        assert interaction_report["campaigns"] == [
+            {"campaign_id": None, "events": event_summary["events"]}
+        ], interaction_report
+        for private_value in (
+            "event_id",
+            "replay_fingerprint",
+            "received_at",
+            "visitor_id",
+            "session_id",
+            "form_id",
+            "email",
+            "unregistered-campaign",
+        ):
+            assert private_value.encode() not in interaction_report_body, private_value
+        assert set(interaction_report) == {
+            "command_id", "correlation_id", "funnel_id", "period_days",
+            "total_events", "days", "campaigns"
+        }, interaction_report
+
+        for period_days in (30, 90):
+            period_status, period_body, period_headers = request(
+                "GET", f"{interaction_report_path}?period={period_days}"
+            )
+            assert period_status == 200, period_body
+            assert period_headers.get("cache-control") == "private, no-store", period_headers
+            period_report = json.loads(period_body)
+            assert len(period_report["days"]) == period_days, period_report
+            assert period_report["total_events"] == event_summary["events"], period_report
+
+        for invalid_query in (
+            "",
+            "period=1",
+            "period=07",
+            "period=7&period=30",
+            "period=30&other=value",
+        ):
+            invalid_status, _, invalid_headers = request(
+                "GET", f"{interaction_report_path}?{invalid_query}"
+            )
+            assert invalid_status == 400, (invalid_query, invalid_status)
+            assert invalid_headers.get("cache-control") == "private, no-store", invalid_headers
+
+        method_status, _, method_headers = request(
+            "POST", f"{interaction_report_path}?period=7"
+        )
+        assert method_status == 405, method_status
+        assert method_headers.get("cache-control") == "private, no-store", method_headers
+        missing_status, _, missing_headers = request(
+            "GET", "/api/funnels/missing-funnel/interaction-report?period=7"
+        )
+        assert missing_status == 404, missing_status
+        assert missing_headers.get("cache-control") == "private, no-store", missing_headers
+        denied_status, _, denied_headers = request(
+            "GET",
+            f"{interaction_report_path}?period=7",
+            headers={"Host": "not-allowed.example"},
+        )
+        assert denied_status == 403, denied_status
+        assert denied_headers.get("cache-control") == "private, no-store", denied_headers
+        public_host_status, _, public_host_headers = request(
+            "GET",
+            f"{interaction_report_path}?period=7",
+            headers={"Host": "funnels.example"},
+        )
+        assert public_host_status == 403, public_host_status
+        assert public_host_headers.get("cache-control") == "private, no-store", public_host_headers
+
         replay_state_before = d1_query(
             "SELECT COUNT(*) AS events, MIN(expires_at) AS expires_at "
             f"FROM public_interaction_events WHERE event_id = '{explicit_event_id}'",
@@ -1191,6 +1277,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert all(day["completions"] == 0 for day in isolated_report["days"])
         assert isolated_report["forms"] == []
         assert isolated_report["channels"] == []
+        isolated_interaction_status, isolated_interaction_body, isolated_interaction_headers = request(
+            "GET", f"/api/funnels/{isolated_funnel_id}/interaction-report?period=7"
+        )
+        assert isolated_interaction_status == 200, isolated_interaction_body
+        assert isolated_interaction_headers.get("cache-control") == "private, no-store", isolated_interaction_headers
+        isolated_interaction_report = json.loads(isolated_interaction_body)
+        assert isolated_interaction_report["total_events"] == 0, isolated_interaction_report
+        assert len(isolated_interaction_report["days"]) == 7, isolated_interaction_report
+        assert all(
+            day["page_viewed"] == day["form_viewed"] == day["form_started"] == 0
+            for day in isolated_interaction_report["days"]
+        ), isolated_interaction_report
+        assert isolated_interaction_report["campaigns"] == [], isolated_interaction_report
 
         first_page_status, first_page_body, first_page_headers = request("GET", "/api/submissions")
         assert first_page_status == 200, first_page_body
@@ -1266,6 +1365,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert expired_headers.get("cache-control") == "private, no-store", expired_headers
 
         if os.environ.get("PR033_BROWSER") == "1":
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pr069-interaction-report-browser.mjs"),
+                    f"http://localhost:{port}/funnels/{funnel_id}/interaction-report",
+                ],
+                cwd=root,
+                env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
+                check=True,
+                timeout=90,
+            )
             subprocess.run(
                 [
                     "node",

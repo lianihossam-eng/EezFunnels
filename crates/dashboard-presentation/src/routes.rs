@@ -2,11 +2,15 @@ use dioxus::prelude::*;
 
 mod editor;
 use editor::FunnelDetail;
-use eez_domain::{FormCompletionPeriod, FormSubmissionStatus, FunnelBlueprint};
+use eez_domain::{
+    FormCompletionPeriod, FormSubmissionStatus, FunnelBlueprint, InteractionReportPeriod,
+};
 use serde::Deserialize;
 use serde_json::Value;
 #[cfg(any(feature = "browser", test))]
 use sha2::{Digest, Sha256};
+#[cfg(any(feature = "browser", test))]
+use std::collections::BTreeSet;
 #[cfg(any(feature = "browser", test))]
 use std::future::Future;
 #[cfg(feature = "browser")]
@@ -87,6 +91,10 @@ pub(crate) enum RouteView {
     FunnelCompletions { id: String },
     #[end_layout]
     #[layout(DashboardShell)]
+    #[route("/funnels/:id/interaction-report")]
+    FunnelInteractionReport { id: String },
+    #[end_layout]
+    #[layout(DashboardShell)]
     #[route("/submissions")]
     Submissions {},
 }
@@ -98,6 +106,7 @@ fn DashboardShell() -> Element {
         RouteView::Funnels {} => "Workspace / Funnels",
         RouteView::FunnelDetail { .. } => "Workspace / Funnel editor",
         RouteView::FunnelCompletions { .. } => "Workspace / Form completions",
+        RouteView::FunnelInteractionReport { .. } => "Workspace / Interaction counts",
         RouteView::Submissions {} => "Workspace / Submissions",
     };
     rsx! {
@@ -216,6 +225,30 @@ struct FormSubmissionChannelCountResponse {
     completions: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct InteractionReportResponse {
+    funnel_id: String,
+    period_days: u8,
+    total_events: u64,
+    days: Vec<DailyInteractionReportDayResponse>,
+    campaigns: Vec<CampaignInteractionCountResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct DailyInteractionReportDayResponse {
+    utc_day: String,
+    page_viewed: u64,
+    form_viewed: u64,
+    form_started: u64,
+    is_partial_today: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct CampaignInteractionCountResponse {
+    campaign_id: Option<String>,
+    events: u64,
+}
+
 #[cfg(any(feature = "browser", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct CompletionRequestVersion(u64);
@@ -277,6 +310,91 @@ impl FormCompletionReportState {
             self.response = Some(response);
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct InteractionReportState {
+    #[cfg(any(feature = "browser", test))]
+    latest: CompletionRequestVersion,
+    funnel_id: Option<String>,
+    period_days: Option<u8>,
+    response: Option<Result<InteractionReportResponse, ()>>,
+}
+
+impl InteractionReportState {
+    fn response_for(
+        &self,
+        funnel_id: &str,
+        period: InteractionReportPeriod,
+    ) -> Option<Result<InteractionReportResponse, ()>> {
+        if self.funnel_id.as_deref() == Some(funnel_id) && self.period_days == Some(period.days()) {
+            self.response.clone()
+        } else {
+            None
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin(
+        &mut self,
+        funnel_id: String,
+        period: InteractionReportPeriod,
+    ) -> CompletionRequestVersion {
+        let request = self.latest.next();
+        self.latest = request;
+        self.funnel_id = Some(funnel_id);
+        self.period_days = Some(period.days());
+        self.response = None;
+        request
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn complete(
+        &mut self,
+        request: CompletionRequestVersion,
+        response: Result<InteractionReportResponse, ()>,
+    ) {
+        if request.is_current(self.latest) {
+            self.response = Some(response);
+        }
+    }
+}
+
+#[cfg(any(feature = "browser", test))]
+fn interaction_report_is_valid(
+    report: &InteractionReportResponse,
+    funnel_id: &str,
+    period: InteractionReportPeriod,
+) -> bool {
+    let daily_total = report.days.iter().try_fold(0_u64, |total, day| {
+        total
+            .checked_add(day.page_viewed)?
+            .checked_add(day.form_viewed)?
+            .checked_add(day.form_started)
+    });
+    let mut campaign_ids = BTreeSet::new();
+    let campaign_total = report.campaigns.iter().try_fold(0_u64, |total, campaign| {
+        if !campaign_ids.insert(campaign.campaign_id.as_deref()) {
+            return None;
+        }
+        total.checked_add(campaign.events)
+    });
+    let dates_are_valid = report.days.len() == usize::from(period.days())
+        && !report.days.is_empty()
+        && !report
+            .days
+            .iter()
+            .enumerate()
+            .any(|(index, day)| day.is_partial_today != (index + 1 == report.days.len()))
+        && !report
+            .days
+            .windows(2)
+            .any(|days| days[0].utc_day >= days[1].utc_day);
+    report.funnel_id == funnel_id
+        && report.period_days == period.days()
+        && dates_are_valid
+        && daily_total == Some(report.total_events)
+        && campaign_total == Some(report.total_events)
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -731,6 +849,142 @@ fn FunnelCompletions(id: String) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn FunnelInteractionReport(id: String) -> Element {
+    let mut selected_period = use_signal(|| InteractionReportPeriod::Days30);
+    let report_state = use_signal(InteractionReportState::default);
+
+    #[cfg(feature = "browser")]
+    {
+        let page_state = report_state;
+        let period_state = selected_period;
+        use_effect(use_reactive!(|(id)| {
+            let funnel_id = id.clone();
+            let period = period_state();
+            spawn(async move {
+                refresh_interaction_report(page_state, funnel_id, period).await;
+            });
+        }));
+    }
+
+    let period = selected_period();
+    let snapshot = report_state();
+    let response = snapshot.response_for(&id, period);
+    rsx! {
+        div { class: "interaction-report",
+            section { class: "page-heading",
+                h1 { "Interaction counts" }
+                p { class: "page-description", "Counts of consented first-party page and form events that are still retained. Visitors may decline measurement; these counts do not identify people or measure conversions." }
+                p { class: "completion-funnel-id", "Funnel: " code { "{id}" } }
+                Link { to: RouteView::FunnelDetail { id: id.clone() }, class: "completion-back-link", "Back to funnel" }
+            }
+            fieldset { class: "completion-period-selector",
+                legend { "UTC date range" }
+                div { class: "completion-period-options",
+                    for (option, label) in [
+                        (InteractionReportPeriod::Days7, "7 days"),
+                        (InteractionReportPeriod::Days30, "30 days"),
+                        (InteractionReportPeriod::Days90, "90 days"),
+                    ] {
+                        button {
+                            class: if period == option { "completion-period-option selected" } else { "completion-period-option" },
+                            r#type: "button",
+                            "aria-pressed": period == option,
+                            onclick: move |_| selected_period.set(option),
+                            "{label}"
+                        }
+                    }
+                }
+            }
+            match response {
+                None => rsx! {
+                    section { class: "completion-loading", role: "status", "aria-busy": "true", "Loading interaction counts…" }
+                },
+                Some(Err(())) => rsx! {
+                    section { class: "completion-error", role: "alert",
+                        h2 { "Interaction counts could not be loaded." }
+                        p { "Check the dashboard connection and try again." }
+                        button {
+                            class: "secondary-button",
+                            r#type: "button",
+                            onclick: move |_| {
+                                #[cfg(feature = "browser")]
+                                {
+                                    let funnel_id = id.clone();
+                                    spawn(async move {
+                                        refresh_interaction_report(report_state, funnel_id, period).await;
+                                    });
+                                }
+                            },
+                            "Try again"
+                        }
+                    }
+                },
+                Some(Ok(report)) => rsx! {
+                    section { class: "completion-results", "aria-label": "Interaction count report",
+                        p { class: "completion-total",
+                            strong { "{report.total_events}" }
+                            " retained interaction events in the selected period"
+                        }
+                        p { class: "completion-retention-note", "Dates use the server receipt time in UTC. Only events that have not expired are counted; the current UTC date is partial." }
+                        div { class: "completion-table-wrap", role: "region", "aria-label": "Daily interaction counts", tabindex: "0",
+                            table { class: "completion-table interaction-daily-table",
+                                caption { "Consent based event counts by UTC date" }
+                                thead { tr {
+                                    th { scope: "col", "Date" }
+                                    th { scope: "col", "Pages viewed" }
+                                    th { scope: "col", "Forms viewed" }
+                                    th { scope: "col", "Forms started" }
+                                } }
+                                tbody {
+                                    for day in report.days.iter() {
+                                        tr {
+                                            th { scope: "row",
+                                                if day.is_partial_today { span { class: "completion-today-label", "Today (partial) · " } }
+                                                time { datetime: "{day.utc_day}", "{day.utc_day}" }
+                                            }
+                                            td { class: "completion-number", "{day.page_viewed}" }
+                                            td { class: "completion-number", "{day.form_viewed}" }
+                                            td { class: "completion-number", "{day.form_started}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        section { class: "completion-form-section interaction-campaign-section",
+                            h2 { "By campaign ID" }
+                            p { class: "completion-channel-note", "Campaign IDs are exact labels configured by the owner. Unregistered visitor supplied values are discarded and remain unattributed." }
+                            if report.campaigns.is_empty() {
+                                p { class: "completion-empty-forms", "No retained interaction events in this period." }
+                            } else {
+                                div { class: "completion-table-wrap", role: "region", "aria-label": "Interaction counts by campaign", tabindex: "0",
+                                    table { class: "completion-table interaction-campaign-table",
+                                        caption { "Retained events grouped by campaign label" }
+                                        thead { tr { th { scope: "col", "Campaign" } th { scope: "col", "Events" } } }
+                                        tbody {
+                                            for campaign in report.campaigns.iter() {
+                                                tr {
+                                                    th { scope: "row",
+                                                        match campaign.campaign_id.as_deref() {
+                                                            Some(campaign_id) => rsx! { code { "{campaign_id}" } },
+                                                            None => rsx! { "Unattributed" },
+                                                        }
+                                                    }
+                                                    td { class: "completion-number", "{campaign.events}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
             }
         }
     }
@@ -1537,6 +1791,27 @@ async fn load_form_completion_report(
 }
 
 #[cfg(feature = "browser")]
+async fn load_interaction_report(
+    funnel_id: &str,
+    period: InteractionReportPeriod,
+) -> Result<InteractionReportResponse, ()> {
+    let path = format!(
+        "/api/funnels/{funnel_id}/interaction-report?period={}",
+        period.days()
+    );
+    let response = api_request("GET", &path, None, None).await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let report =
+        serde_json::from_str::<InteractionReportResponse>(&response.body).map_err(|_| ())?;
+    if !interaction_report_is_valid(&report, funnel_id, period) {
+        return Err(());
+    }
+    Ok(report)
+}
+
+#[cfg(feature = "browser")]
 async fn refresh_submission_list(mut load_state: Signal<SubmissionInboxState>) {
     let (request_version, status, funnel_id) = load_state.with_mut(|state| {
         let request_version = state.begin();
@@ -1557,6 +1832,20 @@ async fn refresh_form_completion_report(
 ) {
     let request_version = load_state.with_mut(|state| state.begin(funnel_id.clone(), period));
     let result = load_form_completion_report(&funnel_id, period).await;
+    if load_state.try_peek().is_err() {
+        return;
+    }
+    load_state.with_mut(|state| state.complete(request_version, result));
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_interaction_report(
+    mut load_state: Signal<InteractionReportState>,
+    funnel_id: String,
+    period: InteractionReportPeriod,
+) {
+    let request_version = load_state.with_mut(|state| state.begin(funnel_id.clone(), period));
+    let result = load_interaction_report(&funnel_id, period).await;
     if load_state.try_peek().is_err() {
         return;
     }
@@ -2181,5 +2470,81 @@ mod tests {
         assert!(state
             .response_for("funnel-old", FormCompletionPeriod::Days30)
             .is_none());
+    }
+
+    fn interaction_report(funnel_id: &str, period_days: u8) -> InteractionReportResponse {
+        let days = (1..=period_days)
+            .map(|day| DailyInteractionReportDayResponse {
+                utc_day: format!("2026-10-{day:02}"),
+                page_viewed: if day == period_days { 1 } else { 0 },
+                form_viewed: 0,
+                form_started: 0,
+                is_partial_today: day == period_days,
+            })
+            .collect();
+        InteractionReportResponse {
+            funnel_id: funnel_id.to_owned(),
+            period_days,
+            total_events: 1,
+            days,
+            campaigns: vec![CampaignInteractionCountResponse {
+                campaign_id: None,
+                events: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn interaction_report_response_is_bounded_and_matches_aggregate_totals() {
+        let report = interaction_report("funnel-a", 7);
+        assert!(interaction_report_is_valid(
+            &report,
+            "funnel-a",
+            InteractionReportPeriod::Days7
+        ));
+        assert!(!interaction_report_is_valid(
+            &report,
+            "another-funnel",
+            InteractionReportPeriod::Days7
+        ));
+
+        let mut invalid = report.clone();
+        invalid.campaigns[0].events = 2;
+        assert!(!interaction_report_is_valid(
+            &invalid,
+            "funnel-a",
+            InteractionReportPeriod::Days7
+        ));
+        let mut duplicate = report;
+        duplicate.campaigns.push(CampaignInteractionCountResponse {
+            campaign_id: None,
+            events: 0,
+        });
+        assert!(!interaction_report_is_valid(
+            &duplicate,
+            "funnel-a",
+            InteractionReportPeriod::Days7
+        ));
+    }
+
+    #[test]
+    fn stale_interaction_report_responses_cannot_replace_a_new_funnel_or_period() {
+        let mut state = InteractionReportState::default();
+        let old_request = state.begin("funnel-old".to_owned(), InteractionReportPeriod::Days7);
+        let current_request =
+            state.begin("funnel-current".to_owned(), InteractionReportPeriod::Days90);
+        state.complete(old_request, Ok(interaction_report("funnel-old", 7)));
+        assert!(state.response.is_none());
+
+        state.complete(
+            current_request,
+            Ok(interaction_report("funnel-current", 90)),
+        );
+        assert_eq!(state.funnel_id.as_deref(), Some("funnel-current"));
+        assert_eq!(state.period_days, Some(90));
+        assert_eq!(
+            state.response.as_ref().unwrap().as_ref().unwrap().funnel_id,
+            "funnel-current"
+        );
     }
 }

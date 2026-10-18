@@ -35,7 +35,11 @@ fn is_dashboard_path(path: &str) -> bool {
     match path {
         "/" | "/funnels" | "/submissions" => true,
         _ => path.strip_prefix("/funnels/").is_some_and(|route| {
-            is_valid_funnel_id(route.strip_suffix("/completions").unwrap_or(route))
+            let funnel_id = route
+                .strip_suffix("/completions")
+                .or_else(|| route.strip_suffix("/interaction-report"))
+                .unwrap_or(route);
+            is_valid_funnel_id(funnel_id)
         }),
     }
 }
