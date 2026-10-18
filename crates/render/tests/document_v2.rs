@@ -79,6 +79,7 @@ fn page_theme_background_spans_full_width_with_bounded_inner_content() {
     let html = render_owner_preview(&document, document.entry_page_id()).expect("owner preview");
 
     assert!(html.contains("<main id=\"funnel\"><div class=\"v2-main\">"));
+    assert!(!html.contains("data-eezfunnel-page-id"));
     assert!(html.contains(".v2-main{max-width:var(--content-width);margin:0 auto}"));
 }
 
@@ -386,6 +387,8 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
     .expect("published form page renders");
 
     assert!(html.contains("method=\"post\" enctype=\"application/x-www-form-urlencoded\""));
+    assert!(html.contains("<main id=\"funnel\" data-eezfunnel-page-id=\"page-home\">"));
+    assert!(html.contains("<form class=\"v2-form\" data-eezfunnel-form-id=\"form-one\""));
     assert!(html.contains("/api/public/funnels/lead-funnel/pages/page-home/forms/form-one/submissions?key=EEZ_FORM_SUBMISSION_KEY"));
     assert!(html.contains("type=\"email\""));
     assert!(html.contains("id=\"form-form-one-field-field-email\" name=\"email\""));

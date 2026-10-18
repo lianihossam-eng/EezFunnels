@@ -150,6 +150,10 @@ impl InteractionEvent {
         self.form_id.as_ref()
     }
 
+    pub const fn replay_fingerprint(&self) -> &ReplayFingerprint {
+        &self.replay_fingerprint
+    }
+
     pub fn campaign_id(&self) -> Option<&CampaignId> {
         self.campaign_id.as_ref()
     }

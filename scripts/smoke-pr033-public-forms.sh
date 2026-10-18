@@ -9,6 +9,7 @@ export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-/tmp/eezfunnel-npm-cache}"
 export WRANGLER_SEND_METRICS=false
 
 python3 "$repo_root/scripts/test-pr057-migration.py"
+python3 "$repo_root/scripts/test-pr067-interaction-migration.py"
 
 python3 - "$repo_root" <<'PY'
 import hashlib
@@ -23,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import secrets
+import uuid
 import xml.etree.ElementTree as ElementTree
 from urllib.parse import urlencode
 
@@ -36,6 +39,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
     state = Path(directory)
     log_path = state / "wrangler.log"
     persist = state / "persist"
+    interaction_env_file = state / "interaction.env"
+    interaction_env_file.write_text(
+        f"INTERACTION_REPLAY_KEY={secrets.token_hex(32)}\n", encoding="utf-8"
+    )
+    interaction_env_file.chmod(0o600)
     subprocess.run(
         [
             str(wrangler), "d1", "migrations", "apply", "DB", "--local", "--env", "dev",
@@ -54,6 +62,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "--var", "PUBLIC_BASE_URL:https://funnels.example",
             "--var", "PUBLIC_FORM_SUBMISSIONS_PER_MINUTE:3",
             "--var", "PUBLIC_FORM_RETENTION_DAYS:1",
+            "--var", "PUBLIC_INTERACTION_RETENTION_DAYS:1",
+            "--var", "PUBLIC_INTERACTION_EVENTS_PER_MINUTE:10",
+            "--env-file", str(interaction_env_file),
             "--persist-to", str(persist), "--test-scheduled", "--log-level", "error",
         ],
         cwd=root,
@@ -150,6 +161,22 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                     return result
         return None
 
+    def d1_query(sql, key):
+        output = subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--json", "--command", sql,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        result = find_mapping(json.loads(output), key)
+        assert result is not None, output
+        return result
+
     def active_group_members(process_group):
         members = []
         for entry in Path("/proc").iterdir():
@@ -229,6 +256,34 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"Content-Type": "application/json", "Idempotency-Key": "pr059-publish-v1"},
         )
         assert status == 200, (status, legacy_publish_content)
+        legacy_page_status, legacy_page_html, _ = request("GET", f"/f/{legacy_slug}")
+        assert legacy_page_status == 200, legacy_page_html
+        assert b'data-legacy-page-id="legacy-entry"' in legacy_page_html, legacy_page_html
+        legacy_event = {
+            "schema_version": 1,
+            "event_id": str(uuid.uuid4()),
+            "kind": "page_viewed",
+            "observed_at_unix_seconds": 1,
+            "funnel_id": legacy_created["funnel"]["id"],
+            "revision_id": legacy_created["initial_revision"]["id"],
+            "page_id": "legacy-entry",
+        }
+        legacy_event_status, legacy_event_body, _ = request(
+            "POST",
+            f"/api/public/funnels/{legacy_slug}/interaction-events",
+            json.dumps(legacy_event, separators=(",", ":")).encode(),
+            {
+                "Content-Type": "application/json",
+                "Origin": f"http://localhost:{port}",
+                "X-EezFunnel-Interaction-Consent": "granted",
+            },
+        )
+        assert legacy_event_status == 204, (legacy_event_status, legacy_event_body)
+        assert d1_query(
+            "SELECT COUNT(*) AS events FROM public_interaction_events "
+            f"WHERE funnel_id = '{legacy_created['funnel']['id']}'",
+            "events",
+        )["events"] == 1
 
         document = json.loads(
             (root / "crates/domain/tests/fixtures/document_v2_minimal.json").read_bytes()
@@ -530,6 +585,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert latest_status == 200, latest_html
         assert latest_headers.get("cache-control") == "no-store", latest_headers
+        assert b"/_eez/interaction.js" in latest_html, latest_html
+        assert b'data-eezfunnel-page-id="page-home"' in latest_html, latest_html
+        assert b'data-eezfunnel-form-id="' + form_id.encode() + b'"' in latest_html, latest_html
         latest_action = re.search(
             rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/'
             + re.escape(form_id.encode())
@@ -555,6 +613,35 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert second_action.group(1).decode() != submission_key
         assert second_action.group(2).decode() == updated_revision_id
         assert second_action.group(3) == b"unattributed", second_action.group(3)
+
+        interaction_path = f"/api/public/funnels/{slug}/interaction-events"
+        unconsented_event = {
+            "schema_version": 1,
+            "event_id": str(uuid.uuid4()),
+            "kind": "page_viewed",
+            "observed_at_unix_seconds": 1,
+            "funnel_id": funnel_id,
+            "revision_id": updated_revision_id,
+            "page_id": "page-home",
+            "campaign_id": "campaign-fixture",
+        }
+        unconsented_body = json.dumps(unconsented_event, separators=(",", ":")).encode()
+        interaction_headers = {
+            "Content-Type": "application/json",
+            "Origin": f"http://localhost:{port}",
+        }
+        assert request("POST", interaction_path, unconsented_body, interaction_headers)[0] == 204
+        refused_headers = {
+            **interaction_headers,
+            "X-EezFunnel-Interaction-Consent": "refused",
+        }
+        assert request("POST", interaction_path, b"not-json", refused_headers)[0] == 204
+        assert request("GET", interaction_path, headers=interaction_headers)[0] == 405
+        assert d1_query(
+            "SELECT COUNT(*) AS events FROM public_interaction_events "
+            f"WHERE funnel_id = '{funnel_id}'",
+            "events",
+        )["events"] == 0
 
         invalid_payload = urlencode(
             {"name": "Ada Lovelace", "email": "ada@example.test"}
@@ -652,6 +739,146 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 {"Content-Type": "application/x-www-form-urlencoded"},
             )
             assert third_status == 303, (third_status, third_body)
+
+        interaction_headers_granted = {
+            "Content-Type": "application/json",
+            "Origin": f"http://localhost:{port}",
+            "X-EezFunnel-Interaction-Consent": "granted",
+        }
+
+        def make_interaction_event(event_id, *, revision_id=updated_revision_id, page_id="page-home", kind="page_viewed"):
+            result = {
+                "schema_version": 1,
+                "event_id": event_id,
+                "kind": kind,
+                "observed_at_unix_seconds": 1,
+                "funnel_id": funnel_id,
+                "revision_id": revision_id,
+                "page_id": page_id,
+            }
+            if kind in ("form_viewed", "form_started"):
+                result["form_id"] = form_id
+            return result
+
+        explicit_event_id = str(uuid.uuid4())
+        explicit_event = make_interaction_event(explicit_event_id)
+        explicit_event["campaign_id"] = "unregistered-campaign"
+        explicit_body = json.dumps(explicit_event, separators=(",", ":")).encode()
+        accepted_status, accepted_body, _ = request(
+            "POST", interaction_path, explicit_body, interaction_headers_granted
+        )
+        assert accepted_status == 204, (accepted_status, accepted_body)
+        for kind in ("form_viewed", "form_started"):
+            interaction_event = make_interaction_event(str(uuid.uuid4()), kind=kind)
+            event_status, event_body, _ = request(
+                "POST",
+                interaction_path,
+                json.dumps(interaction_event, separators=(",", ":")).encode(),
+                interaction_headers_granted,
+            )
+            assert event_status == 204, (kind, event_status, event_body)
+        event_summary = d1_query(
+            "SELECT COUNT(*) AS events, SUM(event_kind = 'page_viewed') AS page_views, "
+            "SUM(event_kind = 'form_viewed') AS form_views, "
+            "SUM(event_kind = 'form_started') AS form_starts, "
+            "SUM(campaign_id IS NOT NULL) AS attributed, "
+            "MIN(length(replay_fingerprint)) AS fingerprint_length, "
+            "MIN(expires_at - received_at) AS retention_seconds, "
+            "COUNT(DISTINCT event_id) AS distinct_ids FROM public_interaction_events "
+            f"WHERE funnel_id = '{funnel_id}'",
+            "events",
+        )
+        browser_events = 3 if os.environ.get("PR033_BROWSER") == "1" else 0
+        assert event_summary["events"] >= 3 + browser_events, event_summary
+        assert event_summary["page_views"] >= 1 + (browser_events > 0), event_summary
+        assert event_summary["form_views"] >= 1 + (browser_events > 0), event_summary
+        assert event_summary["form_starts"] >= 1 + (browser_events > 0), event_summary
+        assert event_summary["attributed"] == 0, event_summary
+        assert event_summary["fingerprint_length"] == 64, event_summary
+        assert event_summary["retention_seconds"] == 86_400, event_summary
+        assert event_summary["distinct_ids"] == event_summary["events"], event_summary
+
+        replay_state_before = d1_query(
+            "SELECT COUNT(*) AS events, MIN(expires_at) AS expires_at "
+            f"FROM public_interaction_events WHERE event_id = '{explicit_event_id}'",
+            "events",
+        )
+        duplicate_status, duplicate_body, _ = request(
+            "POST", interaction_path, explicit_body, interaction_headers_granted
+        )
+        assert duplicate_status == 204, (duplicate_status, duplicate_body)
+        replay_state_after = d1_query(
+            "SELECT COUNT(*) AS events, MIN(expires_at) AS expires_at "
+            f"FROM public_interaction_events WHERE event_id = '{explicit_event_id}'",
+            "events",
+        )
+        assert replay_state_after == replay_state_before, (replay_state_before, replay_state_after)
+
+        conflicting_event = {**explicit_event, "observed_at_unix_seconds": 2}
+        conflict_status, _, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(conflicting_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert conflict_status == 409, conflict_status
+
+        stale_event = make_interaction_event(str(uuid.uuid4()), revision_id=saved_revision_id)
+        stale_event_status, _, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(stale_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert stale_event_status == 404, stale_event_status
+        missing_page_event = make_interaction_event(
+            str(uuid.uuid4()), page_id="page-missing"
+        )
+        missing_page_status, _, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(missing_page_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert missing_page_status == 404, missing_page_status
+        cross_origin_event = make_interaction_event(str(uuid.uuid4()))
+        cross_origin_status, _, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(cross_origin_event, separators=(",", ":")).encode(),
+            {**interaction_headers_granted, "Origin": "https://attacker.example"},
+        )
+        assert cross_origin_status == 403, cross_origin_status
+        oversized_status, _, _ = request(
+            "POST", interaction_path, b"x" * 2049, interaction_headers_granted
+        )
+        assert oversized_status == 400, oversized_status
+
+        event_count = d1_query(
+            "SELECT COUNT(*) AS events FROM public_interaction_events "
+            f"WHERE funnel_id = '{funnel_id}' AND received_at >= unixepoch() - 60",
+            "events",
+        )["events"]
+        assert event_count <= 10, event_count
+        while event_count < 10:
+            next_event = make_interaction_event(str(uuid.uuid4()))
+            next_status, next_body, _ = request(
+                "POST",
+                interaction_path,
+                json.dumps(next_event, separators=(",", ":")).encode(),
+                interaction_headers_granted,
+            )
+            assert next_status == 204, (next_status, next_body)
+            event_count += 1
+        limited_event = make_interaction_event(str(uuid.uuid4()))
+        limited_status, _, limited_headers = request(
+            "POST",
+            interaction_path,
+            json.dumps(limited_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert limited_status == 429, limited_status
+        assert limited_headers.get("retry-after") == "60", limited_headers
 
         rate_limit_key = "3da91eb0-7f65-49c1-9341-a28eb9d10c27"
         rate_status, rate_body, rate_headers = request_form_with_transport_retry(
@@ -1070,7 +1297,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--command",
-                "UPDATE public_form_submissions SET submitted_at = unixepoch() - 86401, expires_at = unixepoch() - 1",
+                "UPDATE public_form_submissions SET submitted_at = unixepoch() - 86401, expires_at = unixepoch() - 1; UPDATE public_interaction_events SET received_at = unixepoch() - 86401, expires_at = unixepoch() - 1",
             ],
             cwd=root,
             check=True,
@@ -1086,7 +1313,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--json", "--command",
-                "SELECT COUNT(*) AS submissions FROM public_form_submissions",
+                "SELECT (SELECT COUNT(*) FROM public_form_submissions) AS submissions, (SELECT COUNT(*) FROM public_interaction_events) AS interaction_events",
             ],
             cwd=root,
             check=True,
@@ -1097,10 +1324,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         cleanup_result = find_mapping(json.loads(cleanup_query), "submissions")
         assert cleanup_result is not None, cleanup_query
         assert cleanup_result["submissions"] == 0, cleanup_result
+        assert cleanup_result["interaction_events"] == 0, cleanup_result
 
         log.close()
         assert "ada@example.test" not in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8")
-        print("PR-033 local Worker/D1 public form, consent, idempotency, retention, and rate-limit flow passed")
+        print("PR-067/PR-033 local Worker/D1 interaction and public form flows passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

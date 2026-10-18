@@ -15,7 +15,52 @@ const executablePath = await access("/usr/bin/chromium").then(
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 try {
   const page = await browser.newPage();
+  const interactionRequests = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/interaction-events")) {
+      interactionRequests.push(request);
+    }
+  });
   await page.goto(pageUrl, { waitUntil: "networkidle" });
+
+  const interactionPanel = page.getByRole("region", {
+    name: "Interaction measurement choices",
+  });
+  await interactionPanel.waitFor({ state: "visible" });
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("eezfunnel:interaction-consent:v1")),
+    null,
+  );
+  await page.waitForTimeout(250);
+  assert.equal(interactionRequests.length, 0, "no event request before consent");
+  await interactionPanel.getByRole("button", { name: "No thanks" }).click();
+  await page.waitForTimeout(250);
+  assert.equal(interactionRequests.length, 0, "refusal must not send events");
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("eezfunnel:interaction-consent:v1")),
+    "refused",
+  );
+  await page.getByRole("button", { name: "Privacy choices" }).click();
+  const pageViewResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/interaction-events") &&
+      response.request().method() === "POST" &&
+      response.request().postDataJSON()?.kind === "page_viewed",
+  );
+  await interactionPanel.getByRole("button", { name: "Allow measurement" }).click();
+  assert.equal((await pageViewResponse).status(), 204);
+  await page.waitForTimeout(100);
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("eezfunnel:interaction-consent:v1")),
+    "granted",
+  );
+  const firstPageEvent = interactionRequests[0].postDataJSON();
+  assert.equal(firstPageEvent.kind, "page_viewed");
+  assert.equal(firstPageEvent.page_id, "page-home");
+  assert.equal(firstPageEvent.revision_id.length > 0, true);
+  assert.equal("utm_medium" in firstPageEvent, false);
+  assert.equal("utm_campaign" in firstPageEvent, false);
+  assert.equal("email" in firstPageEvent, false);
 
   const name = page.getByLabel("Name");
   const email = page.getByLabel("Email");
@@ -29,7 +74,14 @@ try {
   assert.equal(await email.count(), 1);
   assert.equal(await marketingOptIn.isChecked(), false);
   assert.equal(await form.evaluate((element) => element.checkValidity()), false);
-  await page.keyboard.press("Tab");
+  await page.evaluate(() => document.activeElement?.blur());
+  for (
+    let attempts = 0;
+    attempts < 20 && !(await name.evaluate((element) => element === document.activeElement));
+    attempts += 1
+  ) {
+    await page.keyboard.press("Tab");
+  }
   assert.equal(await name.evaluate((element) => element === document.activeElement), true);
   assert.equal(await name.evaluate((element) => getComputedStyle(element).outlineWidth), "3px");
 
@@ -68,7 +120,21 @@ try {
   if (process.env.PR033_SCREENSHOT) {
     await page.screenshot({ path: process.env.PR033_SCREENSHOT, fullPage: true });
   }
-  console.log("PR-033 browser form labels, native validation, consent defaults, and success state passed");
+  assert.ok(
+    interactionRequests.some((request) => request.postDataJSON()?.kind === "form_viewed"),
+    "visible form should be measured after grant",
+  );
+  assert.ok(
+    interactionRequests.some((request) => request.postDataJSON()?.kind === "form_started"),
+    "form start should be measured after grant",
+  );
+  assert.ok(
+    interactionRequests.every(
+      (request) => !("name" in request.postDataJSON()) && !("email" in request.postDataJSON()),
+    ),
+    "interaction payloads must not contain form answers",
+  );
+  console.log("PR-067 consented interaction events and PR-033 browser forms passed");
 } finally {
   await browser.close();
 }
