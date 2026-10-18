@@ -7,6 +7,7 @@ use axum::http::{uri::Authority, HeaderMap, HeaderValue};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostAllowlist {
     hosts: HashSet<String>,
+    blocked_hostnames: HashSet<String>,
 }
 
 impl HostAllowlist {
@@ -15,11 +16,37 @@ impl HostAllowlist {
             .split(',')
             .filter_map(|host| normalize_host(host.trim()))
             .collect::<HashSet<_>>();
-        Self { hosts }
+        Self {
+            hosts,
+            blocked_hostnames: HashSet::new(),
+        }
     }
 
     pub fn allows(&self, host: &str) -> bool {
-        normalize_host(host).is_some_and(|host| self.hosts.contains(&host))
+        normalize_host(host).is_some_and(|host| {
+            Authority::from_str(&host).is_ok_and(|authority| {
+                !self
+                    .blocked_hostnames
+                    .contains(&authority.host().to_ascii_lowercase())
+                    && self.hosts.contains(&host)
+            })
+        })
+    }
+
+    pub(crate) fn allows_hostname(&self, hostname: &str) -> bool {
+        let Some(hostname) = normalize_dns_hostname(hostname) else {
+            return false;
+        };
+        self.hosts.iter().any(|host| {
+            Authority::from_str(host)
+                .is_ok_and(|authority| authority.host().eq_ignore_ascii_case(&hostname))
+        })
+    }
+
+    pub(crate) fn block_hostname(&mut self, hostname: &str) {
+        if let Some(hostname) = normalize_dns_hostname(hostname) {
+            self.blocked_hostnames.insert(hostname);
+        }
     }
 
     pub fn allows_headers(&self, headers: &HeaderMap<HeaderValue>) -> bool {
@@ -107,6 +134,12 @@ pub(crate) fn normalize_dns_hostname(host: &str) -> Option<String> {
     Some(normalized)
 }
 
+pub(crate) fn dns_hostname_from_authority(host: &str) -> Option<String> {
+    let normalized = normalize_host(host)?;
+    let authority = Authority::from_str(&normalized).ok()?;
+    normalize_dns_hostname(authority.host())
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
@@ -128,6 +161,26 @@ mod tests {
         let hosts = HostAllowlist::parse("eezfunnel.workers.dev");
 
         assert!(hosts.allows("EEZFunnel.Workers.Dev"));
+    }
+
+    #[test]
+    fn hostname_conflicts_match_port_qualified_platform_hosts() {
+        let hosts = HostAllowlist::parse("offers.example:443, other.example:8443");
+
+        assert!(hosts.allows_hostname("OFFERS.EXAMPLE"));
+        assert!(hosts.allows_hostname("other.example"));
+        assert!(!hosts.allows_hostname("third.example"));
+    }
+
+    #[test]
+    fn blocked_hostname_rejects_every_port_qualified_platform_request() {
+        let mut hosts = HostAllowlist::parse("offers.example:443");
+        hosts.block_hostname("offers.example");
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("offers.example:443"));
+
+        assert!(!hosts.allows("offers.example:443"));
+        assert!(!hosts.allows_headers(&headers));
     }
 
     #[test]

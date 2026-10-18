@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::http::{HeaderMap, HeaderValue};
 
-use crate::host::{normalize_dns_hostname, HostAllowlist};
+use crate::host::{dns_hostname_from_authority, normalize_dns_hostname, HostAllowlist};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CustomHostMappings {
@@ -37,7 +37,7 @@ impl CustomHostMappings {
             let hostname = normalize_dns_hostname(hostname.trim()).ok_or(())?;
             let funnel_slug = funnel_slug.trim();
             if !crate::valid_public_slug(funnel_slug)
-                || platform_hosts.allows(&hostname)
+                || platform_hosts.allows_hostname(&hostname)
                 || public_base_hostname
                     .and_then(normalize_dns_hostname)
                     .is_some_and(|base| base == hostname)
@@ -91,13 +91,24 @@ impl CustomHostMappings {
     }
 }
 
+pub(crate) fn platform_hostname_conflicts(
+    raw: &str,
+    platform_hosts: &HostAllowlist,
+) -> BTreeSet<String> {
+    raw.split(',')
+        .filter_map(|entry| entry.trim().split_once('='))
+        .filter_map(|(hostname, _)| dns_hostname_from_authority(hostname.trim()))
+        .filter(|hostname| platform_hosts.allows_hostname(hostname))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use crate::host::HostAllowlist;
 
-    use super::CustomHostMappings;
+    use super::{platform_hostname_conflicts, CustomHostMappings};
 
     fn mappings(raw: &str) -> Result<CustomHostMappings, ()> {
         CustomHostMappings::parse(
@@ -141,6 +152,24 @@ mod tests {
     #[test]
     fn base_origin_host_cannot_be_reassigned_as_a_funnel_host() {
         assert!(mappings("FUNNELS.EXAMPLE=lead-gen").is_err());
+    }
+
+    #[test]
+    fn port_qualified_platform_host_conflicts_with_custom_mapping() {
+        let mut platform_hosts = HostAllowlist::parse("offers.example:443");
+        assert!(
+            CustomHostMappings::parse("offers.example=lead-gen", &platform_hosts, None).is_err()
+        );
+        assert!(
+            platform_hostname_conflicts("offers.example=lead-gen", &platform_hosts)
+                .contains("offers.example")
+        );
+        let conflicts = platform_hostname_conflicts("offers.example:443=lead-gen", &platform_hosts);
+        assert!(conflicts.contains("offers.example"));
+        for hostname in conflicts {
+            platform_hosts.block_hostname(&hostname);
+        }
+        assert!(!platform_hosts.allows("offers.example:443"));
     }
 
     #[test]

@@ -36,7 +36,7 @@ mod sitemap;
 
 pub use host::HostAllowlist;
 
-use custom_hosts::{CustomHostMapping, CustomHostMappings};
+use custom_hosts::{platform_hostname_conflicts, CustomHostMapping, CustomHostMappings};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -698,11 +698,13 @@ fn request_host_configuration(env: &Env) -> (HostAllowlist, CustomHostMappings) 
         .var("ALLOWED_HOSTS")
         .map(|value| value.to_string())
         .unwrap_or_default();
-    let platform_hosts = HostAllowlist::parse(&configured_hosts);
+    let mut platform_hosts = HostAllowlist::parse(&configured_hosts);
     let configured_mappings = env
         .var("PUBLIC_FUNNEL_HOSTS")
         .map(|value| value.to_string())
         .unwrap_or_default();
+    let conflicting_platform_hosts =
+        platform_hostname_conflicts(&configured_mappings, &platform_hosts);
     let public_base_hostname = env
         .var("PUBLIC_BASE_URL")
         .ok()
@@ -715,6 +717,9 @@ fn request_host_configuration(env: &Env) -> (HostAllowlist, CustomHostMappings) 
     ) {
         Ok(mappings) => mappings,
         Err(()) => {
+            for hostname in conflicting_platform_hosts {
+                platform_hosts.block_hostname(&hostname);
+            }
             worker::console_warn!(
                 "PUBLIC_FUNNEL_HOSTS is invalid; custom funnel host routing is disabled"
             );
