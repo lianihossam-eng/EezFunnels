@@ -10,6 +10,7 @@ const root = resolve(import.meta.dirname, "..");
 const assets = join(root, "docs/assets");
 const scratch = await mkdtemp(join(tmpdir(), "eezfunnel-readme-demo-"));
 const heroTitle = "A clearer plan for your next launch";
+const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg";
 let worker;
 let browser;
 
@@ -128,16 +129,26 @@ async function makeGif(video, filename, width, startAt) {
   const outputPath = join(assets, filename);
   const filter = `fps=6,scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=112[p];[s1][p]paletteuse=dither=bayer`;
   const result = spawnSync(
-    "ffmpeg",
+    ffmpegPath,
     ["-y", "-ss", startAt, "-i", videoPath, "-vf", filter, "-loop", "0", outputPath],
     { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
   );
-  assert.equal(result.status, 0, `ffmpeg failed for ${filename}:\n${result.stderr}`);
+  assert.equal(
+    result.status,
+    0,
+    `FFmpeg failed for ${filename}. Install system FFmpeg and put it on PATH, or set FFMPEG_PATH.\n${result.error?.message ?? result.stderr}`,
+  );
   const file = await stat(outputPath);
   console.log(`${filename}: ${(file.size / 1024).toFixed(0)} KiB`);
 }
 
 try {
+  const ffmpegVersion = spawnSync(ffmpegPath, ["-version"], { encoding: "utf8" });
+  assert.equal(
+    ffmpegVersion.status,
+    0,
+    `Could not run FFmpeg at "${ffmpegPath}". Install system FFmpeg and put it on PATH, or set FFMPEG_PATH.\n${ffmpegVersion.error?.message ?? ffmpegVersion.stderr}`,
+  );
   worker = await startPr019Worker("readme-demo");
   const executablePath = await access("/usr/bin/chromium").then(
     () => "/usr/bin/chromium",
