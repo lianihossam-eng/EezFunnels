@@ -1,8 +1,8 @@
 # Eez Funnel
 
-An open-source, Rust-first, single-owner funnel builder that you run on your own Cloudflare account. The current `main` branch includes the typed dashboard, public forms, aggregate reports, canonical URLs, sitemap and crawler guidance, and mapped custom hosts described below. The published `v0.1.0` release contains CLI binaries for Linux, macOS, and Windows but predates the typed dashboard. Repository checks do not verify a production Cloudflare deployment. Cloudflare usage is billed under your account where applicable.
+An open-source, Rust-first funnel builder for single-owner deployments on your own Cloudflare Workers account. The current `main` branch supports typed multi-page editing, public forms, aggregate reports, SEO discovery, and mapped custom hosts. The published `v0.1.0` release contains CLI binaries for Linux, macOS, and Windows but predates the typed dashboard. Repository checks do not verify a production Cloudflare deployment. Cloudflare usage is billed under your account where applicable.
 
-[![CI](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml)
+[![CI on main](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lianihossam-eng/EezFunnels/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## What you can do
@@ -24,12 +24,6 @@ An open-source, Rust-first, single-owner funnel builder that you run on your own
 ## Scope and current limits
 
 Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly.
-
-## Demo
-
-This animated capture shows the current dashboard, the webinar creation form, and its editor with the mobile preview selected. The sample content was created through the running local app.
-
-![Eez Funnel dashboard, webinar creation, and mobile editor demo](docs/assets/demo.gif)
 
 ## Quickstart
 
