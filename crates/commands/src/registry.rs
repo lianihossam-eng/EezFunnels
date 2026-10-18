@@ -22,6 +22,7 @@ pub mod command_ids {
     pub const FORM_SUBMISSION_LIST: &str = "form.submission.list";
     pub const FORM_SUBMISSION_STATUS_SET: &str = "form.submission.status.set";
     pub const FORM_COMPLETION_REPORT: &str = "form.completion.report";
+    pub const INTERACTION_REPORT_READ: &str = "interaction.report.read";
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,6 +62,7 @@ pub(crate) enum CommandHandler {
     FormSubmissionList,
     FormSubmissionStatusSet,
     FormCompletionReport,
+    InteractionReportRead,
     PublicRead,
     Publish,
     RevisionSave,
@@ -88,6 +90,7 @@ impl CommandHandler {
             Self::FormSubmissionList => command_ids::FORM_SUBMISSION_LIST,
             Self::FormSubmissionStatusSet => command_ids::FORM_SUBMISSION_STATUS_SET,
             Self::FormCompletionReport => command_ids::FORM_COMPLETION_REPORT,
+            Self::InteractionReportRead => command_ids::INTERACTION_REPORT_READ,
             Self::PublicRead => command_ids::FUNNEL_PUBLIC_READ,
             Self::Publish => command_ids::FUNNEL_PUBLISH,
             Self::RevisionSave => command_ids::FUNNEL_REVISION_SAVE,
@@ -139,7 +142,7 @@ pub(crate) struct ResolvedCommand<'key> {
     pub(crate) idempotency_key: Option<&'key str>,
 }
 
-const COMMAND_REGISTRY: [CommandDefinition; 21] = [
+const COMMAND_REGISTRY: [CommandDefinition; 22] = [
     CommandDefinition {
         id: command_ids::FUNNEL_CREATE,
         description: "Create a funnel from a built-in blueprint.",
@@ -260,6 +263,14 @@ const COMMAND_REGISTRY: [CommandDefinition; 21] = [
         idempotency_policy: IdempotencyPolicy::NotRequired,
         mcp_exposure: McpExposure::Hidden,
         handler: CommandHandler::FormCompletionReport,
+    },
+    CommandDefinition {
+        id: command_ids::INTERACTION_REPORT_READ,
+        description: "Report retained consented interaction event counts for the local owner.",
+        actor: CommandActor::LocalUser,
+        idempotency_policy: IdempotencyPolicy::NotRequired,
+        mcp_exposure: McpExposure::Hidden,
+        handler: CommandHandler::InteractionReportRead,
     },
     CommandDefinition {
         id: command_ids::FUNNEL_PUBLIC_READ,

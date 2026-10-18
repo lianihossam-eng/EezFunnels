@@ -150,6 +150,17 @@ mod tests {
     }
 
     #[test]
+    fn interaction_report_route_renders_on_direct_ssr_navigation() {
+        let html = render_document("/funnels/demo-1/interaction-report")
+            .expect("funnel interaction report dashboard route");
+
+        assert!(html.contains("Interaction counts"));
+        assert!(html.contains("Workspace / Interaction counts"));
+        assert!(html.contains("7 days"));
+        assert!(html.contains("90 days"));
+    }
+
+    #[test]
     fn submissions_route_renders_a_hydratable_dashboard_shell() {
         let html = render_document("/submissions").expect("submissions dashboard route");
 
@@ -169,6 +180,7 @@ mod tests {
             "/funnels/é",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/completions",
+            "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/interaction-report",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");
         }
@@ -184,6 +196,7 @@ mod tests {
             "/__local/probe",
             "/funnels/demo/extra",
             "/funnels/demo/completions/extra",
+            "/funnels/demo/interaction-report/extra",
             "/unknown",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");

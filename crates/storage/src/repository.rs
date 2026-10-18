@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
-use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
+use eez_domain::{
+    FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, InteractionReportPeriod,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
@@ -15,6 +17,7 @@ const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
 const PUBLIC_INTERACTION_EVENT_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_INTERACTION_EVENT_CLEANUP_MAX_BATCHES: u8 = 20;
+const PUBLIC_INTERACTION_REPORT_QUERY: &str = r#"WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), event_kinds(event_kind) AS (VALUES ('page_viewed'), ('form_viewed'), ('form_started')), retained AS MATERIALIZED (SELECT events.received_at, events.event_kind, events.campaign_id FROM public_interaction_events AS events JOIN funnel ON funnel.id = events.funnel_id CROSS JOIN bounds WHERE events.received_at >= bounds.start_at AND events.received_at < bounds.end_at AND events.expires_at > bounds.now), daily AS (SELECT strftime('%Y-%m-%d', received_at, 'unixepoch') AS utc_day, event_kind, COUNT(*) AS events FROM retained GROUP BY strftime('%Y-%m-%d', received_at, 'unixepoch'), event_kind) SELECT 'day_kind' AS row_type, days.utc_day, event_kinds.event_kind, NULL AS campaign_id, COALESCE(daily.events, 0) AS events FROM days CROSS JOIN event_kinds CROSS JOIN funnel LEFT JOIN daily ON daily.utc_day = days.utc_day AND daily.event_kind = event_kinds.event_kind UNION ALL SELECT 'campaign' AS row_type, NULL AS utc_day, NULL AS event_kind, retained.campaign_id, COUNT(*) AS events FROM retained GROUP BY retained.campaign_id ORDER BY row_type ASC, utc_day ASC, event_kind ASC, campaign_id ASC"#;
 pub const PUBLIC_FORM_SUBMISSION_PAGE_SIZE: usize = 25;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
@@ -363,6 +366,15 @@ pub struct FormCompletionCountRow {
     pub form_id: Option<String>,
     pub submission_channel: Option<String>,
     pub completions: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PublicInteractionReportRow {
+    pub row_type: String,
+    pub utc_day: Option<String>,
+    pub event_kind: Option<String>,
+    pub campaign_id: Option<String>,
+    pub events: i64,
 }
 
 pub enum MutationResult {
@@ -1772,6 +1784,25 @@ impl<'a> Repository<'a> {
             .all()
             .await?
             .results::<FormCompletionCountRow>()?;
+        Ok(rows)
+    }
+
+    pub async fn public_interaction_report_rows(
+        &self,
+        funnel_id: &str,
+        period: InteractionReportPeriod,
+    ) -> RepositoryResult<Vec<PublicInteractionReportRow>> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        let funnel_id = D1Type::Text(funnel_id);
+        let start_offset = D1Type::Integer(i32::from(period.days() - 1));
+        let period_days = D1Type::Integer(i32::from(period.days()));
+        let rows = self
+            .database
+            .prepare(PUBLIC_INTERACTION_REPORT_QUERY)
+            .bind_refs([&funnel_id, &start_offset, &period_days])?
+            .all()
+            .await?
+            .results::<PublicInteractionReportRow>()?;
         Ok(rows)
     }
 

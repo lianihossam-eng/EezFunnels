@@ -1,6 +1,6 @@
 # Interaction measurement contract
 
-This document describes first-party interaction measurement and the boundaries of a future report. When the Worker has a valid `INTERACTION_REPLAY_KEY`, published pages offer a separate choice and can record page and form interaction events. Without that secret, the measurement interface is not added and no interaction events are accepted. There is not yet an owner dashboard report. **Form completions** continues to count accepted form submissions only; these events do not change that report.
+This document describes first-party interaction measurement and the boundaries of the owner report. When the Worker has a valid `INTERACTION_REPLAY_KEY`, published pages offer a separate choice and can record page and form interaction events. Without that secret, the measurement interface is not added and no interaction events are accepted. **Form completions** continues to count accepted form submissions only; these events do not change that report.
 
 ## Consent and event shape
 
@@ -35,6 +35,8 @@ The contract defaults to 30 days of event retention. Set `PUBLIC_INTERACTION_RET
 
 ## Reports and limits
 
-An eventual owner report is limited to fixed 7, 30, or 90 UTC-day windows and aggregated counts by event kind and configured campaign ID. It must not expose raw event rows or claim unique visitors or sessions. These counts cannot be divided into form completions to claim a conversion rate: event capture can be refused, delayed, or absent, and accepted form submissions remain the only source of completion counts. The report must use the same private access boundary and `Cache-Control: private, no-store` behavior as the submissions and completion APIs. No event dashboard or aggregate endpoint is included yet.
+The owner report is available from each funnel's dashboard editor and `GET /api/funnels/:funnel_id/interaction-report?period=7|30|90`. It accepts only fixed 7, 30, or 90 UTC calendar dates, includes the current date as a partial day, and aggregates retained events by server receipt date and event kind. It also groups events by an exact campaign ID only when the collector retained that registered ID. No campaign IDs are currently configured, so visitor-supplied values are discarded and events remain unattributed.
+
+The endpoint and dashboard view are limited to the owner boundary and use `Cache-Control: private, no-store`. The response contains aggregate counts only; it does not expose event IDs, replay fingerprints, raw rows, form IDs, or form values. It does not claim unique visitors, sessions, visitor journeys, or conversion rates. Event capture can be refused, delayed, or absent, and accepted form submissions remain the only source of completion counts. This measurement design does not establish legal compliance.
 
 The domain and Worker tests enforce consent gating, schema and payload limits, current published resource references, exact campaign matching, replay behavior, receipt-time reporting, and expiration boundaries. These local tests do not establish legal compliance.

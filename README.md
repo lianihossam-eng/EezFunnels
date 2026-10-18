@@ -16,10 +16,11 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
 - Review retained submissions in the inbox and track follow-up as new, contacted, qualified, or closed.
 - Review retained form completion counts by UTC date, stable form ID, and a closed campaign-channel category derived from `utm_medium` on the page containing the form. The report contains counts only; it does not track visits or calculate conversion rates.
+- Review retained consent-based page and form interaction event counts by UTC date, event kind, and configured campaign ID. This aggregate report does not identify visitors or calculate conversion rates; see [Interaction measurement](docs/analytics.md).
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, an interaction-event report, or AI generation. Optional consent-based page and form interaction events can be collected when configured; see [Interaction measurement](docs/analytics.md). See [Security](docs/security.md) before exposing an instance publicly.
+The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Optional consent-based page and form interaction events can be collected when configured; see [Interaction measurement](docs/analytics.md). See [Security](docs/security.md) before exposing an instance publicly.
 
 ## Scope
 
@@ -80,6 +81,8 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
 | `/api/submissions` and `/api/submissions/:submission_id/status` | Read retained submissions and update their follow-up status |
 | `/api/funnels/:funnel_id/completions?period=7|30|90` | Read retained form completion counts for one funnel |
+| `/api/funnels/:funnel_id/interaction-report?period=7|30|90` | Read consented, retained interaction event aggregates for one funnel |
+| `/funnels/:id/interaction-report` | View aggregate interaction counts for one funnel |
 | `/mcp` | Stateless Streamable HTTP MCP endpoint |
 | `/health` | Worker health response |
 

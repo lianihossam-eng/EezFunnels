@@ -11,10 +11,12 @@ pub mod form_completions;
 pub mod form_submission_channel;
 pub mod form_submission_status;
 pub mod interaction_event;
+pub mod interaction_report;
 
 pub use form_completions::FormCompletionPeriod;
 pub use form_submission_channel::FormSubmissionChannel;
 pub use form_submission_status::FormSubmissionStatus;
+pub use interaction_report::InteractionReportPeriod;
 
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 

@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
     DomainError, FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, Funnel,
-    FunnelBlueprint, FunnelId, RenderManifest, Revision, RevisionId, Section, ThemePreset,
+    FunnelBlueprint, FunnelId, InteractionReportPeriod, RenderManifest, Revision, RevisionId,
+    Section, ThemePreset,
 };
 use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
@@ -14,8 +15,8 @@ use eez_render::{
 use eez_storage::media::{MediaAssetError, MediaAssetRepository};
 use eez_storage::repository::{
     EditorSaveMutation, FormCompletionCountRow, FunnelRecord, MutationResult, NewFunnel,
-    NewRevision, PublicFormSubmissionCursor, PublicFormSubmissionRecord, PublicationMutation,
-    Repository, RepositoryError, RevisionRecord,
+    NewRevision, PublicFormSubmissionCursor, PublicFormSubmissionRecord,
+    PublicInteractionReportRow, PublicationMutation, Repository, RepositoryError, RevisionRecord,
 };
 use eez_storage::stage::{
     DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
@@ -41,6 +42,10 @@ mod v1_conversion_tests;
 #[cfg(test)]
 #[path = "funnel/form_completion_tests.rs"]
 mod form_completion_tests;
+
+#[cfg(test)]
+#[path = "funnel/interaction_report_tests.rs"]
+mod interaction_report_tests;
 
 #[cfg(test)]
 #[path = "funnel/form_submission_status_tests.rs"]
@@ -699,6 +704,26 @@ struct FormCompletionReportCommand {
     period_days: u8,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InteractionReportReadCommand {
+    funnel_id: String,
+    period_days: u8,
+}
+
+impl InteractionReportReadCommand {
+    const ID: &'static str = command_ids::INTERACTION_REPORT_READ;
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        if InteractionReportPeriod::from_days(command.period_days).is_none() {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
 impl FormCompletionReportCommand {
     const ID: &'static str = command_ids::FORM_COMPLETION_REPORT;
 
@@ -1083,6 +1108,38 @@ struct FormCompletionReportResult {
 }
 
 #[derive(Serialize)]
+struct InteractionReportResult {
+    command_id: &'static str,
+    funnel_id: String,
+    period_days: u8,
+    total_events: u64,
+    days: Vec<DailyInteractionReportDay>,
+    campaigns: Vec<CampaignInteractionCount>,
+}
+
+#[derive(Serialize)]
+struct DailyInteractionReportDay {
+    utc_day: String,
+    page_viewed: u64,
+    form_viewed: u64,
+    form_started: u64,
+    is_partial_today: bool,
+}
+
+#[derive(Serialize)]
+struct CampaignInteractionCount {
+    campaign_id: Option<String>,
+    events: u64,
+}
+
+#[derive(Default)]
+struct InteractionDailyCounts {
+    page_viewed: u64,
+    form_viewed: u64,
+    form_started: u64,
+}
+
+#[derive(Serialize)]
 struct DailyFormCompletionCount {
     utc_day: String,
     completions: u64,
@@ -1265,6 +1322,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             }
             CommandHandler::FormCompletionReport => {
                 self.execute_form_completion_report(parameters).await
+            }
+            CommandHandler::InteractionReportRead => {
+                self.execute_interaction_report_read(parameters).await
             }
             CommandHandler::PublicRead => self.execute_public_read(parameters).await,
             CommandHandler::Publish => {
@@ -1474,6 +1534,24 @@ impl<'repo, 'database> Session<'repo, 'database> {
             return Err(FunnelCommandError::FunnelNotFound);
         }
         let result = build_form_completion_report(command.funnel_id, period, rows)?;
+        serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_interaction_report_read(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = InteractionReportReadCommand::from_json(parameters)?;
+        let period = InteractionReportPeriod::from_days(command.period_days)
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        let rows = self
+            .repository
+            .public_interaction_report_rows(&command.funnel_id, period)
+            .await?;
+        if rows.is_empty() {
+            return Err(FunnelCommandError::FunnelNotFound);
+        }
+        let result = build_interaction_report(command.funnel_id, period, rows)?;
         serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
     }
 
@@ -3102,6 +3180,96 @@ fn build_form_completion_report(
         days,
         forms,
         channels,
+    })
+}
+
+fn build_interaction_report(
+    funnel_id: String,
+    period: InteractionReportPeriod,
+    rows: Vec<PublicInteractionReportRow>,
+) -> Result<InteractionReportResult, FunnelCommandError> {
+    let mut daily_counts = BTreeMap::<String, InteractionDailyCounts>::new();
+    let mut daily_kinds = BTreeSet::<(String, String)>::new();
+    let mut campaign_counts = BTreeMap::<Option<String>, u64>::new();
+
+    for row in rows {
+        let count = u64::try_from(row.events).map_err(|_| FunnelCommandError::Internal)?;
+        match row.row_type.as_str() {
+            "day_kind" if row.campaign_id.is_none() => {
+                let utc_day = row.utc_day.ok_or(FunnelCommandError::Internal)?;
+                let event_kind = row.event_kind.ok_or(FunnelCommandError::Internal)?;
+                if !daily_kinds.insert((utc_day.clone(), event_kind.clone())) {
+                    return Err(FunnelCommandError::Internal);
+                }
+                let day = daily_counts.entry(utc_day).or_default();
+                match event_kind.as_str() {
+                    "page_viewed" => day.page_viewed = count,
+                    "form_viewed" => day.form_viewed = count,
+                    "form_started" => day.form_started = count,
+                    _ => return Err(FunnelCommandError::Internal),
+                }
+            }
+            "campaign" if row.utc_day.is_none() && row.event_kind.is_none() => {
+                if let Some(campaign_id) = row.campaign_id.as_deref() {
+                    validate_route_id(campaign_id).map_err(|_| FunnelCommandError::Internal)?;
+                }
+                if campaign_counts.insert(row.campaign_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            _ => return Err(FunnelCommandError::Internal),
+        }
+    }
+
+    let expected_kind_rows = usize::from(period.days()) * 3;
+    if daily_counts.len() != usize::from(period.days()) || daily_kinds.len() != expected_kind_rows {
+        return Err(FunnelCommandError::Internal);
+    }
+
+    let day_count = daily_counts.len();
+    let mut total_events = 0_u64;
+    let days = daily_counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (utc_day, counts))| {
+            total_events = total_events
+                .checked_add(counts.page_viewed)
+                .and_then(|total| total.checked_add(counts.form_viewed))
+                .and_then(|total| total.checked_add(counts.form_started))
+                .ok_or(FunnelCommandError::Internal)?;
+            Ok(DailyInteractionReportDay {
+                utc_day,
+                page_viewed: counts.page_viewed,
+                form_viewed: counts.form_viewed,
+                form_started: counts.form_started,
+                is_partial_today: index + 1 == day_count,
+            })
+        })
+        .collect::<Result<Vec<_>, FunnelCommandError>>()?;
+
+    let campaign_total = campaign_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    if campaign_total != total_events {
+        return Err(FunnelCommandError::Internal);
+    }
+    let campaigns = campaign_counts
+        .into_iter()
+        .map(|(campaign_id, events)| CampaignInteractionCount {
+            campaign_id,
+            events,
+        })
+        .collect();
+
+    Ok(InteractionReportResult {
+        command_id: InteractionReportReadCommand::ID,
+        funnel_id,
+        period_days: period.days(),
+        total_events,
+        days,
+        campaigns,
     })
 }
 

@@ -14,7 +14,9 @@ use eez_domain::interaction_event::{
     decode_interaction_event, CampaignRegistry, InteractionConsent, InteractionEvent,
     InteractionEventKind, DEFAULT_INTERACTION_RETENTION_DAYS, MAX_INTERACTION_RETENTION_DAYS,
 };
-use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
+use eez_domain::{
+    FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, InteractionReportPeriod,
+};
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
     NewPublicFormSubmission, NewPublicInteractionEvent, PublicFormSubmissionCursor,
@@ -159,6 +161,8 @@ pub async fn fetch(
         .await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/completions") {
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/interaction-report") {
+        funnel_interaction_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(route) = public_interaction_events_route_from_path(&request_path) {
         public_interaction_events_response(&env, request, route, correlation_id.clone(), None).await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
@@ -252,6 +256,7 @@ pub async fn fetch(
     };
 
     if funnel_subroute(&request_path, "/completions").is_some()
+        || funnel_subroute(&request_path, "/interaction-report").is_some()
         || request_path == "/api/submissions"
         || request_path.starts_with("/api/submissions/")
     {
@@ -1952,6 +1957,25 @@ fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, (
     period.ok_or(())
 }
 
+fn interaction_report_period(query: Option<&str>) -> Result<InteractionReportPeriod, ()> {
+    let Some(query) = query.filter(|query| !query.is_empty()) else {
+        return Err(());
+    };
+    let mut period = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if name != "period" || period.is_some() {
+            return Err(());
+        }
+        period = match value.as_ref() {
+            "7" => Some(InteractionReportPeriod::Days7),
+            "30" => Some(InteractionReportPeriod::Days30),
+            "90" => Some(InteractionReportPeriod::Days90),
+            _ => return Err(()),
+        };
+    }
+    period.ok_or(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PublicFormSubmissionQuery {
     cursor: Option<PublicFormSubmissionCursor>,
@@ -2415,6 +2439,38 @@ async fn funnel_completion_report_response(
     })
     .to_string();
     match execute_funnel_command(env, command_ids::FORM_COMPLETION_REPORT, &parameters, None).await
+    {
+        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Err(error) => {
+            let error = ApiError::from_code(error.code());
+            log_api_error(&error, &correlation_id, error.code());
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+async fn funnel_interaction_report_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let period = match interaction_report_period(request.uri().query()) {
+        Ok(period) => period,
+        Err(()) => {
+            let error = ApiError::from_code("validation/invalid_json");
+            return error_response(&error, correlation_id);
+        }
+    };
+    let parameters = serde_json::json!({
+        "funnel_id": funnel_id,
+        "period_days": period.days(),
+    })
+    .to_string();
+    match execute_funnel_command(env, command_ids::INTERACTION_REPORT_READ, &parameters, None).await
     {
         Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
         Err(error) => {
@@ -4009,16 +4065,17 @@ mod tests {
         custom_host_route_from_path, editor_command_parameters, form_completion_period,
         form_submission_status_command_parameters, form_submission_status_id_from_path,
         funnel_subroute, interaction_consent, interaction_event_matches_revision,
-        interaction_origin_matches, is_json_content_type, normalize_correlation_id,
-        parse_public_form_body, public_form_submission_channel_from_page_query,
-        public_form_submission_identity, public_form_submission_query,
-        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
-        public_interaction_events_route_from_path, public_route_from_path,
-        publication_command_parameters, published_document_references_asset, request_if_none_match,
-        sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
-        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
-        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
-        CustomHostRequestRoute, EditorCommandParametersError, PublicFormSubmissionCursor,
+        interaction_origin_matches, interaction_report_period, is_json_content_type,
+        normalize_correlation_id, parse_public_form_body,
+        public_form_submission_channel_from_page_query, public_form_submission_identity,
+        public_form_submission_query, public_form_submission_route_from_path,
+        public_form_success_location, public_html_etag, public_interaction_events_route_from_path,
+        public_route_from_path, publication_command_parameters,
+        published_document_references_asset, request_if_none_match, sitemap_revisions,
+        stage_upload_token, v1_conversion_command_parameters, v2_document_revision_query,
+        v2_edit_command_parameters, v2_preview_command_parameters, v2_save_command_parameters,
+        v2_stage_command_parameters, valid_public_slug, CustomHostRequestRoute,
+        EditorCommandParametersError, InteractionReportPeriod, PublicFormSubmissionCursor,
         PublicFormSubmissionIdentity, PublicInteractionEventsRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
@@ -4232,6 +4289,13 @@ mod tests {
         );
         assert_eq!(
             custom_host_route_from_path("/api/funnels", "lead-gen"),
+            None
+        );
+        assert_eq!(
+            custom_host_route_from_path(
+                "/api/funnels/funnel-a/interaction-report?period=7",
+                "lead-gen"
+            ),
             None
         );
 
@@ -4459,6 +4523,7 @@ mod tests {
         );
         for blocked in [
             "/api/funnels",
+            "/api/funnels/funnel-a/interaction-report",
             "/api/media",
             "/api/public/funnels/another-funnel/pages/page-home/forms/form-contact/submissions",
             "/mcp",
@@ -5110,6 +5175,33 @@ mod tests {
             Some("other=value"),
         ] {
             assert_eq!(form_completion_period(query), Err(()), "{query:?}");
+        }
+    }
+
+    #[test]
+    fn interaction_report_period_requires_one_supported_value() {
+        assert_eq!(
+            interaction_report_period(Some("period=7")),
+            Ok(InteractionReportPeriod::Days7)
+        );
+        assert_eq!(
+            interaction_report_period(Some("period=30")),
+            Ok(InteractionReportPeriod::Days30)
+        );
+        assert_eq!(
+            interaction_report_period(Some("period=90")),
+            Ok(InteractionReportPeriod::Days90)
+        );
+        for query in [
+            None,
+            Some(""),
+            Some("period=1"),
+            Some("period=07"),
+            Some("period=30&period=90"),
+            Some("period=30&other=value"),
+            Some("other=value"),
+        ] {
+            assert_eq!(interaction_report_period(query), Err(()), "{query:?}");
         }
     }
 
