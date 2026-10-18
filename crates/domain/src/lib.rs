@@ -10,6 +10,7 @@ pub mod document_v2;
 pub mod form_completions;
 pub mod form_submission_channel;
 pub mod form_submission_status;
+pub mod interaction_event;
 
 pub use form_completions::FormCompletionPeriod;
 pub use form_submission_channel::FormSubmissionChannel;
