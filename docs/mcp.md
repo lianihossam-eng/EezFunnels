@@ -77,7 +77,7 @@ Add an MCP server entry to Claude Desktop's `claude_desktop_config.json` (use th
 
 Restart Claude Desktop after editing its config. Confirm that the server connects, then try `list_commands` and `list_funnels` before asking it to make changes. The bridge package runs on your computer and must be available through `npx`.
 
-The Worker transport and local tool smoke are verified, but end-to-end Claude Desktop compatibility is not yet verified in the project status. If your Desktop version or bridge does not pass the custom Bearer header, use an MCP client that supports remote Streamable HTTP with a static Authorization header.
+CI also checks the endpoint with the official TypeScript SDK v1.32.1 `Client` and `StreamableHTTPClientTransport` against a local Wrangler Worker. The smoke verifies initialization, `tools/list`, and the read-only `list_commands` call using a throwaway Bearer token. It does not exercise Claude Desktop or the `mcp-remote` bridge, so their end-to-end compatibility remains unverified. If your Desktop version or bridge does not pass the custom Bearer header, use an MCP client that supports remote Streamable HTTP with a static Authorization header.
 
 ## Transport details
 
