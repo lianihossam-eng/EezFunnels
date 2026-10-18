@@ -19,7 +19,7 @@ An open source, single-owner funnel builder that you run on your own Cloudflare 
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
-The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, visitor analytics or full-funnel attribution, or AI generation. See [Security](docs/security.md) before exposing an instance publicly.
+The current release has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, an interaction-event report, or AI generation. Optional consent-based page and form interaction events can be collected when configured; see [Interaction measurement](docs/analytics.md). See [Security](docs/security.md) before exposing an instance publicly.
 
 ## Scope
 

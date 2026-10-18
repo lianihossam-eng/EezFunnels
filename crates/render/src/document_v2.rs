@@ -561,7 +561,19 @@ fn render_page(
     push_profile_variables(&mut html, &profile.tablet);
     html.push_str("}}@media (max-width:639px){#funnel{");
     push_profile_variables(&mut html, &profile.mobile);
-    html.push_str("}}</style></head><body><main id=\"funnel\"><div class=\"v2-main\">");
+    html.push_str("}}</style></head><body><main id=\"funnel\"");
+    if matches!(
+        link_mode,
+        LinkMode::PublishedV3
+            | LinkMode::Published {
+                funnel_slug: Some(_)
+            }
+    ) {
+        html.push_str(" data-eezfunnel-page-id=\"");
+        html.push_str(&crate::escape_html_attribute(page.id().as_str()));
+        html.push('"');
+    }
+    html.push_str("><div class=\"v2-main\">");
     for section in page.sections() {
         html.push_str("<section class=\"v2-section v2-section--");
         html.push_str(section_kind_name(section.section_type()));
@@ -677,6 +689,9 @@ fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: Op
     let form_dom_id = format!("form-{form_id}");
     html.push_str("<form class=\"v2-form\"");
     if let Some(funnel_slug) = funnel_slug {
+        html.push_str(" data-eezfunnel-form-id=\"");
+        html.push_str(&crate::escape_html_attribute(form_id));
+        html.push('"');
         let action = format!(
             "/api/public/funnels/{}/pages/{}/forms/{}/submissions?key={PUBLIC_FORM_SUBMISSION_KEY_MARKER}",
             funnel_slug,

@@ -13,6 +13,8 @@ const MAX_FUNNELS: i32 = 100;
 const MAX_REVISIONS_RETAINED: i32 = 100;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_BATCH_SIZE: i32 = 10_000;
 const PUBLIC_FORM_SUBMISSION_CLEANUP_MAX_BATCHES: u8 = 20;
+const PUBLIC_INTERACTION_EVENT_CLEANUP_BATCH_SIZE: i32 = 10_000;
+const PUBLIC_INTERACTION_EVENT_CLEANUP_MAX_BATCHES: u8 = 20;
 pub const PUBLIC_FORM_SUBMISSION_PAGE_SIZE: usize = 25;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
@@ -263,8 +265,39 @@ pub enum PublicFormSubmissionResult {
     NotCurrent,
 }
 
+pub struct NewPublicInteractionEvent<'a> {
+    pub event_id: &'a str,
+    pub funnel_id: &'a str,
+    pub funnel_slug: &'a str,
+    pub revision_id: &'a str,
+    pub page_id: &'a str,
+    pub event_kind: &'a str,
+    pub form_id: Option<&'a str>,
+    pub campaign_id: Option<&'a str>,
+    pub replay_fingerprint: &'a str,
+    pub retention_days: u8,
+    pub limit_per_minute: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublicInteractionEventResult {
+    Stored,
+    Duplicate,
+    KeyReuseMismatch,
+    RateLimited,
+    NotCurrent,
+}
+
 #[derive(Deserialize)]
 struct PublicFormSubmissionState {
+    is_current: i64,
+    is_duplicate: i64,
+    is_key_reuse: i64,
+    is_rate_limited: i64,
+}
+
+#[derive(Deserialize)]
+struct PublicInteractionEventState {
     is_current: i64,
     is_duplicate: i64,
     is_key_reuse: i64,
@@ -1475,6 +1508,142 @@ impl<'a> Repository<'a> {
         Ok(())
     }
 
+    pub async fn store_public_interaction_event(
+        &self,
+        input: NewPublicInteractionEvent<'_>,
+    ) -> RepositoryResult<PublicInteractionEventResult> {
+        for (value, field) in [
+            (input.event_id, "event_id"),
+            (input.funnel_id, "funnel_id"),
+            (input.funnel_slug, "funnel_slug"),
+            (input.revision_id, "revision_id"),
+            (input.page_id, "page_id"),
+            (input.event_kind, "event_kind"),
+            (input.replay_fingerprint, "replay_fingerprint"),
+        ] {
+            validate_required_field(value, field)?;
+        }
+        let event_id = uuid::Uuid::parse_str(input.event_id)
+            .map_err(|_| RepositoryError::InvalidField("event_id"))?;
+        if event_id.get_version_num() != 4
+            || event_id.hyphenated().to_string() != input.event_id
+            || !valid_interaction_reference(input.funnel_id)
+            || !valid_interaction_reference(input.revision_id)
+            || !valid_interaction_reference(input.page_id)
+            || input
+                .form_id
+                .is_some_and(|value| !valid_interaction_reference(value))
+            || input
+                .campaign_id
+                .is_some_and(|value| !valid_interaction_reference(value))
+            || !matches!(
+                input.event_kind,
+                "page_viewed" | "form_viewed" | "form_started"
+            )
+            || (input.event_kind == "page_viewed") != input.form_id.is_none()
+            || input.replay_fingerprint.len() != 64
+            || !input
+                .replay_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !(1..=90).contains(&input.retention_days)
+            || !(1..=10_000).contains(&input.limit_per_minute)
+        {
+            return Err(RepositoryError::InvalidField("public_interaction_event"));
+        }
+
+        let event_id = D1Type::Text(input.event_id);
+        let funnel_id = D1Type::Text(input.funnel_id);
+        let funnel_slug = D1Type::Text(input.funnel_slug);
+        let revision_id = D1Type::Text(input.revision_id);
+        let page_id = D1Type::Text(input.page_id);
+        let event_kind = D1Type::Text(input.event_kind);
+        let form_id = input.form_id.map(D1Type::Text).unwrap_or(D1Type::Null);
+        let campaign_id = input.campaign_id.map(D1Type::Text).unwrap_or(D1Type::Null);
+        let replay_fingerprint = D1Type::Text(input.replay_fingerprint);
+        let retention_seconds = D1Type::Integer(i32::from(input.retention_days) * 86_400);
+        let limit_per_minute = D1Type::Integer(input.limit_per_minute);
+
+        let inserted = self
+            .database
+            .prepare(
+                "INSERT INTO public_interaction_events (event_id, funnel_id, revision_id, page_id, event_kind, form_id, campaign_id, replay_fingerprint, received_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND funnels.published_revision_id = ? AND revisions.schema_version IN (1, 2) AND (SELECT COUNT(*) FROM public_interaction_events WHERE funnel_id = funnels.id AND received_at >= unixepoch() - 60) < ? ON CONFLICT(event_id) DO NOTHING RETURNING event_id",
+            )
+            .bind_refs([
+                &event_id,
+                &revision_id,
+                &page_id,
+                &event_kind,
+                &form_id,
+                &campaign_id,
+                &replay_fingerprint,
+                &retention_seconds,
+                &funnel_id,
+                &funnel_slug,
+                &revision_id,
+                &limit_per_minute,
+            ])?
+            .first::<String>(Some("event_id"))
+            .await?;
+        if inserted.is_some() {
+            return Ok(PublicInteractionEventResult::Stored);
+        }
+
+        let state = self
+            .database
+            .prepare(
+                "SELECT EXISTS(SELECT 1 FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND funnels.published_revision_id = ? AND revisions.schema_version IN (1, 2)) AS is_current, EXISTS(SELECT 1 FROM public_interaction_events WHERE event_id = ? AND replay_fingerprint = ?) AS is_duplicate, EXISTS(SELECT 1 FROM public_interaction_events WHERE event_id = ?) AS is_key_reuse, (SELECT COUNT(*) FROM public_interaction_events WHERE funnel_id = ? AND received_at >= unixepoch() - 60) >= ? AS is_rate_limited",
+            )
+            .bind_refs([
+                &funnel_id,
+                &funnel_slug,
+                &revision_id,
+                &event_id,
+                &replay_fingerprint,
+                &event_id,
+                &funnel_id,
+                &limit_per_minute,
+            ])?
+            .first::<PublicInteractionEventState>(None)
+            .await?
+            .ok_or(RepositoryError::InvalidField("public_interaction_event"))?;
+
+        if state.is_current != 1 {
+            return Ok(PublicInteractionEventResult::NotCurrent);
+        }
+        if state.is_duplicate == 1 {
+            return Ok(PublicInteractionEventResult::Duplicate);
+        }
+        if state.is_key_reuse == 1 {
+            return Ok(PublicInteractionEventResult::KeyReuseMismatch);
+        }
+        if state.is_rate_limited == 1 {
+            return Ok(PublicInteractionEventResult::RateLimited);
+        }
+        Err(RepositoryError::InvalidField("public_interaction_event"))
+    }
+
+    pub async fn cleanup_expired_public_interaction_events(&self) -> RepositoryResult<()> {
+        for _ in 0..PUBLIC_INTERACTION_EVENT_CLEANUP_MAX_BATCHES {
+            let batch_size = D1Type::Integer(PUBLIC_INTERACTION_EVENT_CLEANUP_BATCH_SIZE);
+            let deleted = self
+                .database
+                .prepare(
+                    "DELETE FROM public_interaction_events WHERE event_id IN (SELECT event_id FROM public_interaction_events WHERE expires_at <= unixepoch() ORDER BY expires_at LIMIT ?)",
+                )
+                .bind_refs([&batch_size])?
+                .run()
+                .await?
+                .meta()?
+                .and_then(|meta| meta.changes)
+                .unwrap_or(PUBLIC_INTERACTION_EVENT_CLEANUP_BATCH_SIZE as usize);
+            if deleted < PUBLIC_INTERACTION_EVENT_CLEANUP_BATCH_SIZE as usize {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn list_public_form_submissions(
         &self,
         cursor: Option<&PublicFormSubmissionCursor>,
@@ -1800,6 +1969,15 @@ fn validate_required_field(value: &str, field: &'static str) -> RepositoryResult
     } else {
         Ok(())
     }
+}
+
+fn valid_interaction_reference(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn validate_payload_size(value: &str) -> RepositoryResult<()> {

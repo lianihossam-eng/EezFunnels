@@ -10,11 +10,16 @@ use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{
     validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
 };
+use eez_domain::interaction_event::{
+    decode_interaction_event, CampaignRegistry, InteractionConsent, InteractionEvent,
+    InteractionEventKind, DEFAULT_INTERACTION_RETENTION_DAYS, MAX_INTERACTION_RETENTION_DAYS,
+};
 use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
 use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
-    NewPublicFormSubmission, PublicFormSubmissionCursor, PublicFormSubmissionResult,
-    PublishedRevisionRecord,
+    NewPublicFormSubmission, NewPublicInteractionEvent, PublicFormSubmissionCursor,
+    PublicFormSubmissionResult, PublicInteractionEventResult, PublishedRevisionRecord,
+    RevisionRecord,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -33,6 +38,8 @@ mod json;
 mod mcp;
 mod origin;
 mod sitemap;
+
+const INTERACTION_SCRIPT: &str = include_str!("interaction.js");
 
 pub use host::HostAllowlist;
 
@@ -126,6 +133,8 @@ pub async fn fetch(
         robots_response(&env, request, correlation_id.clone())
     } else if request_path == "/sitemap.xml" {
         sitemap_response(&env, request, correlation_id.clone(), &custom_hosts, None).await
+    } else if request_path == "/_eez/interaction.js" {
+        interaction_script_response(request, correlation_id.clone())
     } else if request_path == "/mcp" {
         mcp::handle(&env, request, &correlation_id).await
     } else if request_path == "/api/media" {
@@ -150,6 +159,8 @@ pub async fn fetch(
         .await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/completions") {
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(route) = public_interaction_events_route_from_path(&request_path) {
+        public_interaction_events_response(&env, request, route, correlation_id.clone(), None).await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
         public_form_submission_response(&env, request, route, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/document") {
@@ -279,6 +290,13 @@ pub async fn scheduled(
         .await
     {
         worker::console_error!("Expired public form submission cleanup failed: {error:?}");
+    }
+    if let Err(error) = bindings
+        .repository()
+        .cleanup_expired_public_interaction_events()
+        .await
+    {
+        worker::console_error!("Expired public interaction event cleanup failed: {error:?}");
     }
 
     if eez_storage::stage::StageCapacity::from_env(&env).is_none() {
@@ -514,6 +532,13 @@ async fn custom_host_response(
         }
         CustomHostRequestRoute::FormSubmission(route) => {
             public_form_submission_response(env, request, route, correlation_id).await
+        }
+        CustomHostRequestRoute::InteractionEvents(route) => {
+            public_interaction_events_response(env, request, route, correlation_id, Some(mapping))
+                .await
+        }
+        CustomHostRequestRoute::InteractionScript => {
+            interaction_script_response(request, correlation_id)
         }
         CustomHostRequestRoute::Media(asset_id) => {
             if request.method() != Method::GET && request.method() != Method::HEAD {
@@ -765,9 +790,16 @@ struct PublicFormSubmissionRoute<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PublicInteractionEventsRoute<'a> {
+    funnel_slug: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CustomHostRequestRoute<'a> {
     Page(PublicFunnelRoute<'a>),
     FormSubmission(PublicFormSubmissionRoute<'a>),
+    InteractionEvents(PublicInteractionEventsRoute<'a>),
+    InteractionScript,
     Media(&'a str),
     Robots,
     Sitemap,
@@ -817,10 +849,29 @@ fn public_form_submission_route_from_path(path: &str) -> Option<PublicFormSubmis
     })
 }
 
+fn public_interaction_events_route_from_path(
+    path: &str,
+) -> Option<PublicInteractionEventsRoute<'_>> {
+    let segments = path
+        .strip_prefix("/api/public/funnels/")?
+        .split('/')
+        .collect::<Vec<_>>();
+    if segments.len() == 2 && !segments[0].is_empty() && segments[1] == "interaction-events" {
+        Some(PublicInteractionEventsRoute {
+            funnel_slug: segments[0],
+        })
+    } else {
+        None
+    }
+}
+
 fn custom_host_route_from_path<'a>(
     path: &'a str,
     mapped_funnel_slug: &'a str,
 ) -> Option<CustomHostRequestRoute<'a>> {
+    if path == "/_eez/interaction.js" {
+        return Some(CustomHostRequestRoute::InteractionScript);
+    }
     if path == "/robots.txt" {
         return Some(CustomHostRequestRoute::Robots);
     }
@@ -830,6 +881,10 @@ fn custom_host_route_from_path<'a>(
     if let Some(route) = public_form_submission_route_from_path(path) {
         return (route.funnel_slug == mapped_funnel_slug)
             .then_some(CustomHostRequestRoute::FormSubmission(route));
+    }
+    if let Some(route) = public_interaction_events_route_from_path(path) {
+        return (route.funnel_slug == mapped_funnel_slug)
+            .then_some(CustomHostRequestRoute::InteractionEvents(route));
     }
     if let Some(asset_id) = path.strip_prefix("/media/") {
         if eez_storage::media::is_lower_sha256(asset_id) {
@@ -1146,6 +1201,35 @@ async fn public_funnel_response(
             html = canonical_html;
         }
     }
+    let Some(funnel_id) = result.get("funnel_id").and_then(Value::as_str) else {
+        let error = ApiError::from_code("internal/unexpected");
+        log_api_error(&error, &correlation_id, error.code());
+        return error_response(&error, correlation_id);
+    };
+    let Some(revision_id) = result.get("revision_id").and_then(Value::as_str) else {
+        let error = ApiError::from_code("internal/unexpected");
+        log_api_error(&error, &correlation_id, error.code());
+        return error_response(&error, correlation_id);
+    };
+    let Some(schema_version) = result.get("schema_version").and_then(Value::as_i64) else {
+        let error = ApiError::from_code("internal/unexpected");
+        log_api_error(&error, &correlation_id, error.code());
+        return error_response(&error, correlation_id);
+    };
+    if interaction_collection_enabled(env) {
+        let Some(interaction_html) = append_interaction_script(
+            &html,
+            funnel_id,
+            revision_id,
+            route.funnel_slug,
+            schema_version,
+        ) else {
+            let error = ApiError::from_code("internal/unexpected");
+            log_api_error(&error, &correlation_id, error.code());
+            return error_response(&error, correlation_id);
+        };
+        html = interaction_html;
+    }
     let submission_key_placeholder = format!(
         "?key={}",
         eez_render::document_v2::PUBLIC_FORM_SUBMISSION_KEY_MARKER
@@ -1230,6 +1314,78 @@ async fn public_funnel_response(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
+    response
+}
+
+fn append_interaction_script(
+    html: &str,
+    funnel_id: &str,
+    revision_id: &str,
+    funnel_slug: &str,
+    schema_version: i64,
+) -> Option<String> {
+    if !valid_funnel_route_id(funnel_id)
+        || !valid_funnel_route_id(revision_id)
+        || !valid_public_slug(funnel_slug)
+        || !matches!(schema_version, 1 | 2)
+    {
+        return None;
+    }
+    let legacy_page_attribute = if schema_version == 1 {
+        " data-legacy-page-id=\"legacy-entry\""
+    } else {
+        ""
+    };
+    let script = format!(
+        "<script defer src=\"/_eez/interaction.js\" data-funnel-id=\"{funnel_id}\" data-revision-id=\"{revision_id}\" data-endpoint=\"/api/public/funnels/{funnel_slug}/interaction-events\"{legacy_page_attribute}></script>"
+    );
+    let closing_body = html.rfind("</body>")?;
+    let mut output = String::with_capacity(html.len() + script.len());
+    output.push_str(&html[..closing_body]);
+    output.push_str(&script);
+    output.push_str(&html[closing_body..]);
+    Some(output)
+}
+
+fn interaction_script_response(
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return method_not_allowed_for(&correlation_id, "GET, HEAD");
+    }
+    let is_head = request.method() == Method::HEAD;
+    let mut response = Response::new(if is_head {
+        axum::body::Body::empty()
+    } else {
+        axum::body::Body::from(INTERACTION_SCRIPT)
+    });
+    if is_head {
+        if let Ok(value) = HeaderValue::from_str(&INTERACTION_SCRIPT.len().to_string()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_LENGTH, value);
+        }
+    }
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/javascript; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
     response
 }
 
@@ -1515,6 +1671,231 @@ async fn public_form_submission_response(
     response
 }
 
+async fn public_interaction_events_response(
+    env: &Env,
+    request: HttpRequest,
+    route: PublicInteractionEventsRoute<'_>,
+    correlation_id: String,
+    custom_host: Option<&CustomHostMapping>,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::POST {
+        return method_not_allowed_for(&correlation_id, "POST");
+    }
+    if request.uri().query().is_some() {
+        return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id);
+    }
+    if !interaction_request_origin_matches(&request, custom_host) {
+        return interaction_empty_response(StatusCode::FORBIDDEN, &correlation_id);
+    }
+    if interaction_consent(request.headers()) != InteractionConsent::Granted {
+        return interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id);
+    }
+    if !valid_public_slug(route.funnel_slug) || !is_json_content_type(request.headers()) {
+        return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id);
+    }
+    let Some(replay_key) = interaction_replay_key(env) else {
+        return interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id);
+    };
+    let Some(retention_days) = interaction_retention_days(env) else {
+        return interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id);
+    };
+    let Some(limit_per_minute) = interaction_event_limit(env) else {
+        return interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id);
+    };
+    let body = match to_bytes(
+        axum::body::Body::new(request.into_body()),
+        eez_domain::interaction_event::MAX_INTERACTION_EVENT_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
+    };
+    let event = match decode_interaction_event(
+        &body,
+        InteractionConsent::Granted,
+        &CampaignRegistry::default(),
+        replay_key.as_bytes(),
+    ) {
+        Ok(Some(event)) => event,
+        Ok(None) => return interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id),
+        Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
+    };
+
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => {
+            return interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id)
+        }
+    };
+    let repository = bindings.repository();
+    let revision = match repository
+        .get_published_revision_by_slug(route.funnel_slug)
+        .await
+    {
+        Ok(Some(revision)) => revision,
+        _ => return interaction_empty_response(StatusCode::NOT_FOUND, &correlation_id),
+    };
+    if !interaction_event_matches_revision(&event, &revision) {
+        return interaction_empty_response(StatusCode::NOT_FOUND, &correlation_id);
+    }
+    let fingerprint = interaction_fingerprint_hex(event.replay_fingerprint().as_bytes());
+    let storage_result = repository
+        .store_public_interaction_event(NewPublicInteractionEvent {
+            event_id: event.event_id().as_str(),
+            funnel_id: event.funnel_id().as_str(),
+            funnel_slug: route.funnel_slug,
+            revision_id: event.revision_id().as_str(),
+            page_id: event.page_id().as_str(),
+            event_kind: interaction_event_kind_name(event.kind()),
+            form_id: event.form_id().map(|value| value.as_str()),
+            campaign_id: event.campaign_id().map(|value| value.as_str()),
+            replay_fingerprint: &fingerprint,
+            retention_days,
+            limit_per_minute,
+        })
+        .await;
+    match storage_result {
+        Ok(PublicInteractionEventResult::Stored | PublicInteractionEventResult::Duplicate) => {
+            interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id)
+        }
+        Ok(PublicInteractionEventResult::KeyReuseMismatch)
+        | Ok(PublicInteractionEventResult::NotCurrent) => {
+            interaction_empty_response(StatusCode::CONFLICT, &correlation_id)
+        }
+        Ok(PublicInteractionEventResult::RateLimited) => {
+            let mut response =
+                interaction_empty_response(StatusCode::TOO_MANY_REQUESTS, &correlation_id);
+            response
+                .headers_mut()
+                .insert("retry-after", HeaderValue::from_static("60"));
+            response
+        }
+        Err(error) => {
+            let api_error = ApiError::from_code(error.code());
+            log_api_error(&api_error, &correlation_id, api_error.code());
+            interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id)
+        }
+    }
+}
+
+fn interaction_request_origin_matches(
+    request: &HttpRequest,
+    custom_host: Option<&CustomHostMapping>,
+) -> bool {
+    interaction_origin_matches(request.headers(), request.uri().scheme_str(), custom_host)
+}
+
+fn interaction_origin_matches(
+    headers: &HeaderMap<HeaderValue>,
+    request_scheme: Option<&str>,
+    custom_host: Option<&CustomHostMapping>,
+) -> bool {
+    let values = headers.get_all("origin");
+    if values.iter().count() != 1 {
+        return false;
+    }
+    if let Some(mapping) = custom_host {
+        let Ok(origin) = values
+            .iter()
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .ok_or(())
+        else {
+            return false;
+        };
+        let expected = CustomHostMappings::origin(mapping);
+        origin.eq_ignore_ascii_case(&expected)
+    } else {
+        origin::matches_request_host(headers, request_scheme)
+    }
+}
+
+fn interaction_consent(headers: &HeaderMap<HeaderValue>) -> InteractionConsent {
+    let values = headers.get_all("x-eezfunnel-interaction-consent");
+    if values.iter().count() != 1 {
+        return InteractionConsent::Missing;
+    }
+    match values.iter().next().and_then(|value| value.to_str().ok()) {
+        Some("granted") => InteractionConsent::Granted,
+        Some("refused") => InteractionConsent::Refused,
+        _ => InteractionConsent::Missing,
+    }
+}
+
+fn interaction_event_matches_revision(event: &InteractionEvent, revision: &RevisionRecord) -> bool {
+    if event.funnel_id().as_str() != revision.funnel_id
+        || event.revision_id().as_str() != revision.id
+    {
+        return false;
+    }
+    match revision.schema_version {
+        1 => event.page_id().as_str() == "legacy-entry" && event.form_id().is_none(),
+        2 => {
+            let Ok(document) =
+                DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id)
+            else {
+                return false;
+            };
+            let Ok(page_id) = PageId::parse(event.page_id().as_str().to_owned()) else {
+                return false;
+            };
+            let Some(page) = document.page(&page_id) else {
+                return false;
+            };
+            let Some(form_id) = event.form_id() else {
+                return event.kind() == InteractionEventKind::PageViewed;
+            };
+            let Ok(form_id) = FormId::parse(form_id.as_str().to_owned()) else {
+                return false;
+            };
+            document.form(&form_id).is_some()
+                && page.sections().iter().any(|section| {
+                    section.blocks().iter().any(|block| {
+                        matches!(block, BlockV2::Form { form_id: placed_id, .. } if placed_id == &form_id)
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+fn interaction_event_kind_name(kind: InteractionEventKind) -> &'static str {
+    match kind {
+        InteractionEventKind::PageViewed => "page_viewed",
+        InteractionEventKind::FormViewed => "form_viewed",
+        InteractionEventKind::FormStarted => "form_started",
+    }
+}
+
+fn interaction_fingerprint_hex(bytes: &[u8; 32]) -> String {
+    let mut value = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(value, "{byte:02x}");
+    }
+    value
+}
+
+fn interaction_empty_response(
+    status: StatusCode,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    let mut response = Response::new(axum::body::Body::empty());
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    response
+}
+
 fn is_urlencoded_form(headers: &HeaderMap<HeaderValue>) -> bool {
     let values = headers.get_all(axum::http::header::CONTENT_TYPE);
     if values.iter().count() != 1 {
@@ -1773,6 +2154,35 @@ fn parse_public_form_body(body: &[u8]) -> Option<ParsedPublicFormBody> {
         request_consent_accepted,
         marketing_opt_in,
     })
+}
+
+fn interaction_replay_key(env: &Env) -> Option<String> {
+    let key = env.secret("INTERACTION_REPLAY_KEY").ok()?.to_string();
+    (key.len() >= 32).then_some(key)
+}
+
+fn interaction_retention_days(env: &Env) -> Option<u8> {
+    let days = match env.var("PUBLIC_INTERACTION_RETENTION_DAYS") {
+        Ok(value) => value.to_string().parse::<u8>().ok()?,
+        Err(_) => DEFAULT_INTERACTION_RETENTION_DAYS,
+    };
+    (1..=MAX_INTERACTION_RETENTION_DAYS)
+        .contains(&days)
+        .then_some(days)
+}
+
+fn interaction_event_limit(env: &Env) -> Option<i32> {
+    let limit = match env.var("PUBLIC_INTERACTION_EVENTS_PER_MINUTE") {
+        Ok(value) => value.to_string().parse::<i32>().ok()?,
+        Err(_) => 100,
+    };
+    (1..=10_000).contains(&limit).then_some(limit)
+}
+
+fn interaction_collection_enabled(env: &Env) -> bool {
+    interaction_replay_key(env).is_some()
+        && interaction_retention_days(env).is_some()
+        && interaction_event_limit(env).is_some()
 }
 
 fn public_form_retention_seconds(env: &Env) -> i32 {
@@ -3595,22 +4005,27 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_public_form_submission_identity, correlation_id, custom_host_route_from_path,
-        editor_command_parameters, form_completion_period,
+        append_interaction_script, bind_public_form_submission_identity, correlation_id,
+        custom_host_route_from_path, editor_command_parameters, form_completion_period,
         form_submission_status_command_parameters, form_submission_status_id_from_path,
-        funnel_subroute, is_json_content_type, normalize_correlation_id, parse_public_form_body,
-        public_form_submission_channel_from_page_query, public_form_submission_identity,
-        public_form_submission_query, public_form_submission_route_from_path,
-        public_form_success_location, public_html_etag, public_route_from_path,
+        funnel_subroute, interaction_consent, interaction_event_matches_revision,
+        interaction_origin_matches, is_json_content_type, normalize_correlation_id,
+        parse_public_form_body, public_form_submission_channel_from_page_query,
+        public_form_submission_identity, public_form_submission_query,
+        public_form_submission_route_from_path, public_form_success_location, public_html_etag,
+        public_interaction_events_route_from_path, public_route_from_path,
         publication_command_parameters, published_document_references_asset, request_if_none_match,
         sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
         v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
         v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
         CustomHostRequestRoute, EditorCommandParametersError, PublicFormSubmissionCursor,
-        PublicFormSubmissionIdentity,
+        PublicFormSubmissionIdentity, PublicInteractionEventsRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use eez_domain::document_v2::DocumentV2;
+    use eez_domain::interaction_event::{
+        decode_interaction_event, CampaignRegistry, InteractionConsent,
+    };
     use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
     use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
     use serde_json::Value;
@@ -3770,6 +4185,218 @@ mod tests {
         assert!(valid_public_slug("quick-offer-123"));
         assert!(!valid_public_slug("../private"));
         assert!(!valid_public_slug("quick_offer"));
+    }
+
+    #[test]
+    fn interaction_routes_and_script_injection_are_exact_and_closed() {
+        assert_eq!(
+            public_interaction_events_route_from_path(
+                "/api/public/funnels/lead-gen/interaction-events"
+            ),
+            Some(PublicInteractionEventsRoute {
+                funnel_slug: "lead-gen",
+            })
+        );
+        for path in [
+            "/api/public/funnels/lead-gen/interaction-events/extra",
+            "/api/public/funnels//interaction-events",
+            "/api/public/funnels/lead-gen/events",
+        ] {
+            assert_eq!(
+                public_interaction_events_route_from_path(path),
+                None,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            custom_host_route_from_path(
+                "/api/public/funnels/lead-gen/interaction-events",
+                "lead-gen"
+            ),
+            Some(CustomHostRequestRoute::InteractionEvents(
+                PublicInteractionEventsRoute {
+                    funnel_slug: "lead-gen",
+                }
+            ))
+        );
+        assert_eq!(
+            custom_host_route_from_path(
+                "/api/public/funnels/another/interaction-events",
+                "lead-gen"
+            ),
+            None
+        );
+        assert_eq!(
+            custom_host_route_from_path("/_eez/interaction.js", "lead-gen"),
+            Some(CustomHostRequestRoute::InteractionScript)
+        );
+        assert_eq!(
+            custom_host_route_from_path("/api/funnels", "lead-gen"),
+            None
+        );
+
+        let html = "<!doctype html><html><body><main id=\"funnel\"></main></body></html>";
+        let injected = append_interaction_script(html, "funnel-01", "revision-a", "lead-gen", 2)
+            .expect("valid published page metadata");
+        assert!(injected.contains("src=\"/_eez/interaction.js\""));
+        assert!(
+            injected.contains("data-endpoint=\"/api/public/funnels/lead-gen/interaction-events\"")
+        );
+        assert!(!injected.contains("data-legacy-page-id"));
+        let legacy = append_interaction_script(html, "funnel-01", "revision-a", "lead-gen", 1)
+            .expect("valid V1 published page metadata");
+        assert!(legacy.contains("data-legacy-page-id=\"legacy-entry\""));
+        assert!(
+            append_interaction_script(html, "../funnel", "revision-a", "lead-gen", 2).is_none()
+        );
+        assert!(append_interaction_script(
+            "<html><body>",
+            "funnel-01",
+            "revision-a",
+            "lead-gen",
+            2
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn interaction_consent_requires_one_exact_grant_header() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(interaction_consent(&headers), InteractionConsent::Missing);
+        headers.insert(
+            "x-eezfunnel-interaction-consent",
+            HeaderValue::from_static("granted"),
+        );
+        assert_eq!(interaction_consent(&headers), InteractionConsent::Granted);
+        headers.insert(
+            "x-eezfunnel-interaction-consent",
+            HeaderValue::from_static("refused"),
+        );
+        assert_eq!(interaction_consent(&headers), InteractionConsent::Refused);
+        headers.insert(
+            "x-eezfunnel-interaction-consent",
+            HeaderValue::from_static("Granted"),
+        );
+        assert_eq!(interaction_consent(&headers), InteractionConsent::Missing);
+        headers.insert(
+            "x-eezfunnel-interaction-consent",
+            HeaderValue::from_static("granted"),
+        );
+        headers.append(
+            "x-eezfunnel-interaction-consent",
+            HeaderValue::from_static("refused"),
+        );
+        assert_eq!(interaction_consent(&headers), InteractionConsent::Missing);
+    }
+
+    #[test]
+    fn interaction_origins_match_the_platform_or_exact_custom_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("localhost:8787"));
+        headers.insert("origin", HeaderValue::from_static("http://localhost:8787"));
+        assert!(interaction_origin_matches(&headers, Some("http"), None));
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("http://attacker.example"),
+        );
+        assert!(!interaction_origin_matches(&headers, Some("http"), None));
+        headers.remove("origin");
+        assert!(!interaction_origin_matches(&headers, Some("http"), None));
+
+        let platform = super::HostAllowlist::parse("localhost:8787");
+        let custom_hosts =
+            super::CustomHostMappings::parse("funnel.example=lead-gen", &platform, None)
+                .expect("valid test mapping");
+        let mapping = custom_hosts
+            .mapping_for_funnel("lead-gen")
+            .expect("mapped custom host");
+        headers.insert("origin", HeaderValue::from_static("https://funnel.example"));
+        assert!(interaction_origin_matches(
+            &headers,
+            Some("https"),
+            Some(&mapping)
+        ));
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://attacker.example"),
+        );
+        assert!(!interaction_origin_matches(
+            &headers,
+            Some("https"),
+            Some(&mapping)
+        ));
+    }
+
+    #[test]
+    fn interaction_events_must_reference_the_current_revision_resources() {
+        let revision = RevisionRecord {
+            id: "revision-a".to_owned(),
+            funnel_id: "funnel-01".to_owned(),
+            schema_version: 2,
+            data_json: include_str!(
+                "../../../crates/domain/tests/fixtures/document_v2_minimal.json"
+            )
+            .to_owned(),
+            render_manifest_json: "{}".to_owned(),
+            created_at: "2026-10-18 00:00:00".to_owned(),
+        };
+        let page_payload = serde_json::json!({
+            "schema_version": 1,
+            "event_id": "f0a364dd-688e-4e55-8ad7-7478ba7ae0bd",
+            "kind": "page_viewed",
+            "observed_at_unix_seconds": 1,
+            "funnel_id": "funnel-01",
+            "revision_id": "revision-a",
+            "page_id": "page-home",
+        });
+        let page_event = decode_interaction_event(
+            page_payload.to_string().as_bytes(),
+            InteractionConsent::Granted,
+            &CampaignRegistry::default(),
+            &[7; 32],
+        )
+        .expect("valid event envelope")
+        .expect("granted event");
+        assert!(interaction_event_matches_revision(&page_event, &revision));
+
+        let unknown_page_payload = serde_json::json!({
+            "schema_version": 1,
+            "event_id": "e3b7ebc8-4c8e-4901-b1cc-b1fac5014d99",
+            "kind": "page_viewed",
+            "observed_at_unix_seconds": 1,
+            "funnel_id": "funnel-01",
+            "revision_id": "revision-a",
+            "page_id": "page-other",
+        });
+        let unknown_page = decode_interaction_event(
+            unknown_page_payload.to_string().as_bytes(),
+            InteractionConsent::Granted,
+            &CampaignRegistry::default(),
+            &[7; 32],
+        )
+        .expect("valid event envelope")
+        .expect("granted event");
+        assert!(!interaction_event_matches_revision(
+            &unknown_page,
+            &revision
+        ));
+
+        let wrong_revision = RevisionRecord {
+            id: "revision-b".to_owned(),
+            ..revision.clone()
+        };
+        assert!(!interaction_event_matches_revision(
+            &page_event,
+            &wrong_revision
+        ));
+        let legacy_revision = RevisionRecord {
+            schema_version: 1,
+            ..revision
+        };
+        assert!(!interaction_event_matches_revision(
+            &page_event,
+            &legacy_revision
+        ));
     }
 
     #[test]

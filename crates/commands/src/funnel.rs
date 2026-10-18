@@ -1627,6 +1627,8 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .await?;
         Ok(serde_json::json!({
             "command_id": FunnelPublicReadCommand::ID,
+            "funnel_id": record.funnel_id,
+            "schema_version": record.schema_version,
             "revision_id": record.id,
             "html": html,
         }))
