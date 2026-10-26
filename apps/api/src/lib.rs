@@ -6,10 +6,11 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use eez_commands::{command_ids, command_registry, Session};
-use eez_domain::document_v2::{
-    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId,
+use eez_commands::public_forms::{
+    submit_public_form, SubmitPublicFormError, SubmitPublicFormInput, SubmitPublicFormOutcome,
 };
+use eez_commands::{command_ids, command_registry, Session};
+use eez_domain::document_v2::{BlockV2, DocumentV2, FormId, PageId};
 use eez_domain::interaction_event::{
     decode_interaction_event, CampaignRegistry, InteractionConsent, InteractionEvent,
     InteractionEventKind, DEFAULT_INTERACTION_RETENTION_DAYS, MAX_INTERACTION_RETENTION_DAYS,
@@ -17,11 +18,9 @@ use eez_domain::interaction_event::{
 use eez_domain::{
     FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, InteractionReportPeriod,
 };
-use eez_render::document_v2::{validate_revision_v2_with_assets, AssetDigestRecord};
 use eez_storage::repository::{
-    NewPublicFormSubmission, NewPublicInteractionEvent, PublicFormSubmissionCursor,
-    PublicFormSubmissionResult, PublicInteractionEventResult, PublishedRevisionRecord,
-    RevisionRecord,
+    NewPublicInteractionEvent, PublicFormSubmissionCursor, PublicInteractionEventResult,
+    PublishedRevisionRecord, RevisionRecord,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1496,12 +1495,17 @@ async fn public_form_submission_response(
     if !origin::matches_request_host(request.headers(), request.uri().scheme_str()) {
         return form_submission_origin_error(&correlation_id);
     }
-    if !valid_public_slug(route.funnel_slug)
-        || PageId::parse(route.page_id.to_owned()).is_err()
-        || FormId::parse(route.form_id.to_owned()).is_err()
-    {
+    if !valid_public_slug(route.funnel_slug) {
         return funnel_slug_not_found_response(&correlation_id);
     }
+    let page_id = match PageId::parse(route.page_id.to_owned()) {
+        Ok(page_id) => page_id,
+        Err(_) => return funnel_slug_not_found_response(&correlation_id),
+    };
+    let form_id = match FormId::parse(route.form_id.to_owned()) {
+        Ok(form_id) => form_id,
+        Err(_) => return funnel_slug_not_found_response(&correlation_id),
+    };
     if !is_urlencoded_form(request.headers()) {
         return form_submission_payload_error(&correlation_id);
     }
@@ -1526,117 +1530,34 @@ async fn public_form_submission_response(
         Err(_) => return form_submission_storage_error(&correlation_id),
     };
     let repository = bindings.repository();
-    let revision = match repository
-        .get_published_revision_by_slug(route.funnel_slug)
-        .await
-    {
-        Ok(Some(revision)) if revision.schema_version == 2 => revision,
-        _ => return funnel_slug_not_found_response(&correlation_id),
-    };
-    if revision.id != submission_identity.revision_id {
-        return form_submission_stale_revision_error(&correlation_id);
-    }
-    let unvalidated_document =
-        match DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id) {
-            Ok(document) => document,
-            Err(_) => return funnel_slug_not_found_response(&correlation_id),
-        };
-    let asset_ids = eez_render::document_v2::referenced_asset_ids(&unvalidated_document);
-    let media_records = match bindings
-        .media_asset_repository()
-        .get_many_ready(&asset_ids)
-        .await
-    {
-        Ok(records) if records.len() == asset_ids.len() => records,
-        _ => return funnel_slug_not_found_response(&correlation_id),
-    };
-    let assets = media_records
-        .into_iter()
-        .map(|record| AssetDigestRecord {
-            asset_id: record.id,
-            sha256: record.sha256,
-        })
-        .collect::<Vec<_>>();
-    let document = match validate_revision_v2_with_assets(
-        revision.schema_version,
-        &revision.funnel_id,
-        &revision.id,
-        &revision.data_json,
-        &revision.render_manifest_json,
-        &assets,
-    ) {
-        Ok(document) => document,
-        Err(_) => return funnel_slug_not_found_response(&correlation_id),
-    };
-    let page_id = match PageId::parse(route.page_id.to_owned()) {
-        Ok(page_id) => page_id,
-        Err(_) => return funnel_slug_not_found_response(&correlation_id),
-    };
-    let form_id = match FormId::parse(route.form_id.to_owned()) {
-        Ok(form_id) => form_id,
-        Err(_) => return funnel_slug_not_found_response(&correlation_id),
-    };
-    let Some(page) = document.page(&page_id) else {
-        return funnel_slug_not_found_response(&correlation_id);
-    };
-    let Some(form) = document.form(&form_id) else {
-        return funnel_slug_not_found_response(&correlation_id);
-    };
-    let form_is_placed_on_page = page.sections().iter().any(|section| {
-        section.blocks().iter().any(|block| {
-            matches!(block, BlockV2::Form { form_id: placed_id, .. } if placed_id == &form_id)
-        })
-    });
-    if !form_is_placed_on_page {
-        return funnel_slug_not_found_response(&correlation_id);
-    }
-
-    let submission = match validate_form_submission(
-        form,
-        &parsed_body.fields,
-        parsed_body.request_consent_accepted,
-        parsed_body.marketing_opt_in,
-    ) {
-        Ok(submission) => submission,
-        Err(_) => return form_submission_payload_error(&correlation_id),
-    };
-    let field_values_json = match serde_json::to_string(submission.values()) {
-        Ok(values) => values,
-        Err(_) => return form_submission_storage_error(&correlation_id),
-    };
-    let submission_id = uuid::Uuid::new_v4().to_string();
-    let request_consent = form.request_consent();
-    let marketing_consent = form.marketing_opt_in();
-    let storage_result = repository
-        .store_public_form_submission(NewPublicFormSubmission {
-            submission_id: &submission_id,
-            funnel_id: &revision.funnel_id,
+    let media_assets = bindings.media_asset_repository();
+    let result = submit_public_form(
+        &repository,
+        &media_assets,
+        SubmitPublicFormInput {
             funnel_slug: route.funnel_slug,
-            revision_id: &revision.id,
-            page_id: page_id.as_str(),
-            form_id: form_id.as_str(),
-            submission_channel: submission_identity.submission_channel,
+            page_id,
+            form_id,
+            revision_id: &submission_identity.revision_id,
             submission_key: &submission_identity.submission_key,
-            field_values_json: &field_values_json,
-            request_consent_copy_version: request_consent.copy_version().as_str(),
-            request_consent_copy: request_consent.copy(),
-            marketing_opt_in: submission.marketing_opt_in(),
-            marketing_opt_in_copy_version: marketing_consent
-                .map(|consent| consent.copy_version().as_str()),
-            marketing_opt_in_copy: marketing_consent.map(|consent| consent.copy()),
+            submission_channel: submission_identity.submission_channel,
+            fields: &parsed_body.fields,
+            request_consent_accepted: parsed_body.request_consent_accepted,
+            marketing_opt_in: parsed_body.marketing_opt_in,
             retention_seconds: public_form_retention_seconds(env),
             limit_per_minute: public_form_submission_limit(env),
-        })
-        .await;
-    match storage_result {
-        Ok(PublicFormSubmissionResult::Stored | PublicFormSubmissionResult::Duplicate) => {}
-        Ok(PublicFormSubmissionResult::KeyReuseMismatch) => {
+        },
+    )
+    .await;
+    let success_location = match result {
+        Ok(SubmitPublicFormOutcome::Accepted { success_location }) => success_location,
+        Ok(SubmitPublicFormOutcome::KeyReuseMismatch) => {
             return editor_payload_error_response(
                 &correlation_id,
                 "conflict/idempotency_payload_mismatch",
             )
         }
-        Ok(PublicFormSubmissionResult::RateLimited) => {
+        Ok(SubmitPublicFormOutcome::RateLimited) => {
             let mut response =
                 editor_payload_error_response(&correlation_id, "rate_limit/exceeded");
             response
@@ -1647,21 +1568,26 @@ async fn public_form_submission_response(
                 .insert("cache-control", HeaderValue::from_static("no-store"));
             return response;
         }
-        Ok(PublicFormSubmissionResult::NotCurrent) => {
+        Err(SubmitPublicFormError::NotFound) => {
+            return funnel_slug_not_found_response(&correlation_id)
+        }
+        Err(SubmitPublicFormError::StaleRevision) => {
             return form_submission_stale_revision_error(&correlation_id)
         }
-        Err(error) => {
-            let api_error = ApiError::from_code(error.code());
+        Err(SubmitPublicFormError::InvalidPayload) => {
+            return form_submission_payload_error(&correlation_id)
+        }
+        Err(SubmitPublicFormError::SerializationFailure) => {
+            return form_submission_storage_error(&correlation_id)
+        }
+        Err(SubmitPublicFormError::Storage { code }) => {
+            let api_error = ApiError::from_code(code);
             log_api_error(&api_error, &correlation_id, api_error.code());
             return error_response(&api_error, correlation_id);
         }
-    }
-
-    let Some(location) = public_form_success_location(&document, page, form, route.funnel_slug)
-    else {
-        return funnel_slug_not_found_response(&correlation_id);
     };
-    let Ok(location) = HeaderValue::from_str(&location) else {
+
+    let Ok(location) = HeaderValue::from_str(&success_location) else {
         return form_submission_storage_error(&correlation_id);
     };
     let mut response = Response::new(axum::body::Body::empty());
@@ -2224,27 +2150,6 @@ fn public_form_submission_limit(env: &Env) -> i32 {
         .and_then(|value| value.to_string().parse::<i32>().ok())
         .filter(|limit| (1..=100).contains(limit))
         .unwrap_or(100)
-}
-
-fn public_form_success_location(
-    document: &DocumentV2,
-    current_page: &eez_domain::document_v2::PageV2,
-    form: &FormV2,
-    funnel_slug: &str,
-) -> Option<String> {
-    let target = match form.result() {
-        FormResult::Inline { .. } => current_page,
-        FormResult::SuccessPage { page_id } => document.page(page_id)?,
-    };
-    let page_route = if target.id() == document.entry_page_id() {
-        format!("/f/{funnel_slug}")
-    } else {
-        format!("/f/{funnel_slug}/{}", target.slug())
-    };
-    Some(match form.result() {
-        FormResult::Inline { .. } => format!("{page_route}#form-success-{}", form.id().as_str()),
-        FormResult::SuccessPage { .. } => page_route,
-    })
 }
 
 fn form_submission_payload_error(correlation_id: &str) -> Response<axum::body::Body> {
@@ -4068,18 +3973,16 @@ mod tests {
         interaction_origin_matches, interaction_report_period, is_json_content_type,
         normalize_correlation_id, parse_public_form_body,
         public_form_submission_channel_from_page_query, public_form_submission_identity,
-        public_form_submission_query, public_form_submission_route_from_path,
-        public_form_success_location, public_html_etag, public_interaction_events_route_from_path,
-        public_route_from_path, publication_command_parameters,
-        published_document_references_asset, request_if_none_match, sitemap_revisions,
-        stage_upload_token, v1_conversion_command_parameters, v2_document_revision_query,
-        v2_edit_command_parameters, v2_preview_command_parameters, v2_save_command_parameters,
-        v2_stage_command_parameters, valid_public_slug, CustomHostRequestRoute,
-        EditorCommandParametersError, InteractionReportPeriod, PublicFormSubmissionCursor,
-        PublicFormSubmissionIdentity, PublicInteractionEventsRoute,
+        public_form_submission_query, public_form_submission_route_from_path, public_html_etag,
+        public_interaction_events_route_from_path, public_route_from_path,
+        publication_command_parameters, published_document_references_asset, request_if_none_match,
+        sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
+        v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
+        v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
+        CustomHostRequestRoute, EditorCommandParametersError, InteractionReportPeriod,
+        PublicFormSubmissionCursor, PublicFormSubmissionIdentity, PublicInteractionEventsRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
-    use eez_domain::document_v2::DocumentV2;
     use eez_domain::interaction_event::{
         decode_interaction_event, CampaignRegistry, InteractionConsent,
     };
@@ -5250,39 +5153,6 @@ mod tests {
         assert!(parse_public_form_body(b"email=ada&_request_consent=yes").is_none());
         assert!(
             parse_public_form_body(b"email=ada&_request_consent=on&_request_consent=on").is_none()
-        );
-    }
-
-    #[test]
-    fn public_form_success_page_redirects_to_an_internal_page_route() {
-        let mut value: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../crates/domain/tests/fixtures/document_v2_minimal.json"
-        ))
-        .expect("minimal V2 fixture");
-        value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
-            {"id":"block-form", "kind":"form", "form_id":"form-lead"}
-        ]);
-        value["pages"]
-            .as_array_mut()
-            .expect("pages")
-            .push(serde_json::json!({
-                "id":"page-thanks", "slug":"thanks", "title":"Thanks", "sections":[]
-            }));
-        value["forms"] = serde_json::json!([{
-            "id":"form-lead",
-            "fields":[{"id":"field-email", "kind":"email", "name":"email", "label":"Email", "required":true}],
-            "purpose":"Contact request",
-            "request_consent":{"copy_version":"request-v1", "copy":"I agree to be contacted."},
-            "result":{"kind":"success_page", "page_id":"page-thanks"}
-        }]);
-        let data = serde_json::to_vec(&value).expect("document JSON");
-        let document = DocumentV2::decode(&data, "funnel-01").expect("valid form document");
-        let form_id = eez_domain::document_v2::FormId::parse("form-lead").expect("form id");
-        let form = document.form(&form_id).expect("form");
-
-        assert_eq!(
-            public_form_success_location(&document, &document.pages()[0], form, "lead-gen"),
-            Some("/f/lead-gen/thanks".to_owned())
         );
     }
 }

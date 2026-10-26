@@ -679,6 +679,27 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert response_headers.get("cache-control") == "no-store", response_headers
         assert b"ada@example.test" not in body
 
+        absent_form_page_path = (
+            f"/api/public/funnels/{slug}/pages/{internal_page_id}/forms/{form_id}/submissions?"
+            + urlencode(
+                {
+                    "key": str(uuid.uuid4()),
+                    "revision_id": updated_revision_id,
+                    "channel": "unattributed",
+                }
+            )
+        )
+        absent_form_page_status, absent_form_page_body, _ = request_form_with_transport_retry(
+            absent_form_page_path,
+            payload,
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert absent_form_page_status == 404, (
+            absent_form_page_status,
+            absent_form_page_body,
+        )
+        assert b"not_found/slug" in absent_form_page_body
+
         duplicate_status, duplicate_body, _ = request_form_with_transport_retry(
             action_path,
             payload,
