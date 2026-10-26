@@ -25,6 +25,22 @@ const UNITS: [(&str, &str, Role); 9] = [
     ("xtask", "xtask", Role::Tool),
 ];
 
+const ALLOWED_DEPENDENCIES: [(&str, &str); 13] = [
+    ("eez-render", "eez-domain"),
+    ("eez-storage", "eez-domain"),
+    ("eez-commands", "eez-domain"),
+    ("eez-commands", "eez-render"),
+    ("eez-commands", "eez-storage"),
+    ("eez-dashboard-presentation", "eez-domain"),
+    ("eez-api", "eez-domain"),
+    ("eez-api", "eez-render"),
+    ("eez-api", "eez-storage"),
+    ("eez-api", "eez-commands"),
+    ("eez-api", "eez-dashboard-presentation"),
+    ("eez-dashboard", "eez-dashboard-presentation"),
+    ("eez-cli", "eez-domain"),
+];
+
 struct Dependency {
     name: String,
     path: Option<PathBuf>,
@@ -247,6 +263,12 @@ impl WorkspaceGraph {
                         ));
                     }
                     (Role::Tool, _) => {}
+                }
+                if !ALLOWED_DEPENDENCIES.contains(&(package.name.as_str(), target.name.as_str())) {
+                    return Err(format!(
+                        "internal dependency is not explicitly allowed: {} -> {}",
+                        package.name, target.name
+                    ));
                 }
             }
         }
