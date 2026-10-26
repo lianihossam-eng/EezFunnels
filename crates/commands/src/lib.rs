@@ -7,6 +7,7 @@ use eez_render::{RenderError, ThemeTokens, RENDERER_VERSION};
 use serde::{Deserialize, Serialize};
 
 mod funnel;
+pub mod public_forms;
 mod registry;
 
 pub use eez_domain::FunnelBlueprint;
