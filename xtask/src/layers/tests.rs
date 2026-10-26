@@ -155,10 +155,35 @@ fn strictly_descending_graph_and_tool_caller_are_valid() {
     let mut fixture = Fixture::new();
     fixture.edge("eez-api", "eez-commands");
     fixture.edge("eez-commands", "eez-storage");
-    fixture.edge("eez-storage", "eez-render");
+    fixture.edge("eez-storage", "eez-domain");
     fixture.edge("eez-render", "eez-domain");
-    fixture.edge("xtask", "eez-api");
     assert_eq!(fixture.validate(), Ok(()));
+}
+
+#[test]
+fn every_current_internal_dependency_is_explicitly_allowed() {
+    let mut fixture = Fixture::new();
+    for (from, to) in ALLOWED_DEPENDENCIES {
+        fixture.edge(from, to);
+    }
+    assert_eq!(fixture.validate(), Ok(()));
+}
+
+#[test]
+fn descending_but_unlisted_dependencies_are_rejected() {
+    for (from, to) in [
+        ("eez-commands", "eez-dashboard-presentation"),
+        ("eez-storage", "eez-render"),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.edge(from, to);
+        assert_eq!(
+            fixture.validate(),
+            Err(format!(
+                "internal dependency is not explicitly allowed: {from} -> {to}"
+            ))
+        );
+    }
 }
 
 #[test]
@@ -188,6 +213,16 @@ fn product_cannot_depend_on_tool() {
     assert_eq!(
         fixture.validate(),
         Err("product cannot depend on tool: eez-api -> xtask".to_owned())
+    );
+}
+
+#[test]
+fn tool_cannot_add_an_unlisted_product_dependency() {
+    let mut fixture = Fixture::new();
+    fixture.edge("xtask", "eez-api");
+    assert_eq!(
+        fixture.validate(),
+        Err("internal dependency is not explicitly allowed: xtask -> eez-api".to_owned())
     );
 }
 

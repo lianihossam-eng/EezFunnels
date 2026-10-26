@@ -60,7 +60,7 @@ See [Getting started](docs/getting-started.md) for CLI and local workflow detail
 
 ## Architecture
 
-The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 stores funnels, revisions, and command receipts; R2 and KV bindings are configured by the Worker. The dashboard assets are built into `apps/dashboard/dist`. Cloudflare production bindings and deployment remain unverified.
+The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 stores funnels, revisions, and command receipts; R2 and KV bindings are configured by the Worker. The dashboard assets are built into `apps/dashboard/dist`. Cloudflare production bindings and deployment remain unverified. See [Architecture](docs/architecture.md) for layer ownership and the enforced dependency map.
 
 | Path | Current behavior |
 |:---|:---|
