@@ -249,6 +249,13 @@ mod unix {
     #[test]
     fn ci_runs_all_gates_in_order_and_propagates_audit_failure() {
         let fixture = Fixture::new();
+        fs::write(
+            fixture
+                .workspace()
+                .join("scripts/smoke-pr061-custom-hosts.sh"),
+            "",
+        )
+        .expect("write custom host smoke fixture");
         let output = run_ci_with_cargo(
             &fixture,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\nif [ \"$1\" = audit ]; then exit 19; fi\n",
@@ -288,6 +295,13 @@ mod unix {
             "printf 'forms-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
         )
         .expect("write public forms smoke fixture");
+        fs::write(
+            fixture
+                .workspace()
+                .join("scripts/smoke-pr061-custom-hosts.sh"),
+            "printf 'custom-host-smoke\\n' >> \"$XTASK_CAPTURE\"\n",
+        )
+        .expect("write custom host smoke fixture");
         let output = run_ci_with_cargo(
             &fixture,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XTASK_CAPTURE\"\nif [ \"$1\" = metadata ]; then cat \"$XTASK_METADATA\"; fi\nif [ \"$1\" = build ] && [ \"$3\" = eez-dashboard ]; then mkdir -p \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release\"; : > \"$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/eez_dashboard.wasm\"; fi\n",
@@ -309,6 +323,10 @@ mod unix {
             .iter()
             .position(|line| *line == "forms-smoke")
             .expect("public forms smoke gate");
+        let custom_host_smoke_position = lines
+            .iter()
+            .position(|line| *line == "custom-host-smoke")
+            .expect("custom host smoke gate");
         let mcp_smoke_position = lines
             .iter()
             .position(|line| *line == "mcp-smoke")
@@ -320,6 +338,11 @@ mod unix {
         assert!(smoke_position < mcp_smoke_position, "{actual}");
         assert!(smoke_position < forms_smoke_position, "{actual}");
         assert!(forms_smoke_position < mcp_smoke_position, "{actual}");
+        assert!(
+            forms_smoke_position < custom_host_smoke_position,
+            "{actual}"
+        );
+        assert!(custom_host_smoke_position < mcp_smoke_position, "{actual}");
         assert!(mcp_smoke_position < audit_position, "{actual}");
     }
 

@@ -768,6 +768,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "X-EezFunnel-Interaction-Consent": "granted",
         }
 
+        invalid_event_status, invalid_event_body, _ = request(
+            "POST", interaction_path, b"not-json", interaction_headers_granted
+        )
+        assert invalid_event_status == 400, (invalid_event_status, invalid_event_body)
+
         def make_interaction_event(event_id, *, revision_id=updated_revision_id, page_id="page-home", kind="page_viewed"):
             result = {
                 "schema_version": 1,

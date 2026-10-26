@@ -43,6 +43,7 @@ enum Step {
     DashboardAssets,
     FunnelSmoke,
     PublicFormsSmoke,
+    CustomHostSmoke,
     McpSmoke,
     Layers,
     Wrangler(Vec<OsString>),
@@ -89,6 +90,7 @@ fn steps(task: &Task) -> Vec<Step> {
             steps.push(Step::DashboardAssets);
             steps.push(Step::FunnelSmoke);
             steps.push(Step::PublicFormsSmoke);
+            steps.push(Step::CustomHostSmoke);
             steps.push(Step::McpSmoke);
             steps.push(cargo_step(&["audit"]));
             steps
@@ -186,6 +188,16 @@ fn run_public_forms_smoke(root: &Path) -> Result<(), String> {
         "Bash",
         "PR-033 Worker public form smoke",
         &[OsString::from("scripts/smoke-pr033-public-forms.sh")],
+    )
+}
+
+fn run_custom_host_smoke(root: &Path) -> Result<(), String> {
+    run_command(
+        root,
+        OsStr::new("bash"),
+        "Bash",
+        "PR-061 custom host smoke",
+        &[OsString::from("scripts/smoke-pr061-custom-hosts.sh")],
     )
 }
 
@@ -355,6 +367,7 @@ fn run(task: &Task, root: &Path, cargo: &OsStr) -> Result<(), String> {
         Step::DashboardAssets => run_dashboard_assets(root, cargo),
         Step::FunnelSmoke => run_funnel_smoke(root),
         Step::PublicFormsSmoke => run_public_forms_smoke(root),
+        Step::CustomHostSmoke => run_custom_host_smoke(root),
         Step::McpSmoke => run_mcp_smoke(root),
         Step::Layers => layers::WorkspaceGraph::read(root, cargo)?.verify_layers(),
         Step::Wrangler(arguments) => run_wrangler(root, arguments),
@@ -416,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn ci_steps_run_check_then_wasm_then_funnel_forms_and_mcp_smokes_then_audit() {
+    fn ci_steps_run_check_then_wasm_and_smokes_then_audit() {
         assert_eq!(
             steps(&Task::Ci),
             vec![
@@ -443,6 +456,7 @@ mod tests {
                 Step::DashboardAssets,
                 Step::FunnelSmoke,
                 Step::PublicFormsSmoke,
+                Step::CustomHostSmoke,
                 Step::McpSmoke,
                 cargo_step(&["audit"]),
             ]
