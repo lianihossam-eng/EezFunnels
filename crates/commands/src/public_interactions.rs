@@ -1,7 +1,7 @@
 use eez_domain::document_v2::{BlockV2, DocumentV2, FormId, PageId};
 use eez_domain::interaction_event::{
-    decode_interaction_event, CampaignRegistry, InteractionConsent, InteractionEvent,
-    InteractionEventKind,
+    decode_interaction_event_payload, CampaignRegistry, InteractionConsent, InteractionEvent,
+    InteractionEventKind, InteractionEventPayload,
 };
 use eez_storage::repository::{
     NewPublicInteractionEvent, PublicInteractionEventResult, Repository, RepositoryError,
@@ -10,7 +10,7 @@ use eez_storage::repository::{
 
 pub struct RecordInteractionInput<'a> {
     pub funnel_slug: &'a str,
-    pub payload: &'a [u8],
+    pub payload: InteractionEventPayload,
     pub replay_key: &'a [u8],
     pub retention_days: u8,
     pub limit_per_minute: i32,
@@ -37,7 +37,7 @@ pub async fn record_interaction(
     repository: Option<&Repository<'_>>,
     input: RecordInteractionInput<'_>,
 ) -> Result<RecordInteractionOutcome, RecordInteractionError> {
-    let event = decode_interaction_event(
+    let event = decode_interaction_event_payload(
         input.payload,
         InteractionConsent::Granted,
         &CampaignRegistry::default(),

@@ -120,6 +120,26 @@ pub struct InteractionEvent {
     campaign_id: Option<CampaignId>,
 }
 
+/// JSON-decoded interaction fields accepted from the public adapter.
+///
+/// The API crate owns parsing the HTTP body into this type; domain validation and
+/// fingerprinting remain in `decode_interaction_event_payload`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InteractionEventPayload {
+    schema_version: u16,
+    event_id: String,
+    kind: InteractionEventKind,
+    observed_at_unix_seconds: u64,
+    funnel_id: String,
+    revision_id: String,
+    page_id: String,
+    #[serde(default)]
+    form_id: Option<String>,
+    #[serde(default)]
+    campaign_id: Option<String>,
+}
+
 impl InteractionEvent {
     pub fn event_id(&self) -> &InteractionEventId {
         &self.event_id
@@ -194,8 +214,32 @@ pub fn decode_interaction_event(
         return Err(InteractionContractError::InvalidReplayKey);
     }
 
-    let raw: RawInteractionEvent =
+    let raw: InteractionEventPayload =
         serde_json::from_slice(payload).map_err(|_| InteractionContractError::InvalidPayload)?;
+    decode_interaction_event_fields(raw, campaigns, replay_key)
+}
+
+/// Validate an HTTP-decoded interaction payload and build its trusted domain event.
+pub fn decode_interaction_event_payload(
+    raw: InteractionEventPayload,
+    consent: InteractionConsent,
+    campaigns: &CampaignRegistry,
+    replay_key: &[u8],
+) -> Result<Option<InteractionEvent>, InteractionContractError> {
+    if consent != InteractionConsent::Granted {
+        return Ok(None);
+    }
+    if replay_key.len() < MIN_REPLAY_KEY_BYTES {
+        return Err(InteractionContractError::InvalidReplayKey);
+    }
+    decode_interaction_event_fields(raw, campaigns, replay_key)
+}
+
+fn decode_interaction_event_fields(
+    raw: InteractionEventPayload,
+    campaigns: &CampaignRegistry,
+    replay_key: &[u8],
+) -> Result<Option<InteractionEvent>, InteractionContractError> {
     if raw.schema_version != INTERACTION_EVENT_SCHEMA_VERSION {
         return Err(InteractionContractError::UnsupportedSchemaVersion);
     }
@@ -227,22 +271,6 @@ pub fn decode_interaction_event(
         campaign_id: campaigns.resolve(raw.campaign_id),
     };
     Ok(Some(event))
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct RawInteractionEvent {
-    schema_version: u16,
-    event_id: String,
-    kind: InteractionEventKind,
-    observed_at_unix_seconds: u64,
-    funnel_id: String,
-    revision_id: String,
-    page_id: String,
-    #[serde(default)]
-    form_id: Option<String>,
-    #[serde(default)]
-    campaign_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

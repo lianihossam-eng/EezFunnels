@@ -15,7 +15,8 @@ use eez_commands::public_interactions::{
 use eez_commands::{command_ids, command_registry, Session};
 use eez_domain::document_v2::{DocumentV2, FormId, PageId};
 use eez_domain::interaction_event::{
-    InteractionConsent, DEFAULT_INTERACTION_RETENTION_DAYS, MAX_INTERACTION_RETENTION_DAYS,
+    InteractionConsent, InteractionEventPayload, DEFAULT_INTERACTION_RETENTION_DAYS,
+    MAX_INTERACTION_RETENTION_DAYS,
 };
 use eez_domain::{
     FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, InteractionReportPeriod,
@@ -1641,13 +1642,17 @@ async fn public_interaction_events_response(
         Ok(body) => body,
         Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
     };
+    let payload = match serde_json::from_slice::<InteractionEventPayload>(&body) {
+        Ok(payload) => payload,
+        Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
+    };
     let bindings = eez_storage::Bindings::from_env(env).ok();
     let repository = bindings.as_ref().map(eez_storage::Bindings::repository);
     let result = record_interaction(
         repository.as_ref(),
         RecordInteractionInput {
             funnel_slug: route.funnel_slug,
-            payload: &body,
+            payload,
             replay_key: replay_key.as_bytes(),
             retention_days,
             limit_per_minute,
