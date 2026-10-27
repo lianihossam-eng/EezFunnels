@@ -9,19 +9,19 @@ use axum::Router;
 use eez_commands::public_forms::{
     submit_public_form, SubmitPublicFormError, SubmitPublicFormInput, SubmitPublicFormOutcome,
 };
+use eez_commands::public_interactions::{
+    record_interaction, RecordInteractionError, RecordInteractionInput, RecordInteractionOutcome,
+};
 use eez_commands::{command_ids, command_registry, Session};
-use eez_domain::document_v2::{BlockV2, DocumentV2, FormId, PageId};
+use eez_domain::document_v2::{DocumentV2, FormId, PageId};
 use eez_domain::interaction_event::{
-    decode_interaction_event, CampaignRegistry, InteractionConsent, InteractionEvent,
-    InteractionEventKind, DEFAULT_INTERACTION_RETENTION_DAYS, MAX_INTERACTION_RETENTION_DAYS,
+    InteractionConsent, InteractionEventPayload, DEFAULT_INTERACTION_RETENTION_DAYS,
+    MAX_INTERACTION_RETENTION_DAYS,
 };
 use eez_domain::{
     FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, InteractionReportPeriod,
 };
-use eez_storage::repository::{
-    NewPublicInteractionEvent, PublicFormSubmissionCursor, PublicInteractionEventResult,
-    PublishedRevisionRecord, RevisionRecord,
-};
+use eez_storage::repository::{PublicFormSubmissionCursor, PublishedRevisionRecord};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1642,59 +1642,33 @@ async fn public_interaction_events_response(
         Ok(body) => body,
         Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
     };
-    let event = match decode_interaction_event(
-        &body,
-        InteractionConsent::Granted,
-        &CampaignRegistry::default(),
-        replay_key.as_bytes(),
-    ) {
-        Ok(Some(event)) => event,
-        Ok(None) => return interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id),
+    let payload = match serde_json::from_slice::<InteractionEventPayload>(&body) {
+        Ok(payload) => payload,
         Err(_) => return interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id),
     };
-
-    let bindings = match eez_storage::Bindings::from_env(env) {
-        Ok(bindings) => bindings,
-        Err(_) => {
-            return interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id)
-        }
-    };
-    let repository = bindings.repository();
-    let revision = match repository
-        .get_published_revision_by_slug(route.funnel_slug)
-        .await
-    {
-        Ok(Some(revision)) => revision,
-        _ => return interaction_empty_response(StatusCode::NOT_FOUND, &correlation_id),
-    };
-    if !interaction_event_matches_revision(&event, &revision) {
-        return interaction_empty_response(StatusCode::NOT_FOUND, &correlation_id);
-    }
-    let fingerprint = interaction_fingerprint_hex(event.replay_fingerprint().as_bytes());
-    let storage_result = repository
-        .store_public_interaction_event(NewPublicInteractionEvent {
-            event_id: event.event_id().as_str(),
-            funnel_id: event.funnel_id().as_str(),
+    let bindings = eez_storage::Bindings::from_env(env).ok();
+    let repository = bindings.as_ref().map(eez_storage::Bindings::repository);
+    let result = record_interaction(
+        repository.as_ref(),
+        RecordInteractionInput {
             funnel_slug: route.funnel_slug,
-            revision_id: event.revision_id().as_str(),
-            page_id: event.page_id().as_str(),
-            event_kind: interaction_event_kind_name(event.kind()),
-            form_id: event.form_id().map(|value| value.as_str()),
-            campaign_id: event.campaign_id().map(|value| value.as_str()),
-            replay_fingerprint: &fingerprint,
+            payload,
+            replay_key: replay_key.as_bytes(),
             retention_days,
             limit_per_minute,
-        })
-        .await;
-    match storage_result {
-        Ok(PublicInteractionEventResult::Stored | PublicInteractionEventResult::Duplicate) => {
-            interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id)
-        }
-        Ok(PublicInteractionEventResult::KeyReuseMismatch)
-        | Ok(PublicInteractionEventResult::NotCurrent) => {
+        },
+    )
+    .await;
+    match result {
+        Ok(
+            RecordInteractionOutcome::Ignored
+            | RecordInteractionOutcome::Recorded
+            | RecordInteractionOutcome::Duplicate,
+        ) => interaction_empty_response(StatusCode::NO_CONTENT, &correlation_id),
+        Ok(RecordInteractionOutcome::Conflict) => {
             interaction_empty_response(StatusCode::CONFLICT, &correlation_id)
         }
-        Ok(PublicInteractionEventResult::RateLimited) => {
+        Ok(RecordInteractionOutcome::RateLimited) => {
             let mut response =
                 interaction_empty_response(StatusCode::TOO_MANY_REQUESTS, &correlation_id);
             response
@@ -1702,8 +1676,17 @@ async fn public_interaction_events_response(
                 .insert("retry-after", HeaderValue::from_static("60"));
             response
         }
-        Err(error) => {
-            let api_error = ApiError::from_code(error.code());
+        Err(RecordInteractionError::InvalidEvent) => {
+            interaction_empty_response(StatusCode::BAD_REQUEST, &correlation_id)
+        }
+        Err(RecordInteractionError::NotFound) => {
+            interaction_empty_response(StatusCode::NOT_FOUND, &correlation_id)
+        }
+        Err(RecordInteractionError::RepositoryUnavailable) => {
+            interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id)
+        }
+        Err(RecordInteractionError::Storage { code }) => {
+            let api_error = ApiError::from_code(code);
             log_api_error(&api_error, &correlation_id, api_error.code());
             interaction_empty_response(StatusCode::SERVICE_UNAVAILABLE, &correlation_id)
         }
@@ -1752,60 +1735,6 @@ fn interaction_consent(headers: &HeaderMap<HeaderValue>) -> InteractionConsent {
         Some("refused") => InteractionConsent::Refused,
         _ => InteractionConsent::Missing,
     }
-}
-
-fn interaction_event_matches_revision(event: &InteractionEvent, revision: &RevisionRecord) -> bool {
-    if event.funnel_id().as_str() != revision.funnel_id
-        || event.revision_id().as_str() != revision.id
-    {
-        return false;
-    }
-    match revision.schema_version {
-        1 => event.page_id().as_str() == "legacy-entry" && event.form_id().is_none(),
-        2 => {
-            let Ok(document) =
-                DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id)
-            else {
-                return false;
-            };
-            let Ok(page_id) = PageId::parse(event.page_id().as_str().to_owned()) else {
-                return false;
-            };
-            let Some(page) = document.page(&page_id) else {
-                return false;
-            };
-            let Some(form_id) = event.form_id() else {
-                return event.kind() == InteractionEventKind::PageViewed;
-            };
-            let Ok(form_id) = FormId::parse(form_id.as_str().to_owned()) else {
-                return false;
-            };
-            document.form(&form_id).is_some()
-                && page.sections().iter().any(|section| {
-                    section.blocks().iter().any(|block| {
-                        matches!(block, BlockV2::Form { form_id: placed_id, .. } if placed_id == &form_id)
-                    })
-                })
-        }
-        _ => false,
-    }
-}
-
-fn interaction_event_kind_name(kind: InteractionEventKind) -> &'static str {
-    match kind {
-        InteractionEventKind::PageViewed => "page_viewed",
-        InteractionEventKind::FormViewed => "form_viewed",
-        InteractionEventKind::FormStarted => "form_started",
-    }
-}
-
-fn interaction_fingerprint_hex(bytes: &[u8; 32]) -> String {
-    let mut value = String::with_capacity(64);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(value, "{byte:02x}");
-    }
-    value
 }
 
 fn interaction_empty_response(
@@ -3969,11 +3898,11 @@ mod tests {
         append_interaction_script, bind_public_form_submission_identity, correlation_id,
         custom_host_route_from_path, editor_command_parameters, form_completion_period,
         form_submission_status_command_parameters, form_submission_status_id_from_path,
-        funnel_subroute, interaction_consent, interaction_event_matches_revision,
-        interaction_origin_matches, interaction_report_period, is_json_content_type,
-        normalize_correlation_id, parse_public_form_body,
-        public_form_submission_channel_from_page_query, public_form_submission_identity,
-        public_form_submission_query, public_form_submission_route_from_path, public_html_etag,
+        funnel_subroute, interaction_consent, interaction_origin_matches,
+        interaction_report_period, is_json_content_type, normalize_correlation_id,
+        parse_public_form_body, public_form_submission_channel_from_page_query,
+        public_form_submission_identity, public_form_submission_query,
+        public_form_submission_route_from_path, public_html_etag,
         public_interaction_events_route_from_path, public_route_from_path,
         publication_command_parameters, published_document_references_asset, request_if_none_match,
         sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
@@ -3983,9 +3912,7 @@ mod tests {
         PublicFormSubmissionCursor, PublicFormSubmissionIdentity, PublicInteractionEventsRoute,
     };
     use axum::http::{HeaderMap, HeaderValue};
-    use eez_domain::interaction_event::{
-        decode_interaction_event, CampaignRegistry, InteractionConsent,
-    };
+    use eez_domain::interaction_event::InteractionConsent;
     use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
     use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
     use serde_json::Value;
@@ -4291,78 +4218,6 @@ mod tests {
             &headers,
             Some("https"),
             Some(&mapping)
-        ));
-    }
-
-    #[test]
-    fn interaction_events_must_reference_the_current_revision_resources() {
-        let revision = RevisionRecord {
-            id: "revision-a".to_owned(),
-            funnel_id: "funnel-01".to_owned(),
-            schema_version: 2,
-            data_json: include_str!(
-                "../../../crates/domain/tests/fixtures/document_v2_minimal.json"
-            )
-            .to_owned(),
-            render_manifest_json: "{}".to_owned(),
-            created_at: "2026-10-18 00:00:00".to_owned(),
-        };
-        let page_payload = serde_json::json!({
-            "schema_version": 1,
-            "event_id": "f0a364dd-688e-4e55-8ad7-7478ba7ae0bd",
-            "kind": "page_viewed",
-            "observed_at_unix_seconds": 1,
-            "funnel_id": "funnel-01",
-            "revision_id": "revision-a",
-            "page_id": "page-home",
-        });
-        let page_event = decode_interaction_event(
-            page_payload.to_string().as_bytes(),
-            InteractionConsent::Granted,
-            &CampaignRegistry::default(),
-            &[7; 32],
-        )
-        .expect("valid event envelope")
-        .expect("granted event");
-        assert!(interaction_event_matches_revision(&page_event, &revision));
-
-        let unknown_page_payload = serde_json::json!({
-            "schema_version": 1,
-            "event_id": "e3b7ebc8-4c8e-4901-b1cc-b1fac5014d99",
-            "kind": "page_viewed",
-            "observed_at_unix_seconds": 1,
-            "funnel_id": "funnel-01",
-            "revision_id": "revision-a",
-            "page_id": "page-other",
-        });
-        let unknown_page = decode_interaction_event(
-            unknown_page_payload.to_string().as_bytes(),
-            InteractionConsent::Granted,
-            &CampaignRegistry::default(),
-            &[7; 32],
-        )
-        .expect("valid event envelope")
-        .expect("granted event");
-        assert!(!interaction_event_matches_revision(
-            &unknown_page,
-            &revision
-        ));
-
-        let wrong_revision = RevisionRecord {
-            id: "revision-b".to_owned(),
-            ..revision.clone()
-        };
-        assert!(!interaction_event_matches_revision(
-            &page_event,
-            &wrong_revision
-        ));
-        let legacy_revision = RevisionRecord {
-            schema_version: 1,
-            ..revision
-        };
-        assert!(!interaction_event_matches_revision(
-            &page_event,
-            &legacy_revision
         ));
     }
 
