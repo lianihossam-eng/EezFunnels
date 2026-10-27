@@ -1,12 +1,13 @@
 #![cfg_attr(not(feature = "browser"), allow(dead_code))]
 
-use super::section_label;
-use super::RouteView;
+use super::api::section_label;
 #[cfg(feature = "browser")]
-use super::{
-    api_request, clear_idempotency_storage, error_message, prepare_idempotency_key,
-    PreparedIdempotencyKey,
+use super::api::{api_request, error_message};
+#[cfg(feature = "browser")]
+use super::idempotency::{
+    clear_idempotency_storage, prepare_idempotency_key, PreparedIdempotencyKey,
 };
+use super::RouteView;
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::{SortEvent, SortableList};
 use serde::Deserialize;
@@ -2175,7 +2176,7 @@ fn FunnelDetailV1(id: String) -> Element {
                                 unpublish_confirmation.set(true);
                                 #[cfg(feature = "browser")]
                                 spawn(async move {
-                                    super::set_modal_dialog("unpublish-funnel-dialog", true).await;
+                                    super::browser::set_modal_dialog("unpublish-funnel-dialog", true).await;
                                 });
                             }
                         },
@@ -2220,7 +2221,7 @@ fn FunnelDetailV1(id: String) -> Element {
                                 unpublish_confirmation.set(false);
                                 #[cfg(feature = "browser")]
                                 spawn(async move {
-                                    super::set_modal_dialog("unpublish-funnel-dialog", false).await;
+                                    super::browser::set_modal_dialog("unpublish-funnel-dialog", false).await;
                                 });
                             },
                             "Cancel"
@@ -2233,7 +2234,7 @@ fn FunnelDetailV1(id: String) -> Element {
                                 unpublish_confirmation.set(false);
                                 #[cfg(feature = "browser")]
                                 spawn(async move {
-                                    super::set_modal_dialog("unpublish-funnel-dialog", false).await;
+                                    super::browser::set_modal_dialog("unpublish-funnel-dialog", false).await;
                                     change_publication(state, publication_key, publication_body, false).await;
                                 });
                             },
