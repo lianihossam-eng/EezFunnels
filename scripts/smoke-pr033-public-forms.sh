@@ -1193,7 +1193,32 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--command",
-                "UPDATE public_form_submissions SET submitted_at = unixepoch(date('now', '-1 day')) + 43200, expires_at = unixepoch() + 86400 WHERE submission_id = '90000000-0000-4000-8000-000000000001'; UPDATE public_form_submissions SET submitted_at = unixepoch() - 300, expires_at = unixepoch() WHERE submission_id = '90000000-0000-4000-8000-000000000002'",
+                "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300, expires_at = unixepoch() WHERE submission_id = '90000000-0000-4000-8000-000000000002'",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Anchor every retained row to fully elapsed UTC days. The smoke can
+        # cross midnight while its browser flow runs, so using unixepoch()-100
+        # here would make the daily bucket assertion depend on wall-clock timing.
+        historical_report_fixtures_sql = f"""
+            UPDATE public_form_submissions
+            SET submitted_at = CASE
+                WHEN submission_id = '90000000-0000-4000-8000-000000000001'
+                    THEN unixepoch(date('now', '-2 days')) + 43200
+                ELSE unixepoch(date('now', '-1 day')) + 43200
+            END
+            WHERE funnel_id = {sql_quote(funnel_id)}
+                AND expires_at > unixepoch()
+        """
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", historical_report_fixtures_sql,
             ],
             cwd=root,
             check=True,
