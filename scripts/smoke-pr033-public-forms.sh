@@ -1202,15 +1202,25 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             timeout=30,
         )
 
-        # Anchor every retained row to fully elapsed UTC days. The smoke can
-        # cross midnight while its browser flow runs, so using unixepoch()-100
-        # here would make the daily bucket assertion depend on wall-clock timing.
+        # Anchor retained rows to fully elapsed UTC days while preserving the
+        # inbox sort order. The smoke can cross midnight during its browser flow.
         historical_report_fixtures_sql = f"""
+            WITH ranked AS MATERIALIZED (
+                SELECT submission_id,
+                    ROW_NUMBER() OVER (ORDER BY submitted_at, submission_id) - 1 AS order_offset
+                FROM public_form_submissions
+                WHERE funnel_id = {sql_quote(funnel_id)}
+                    AND expires_at > unixepoch()
+                    AND submission_id <> '90000000-0000-4000-8000-000000000001'
+            )
             UPDATE public_form_submissions
             SET submitted_at = CASE
                 WHEN submission_id = '90000000-0000-4000-8000-000000000001'
                     THEN unixepoch(date('now', '-2 days')) + 43200
-                ELSE unixepoch(date('now', '-1 day')) + 43200
+                ELSE unixepoch(date('now', '-1 day')) + 43200 + (
+                    SELECT order_offset FROM ranked
+                    WHERE ranked.submission_id = public_form_submissions.submission_id
+                )
             END
             WHERE funnel_id = {sql_quote(funnel_id)}
                 AND expires_at > unixepoch()
