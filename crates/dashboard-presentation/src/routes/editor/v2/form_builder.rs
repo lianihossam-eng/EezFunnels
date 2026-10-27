@@ -1,4 +1,5 @@
-use super::{dispatch_v2_edit, DeterministicIds, V2EditorState};
+use super::orchestration::dispatch_v2_edit;
+use super::state::{DeterministicIds, V2EditorState};
 use dioxus::prelude::*;
 use eez_domain::document_v2::{
     DocumentV2, Edit, FormField, FormResult, FormV2, NewFormField, PageId, PageV2, ValidationRange,
