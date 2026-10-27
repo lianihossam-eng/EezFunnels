@@ -25,9 +25,10 @@ use form_builder::V2FormEditor;
 use uuid::Uuid;
 
 #[cfg(feature = "browser")]
-use super::super::{
-    api_request, clear_idempotency_storage, error_message, prepare_idempotency_key,
-    PreparedIdempotencyKey,
+use super::super::api::{api_request, error_message};
+#[cfg(feature = "browser")]
+use super::super::idempotency::{
+    clear_idempotency_storage, prepare_idempotency_key, PreparedIdempotencyKey,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -1652,7 +1653,7 @@ async fn upload_v2_stage(
     funnel_id: &str,
     stage_id: &str,
     document_json: &str,
-) -> Result<super::super::BrowserResponse, ()> {
+) -> Result<super::super::api::BrowserResponse, ()> {
     let mut request = document::eval(V2_BINARY_UPLOAD);
     request
         .send(serde_json::json!({
@@ -1699,7 +1700,10 @@ async fn upload_v2_media(mut state: Signal<V2EditorState>) {
     };
     let mut request = document::eval(V2_MEDIA_UPLOAD);
     let response = if request.send(serde_json::json!({})).is_ok() {
-        request.recv::<super::super::BrowserResponse>().await.ok()
+        request
+            .recv::<super::super::api::BrowserResponse>()
+            .await
+            .ok()
     } else {
         None
     };
@@ -1737,7 +1741,7 @@ async fn upload_v2_media(mut state: Signal<V2EditorState>) {
 }
 
 #[cfg(feature = "browser")]
-fn v2_failure(response: &super::super::BrowserResponse) -> V2RequestFailure {
+fn v2_failure(response: &super::super::api::BrowserResponse) -> V2RequestFailure {
     let code = serde_json::from_str::<serde_json::Value>(&response.body)
         .ok()
         .and_then(|value| {
@@ -2577,7 +2581,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                     spawn(async move { publish_v2_revision(state, false).await; });
                                 } else {
                                     state.with_mut(|state| state.unpublish_confirmation = true);
-                                    spawn(async move { super::super::set_modal_dialog("v2-unpublish-dialog", true).await; });
+                                    spawn(async move { super::super::browser::set_modal_dialog("v2-unpublish-dialog", true).await; });
                                 }
                             },
                             if view.publication_pending && matches!(view.publication_attempt, Some(PublicationAction::Unpublish { .. })) { "Unpublishing…" }
@@ -2595,7 +2599,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                         oncancel: move |event| {
                             event.prevent_default();
                             state.with_mut(|state| state.unpublish_confirmation = false);
-                            spawn(async move { super::super::set_modal_dialog("v2-unpublish-dialog", false).await; });
+                            spawn(async move { super::super::browser::set_modal_dialog("v2-unpublish-dialog", false).await; });
                         },
                         h2 { id: "v2-unpublish-title", "Unpublish this funnel?" }
                         p { id: "v2-unpublish-description", "This removes the live revision pointer. Already viewed copies may remain available in browsers or intermediary caches." }
@@ -2606,7 +2610,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 autofocus: true,
                                 onclick: move |_| {
                                     state.with_mut(|state| state.unpublish_confirmation = false);
-                                    spawn(async move { super::super::set_modal_dialog("v2-unpublish-dialog", false).await; });
+                                    spawn(async move { super::super::browser::set_modal_dialog("v2-unpublish-dialog", false).await; });
                                 },
                                 "Cancel"
                             }
@@ -2616,7 +2620,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 onclick: move |_| {
                                     state.with_mut(|state| state.unpublish_confirmation = false);
                                     spawn(async move {
-                                        super::super::set_modal_dialog("v2-unpublish-dialog", false).await;
+                                        super::super::browser::set_modal_dialog("v2-unpublish-dialog", false).await;
                                         publish_v2_revision(state, false).await;
                                     });
                                 },
@@ -2644,7 +2648,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                 oncancel: move |event| {
                                     event.prevent_default();
                                     state.with_mut(|state| state.delete_page_confirmation = None);
-                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                                    spawn(async move { super::super::browser::set_modal_dialog("v2-delete-page-dialog", false).await; });
                                 },
                                 h2 { id: "v2-delete-page-title", "Delete {confirming_page_title}?" }
                                 p { id: "v2-delete-page-description", "Buttons that navigate to this page will be removed. Forms that redirect here will show the inline message ‘Thank you.’ Forms placed on this page will also be removed. Other steps must remain reachable. You can undo these changes before saving." }
@@ -2655,7 +2659,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                         autofocus: true,
                                         onclick: move |_| {
                                             state.with_mut(|state| state.delete_page_confirmation = None);
-                                            spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", false).await; });
+                                            spawn(async move { super::super::browser::set_modal_dialog("v2-delete-page-dialog", false).await; });
                                         },
                                         "Cancel"
                                     }
@@ -2666,7 +2670,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                             state.with_mut(|state| state.delete_page_confirmation = None);
                                             let page_id = PageId::parse(confirming_page_id.clone()).ok();
                                             spawn(async move {
-                                                super::super::set_modal_dialog("v2-delete-page-dialog", false).await;
+                                                super::super::browser::set_modal_dialog("v2-delete-page-dialog", false).await;
                                                 if let Some(page) = page_id {
                                                     dispatch_v2_edit(state, Edit::DeletePage { page });
                                                 }
@@ -2773,7 +2777,7 @@ pub(super) fn V2FunnelDetail(id: String) -> Element {
                                                 "aria-label": "Delete page {page.title()}",
                                                 onclick: move |_| {
                                                     state.with_mut(|state| state.delete_page_confirmation = Some(page_id_delete.as_str().to_owned()));
-                                                    spawn(async move { super::super::set_modal_dialog("v2-delete-page-dialog", true).await; });
+                                                    spawn(async move { super::super::browser::set_modal_dialog("v2-delete-page-dialog", true).await; });
                                                 },
                                                 "Delete page"
                                             }
