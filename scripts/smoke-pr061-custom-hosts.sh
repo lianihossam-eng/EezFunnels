@@ -12,12 +12,15 @@ python3 - "$repo_root" <<'PY'
 import json
 import os
 from pathlib import Path
+import secrets
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 import xml.etree.ElementTree as ElementTree
 
 root = Path(sys.argv[1])
@@ -31,6 +34,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
     state = Path(directory)
     persist = state / "persist"
     log_path = state / "wrangler.log"
+    interaction_env_file = state / "interaction.env"
+    interaction_env_file.write_text(
+        f"INTERACTION_REPLAY_KEY={secrets.token_hex(32)}\n", encoding="utf-8"
+    )
+    interaction_env_file.chmod(0o600)
     subprocess.run(
         [
             str(wrangler), "d1", "migrations", "apply", "DB", "--local", "--env", "dev",
@@ -44,10 +52,14 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
     log = log_path.open("w", encoding="utf-8")
     worker = subprocess.Popen(
         [
-            str(wrangler), "dev", "--local", "--env", "dev", "--port", str(port),
+            str(wrangler), "dev", "--local", "--env", "dev", "--local-protocol", "https",
+            "--port", str(port),
             "--ip", "127.0.0.1", "--var", f"ALLOWED_HOSTS:localhost:{port}",
             "--var", "PUBLIC_BASE_URL:https://platform.example",
             "--var", f"PUBLIC_FUNNEL_HOSTS:custom.example={slug}",
+            "--var", "PUBLIC_INTERACTION_RETENTION_DAYS:1",
+            "--var", "PUBLIC_INTERACTION_EVENTS_PER_MINUTE:10",
+            "--env-file", str(interaction_env_file),
             "--persist-to", str(persist), "--log-level", "error",
         ],
         cwd=root,
@@ -59,7 +71,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
     def request(method, path, body=None, headers=None, host=None):
         import http.client
 
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+        connection = http.client.HTTPSConnection(
+            "127.0.0.1", port, timeout=20, context=ssl._create_unverified_context()
+        )
         request_headers = {"Host": host or f"localhost:{port}"}
         request_headers.update(headers or {})
         connection.request(method, path, body=body, headers=request_headers)
@@ -91,6 +105,37 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
             json.dumps(value, separators=(",", ":")).encode(),
             {"Content-Type": "application/json", "Idempotency-Key": key},
         )
+
+    def find_mapping(value, key):
+        if isinstance(value, dict):
+            if key in value:
+                return value
+            for child in value.values():
+                result = find_mapping(child, key)
+                if result is not None:
+                    return result
+        elif isinstance(value, list):
+            for child in value:
+                result = find_mapping(child, key)
+                if result is not None:
+                    return result
+        return None
+
+    def d1_query(sql, key):
+        output = subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--json", "--command", sql,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        result = find_mapping(json.loads(output), key)
+        assert result is not None, output
+        return result
 
     try:
         wait_for_worker()
@@ -139,6 +184,35 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
         assert b"https://custom.example/f/pr061-smoke" in page, page
         assert request("HEAD", "/", host="custom.example")[0] == 200
         assert request("GET", "/f/pr061-smoke", host="custom.example")[0] == 200
+
+        interaction_event_id = str(uuid.uuid4())
+        interaction_event = {
+            "schema_version": 1,
+            "event_id": interaction_event_id,
+            "kind": "page_viewed",
+            "observed_at_unix_seconds": 1,
+            "funnel_id": funnel_id,
+            "revision_id": revision_id,
+            "page_id": "legacy-entry",
+        }
+        interaction_status, interaction_body, _ = request(
+            "POST",
+            f"/api/public/funnels/{slug}/interaction-events",
+            json.dumps(interaction_event, separators=(",", ":")).encode(),
+            {
+                "Content-Type": "application/json",
+                "Origin": "https://custom.example",
+                "X-EezFunnel-Interaction-Consent": "granted",
+            },
+            host="custom.example",
+        )
+        assert interaction_status == 204, (interaction_status, interaction_body)
+        assert d1_query(
+            "SELECT COUNT(*) AS events FROM public_interaction_events "
+            f"WHERE event_id = '{interaction_event_id}'",
+            "events",
+        )["events"] == 1
+
         for blocked in [
             "/api/funnels",
             "/api/submissions",

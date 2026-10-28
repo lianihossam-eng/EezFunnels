@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { chromium, expect } from "@playwright/test";
@@ -321,8 +322,46 @@ try {
 
   const missing = await jsonResponse(await fetch(`${worker.origin}/media/not-a-hash`), 404, "Reject invalid asset path");
   assert.equal(missing.code, "not_found/asset");
+
+  const repositoryRoot = resolve(import.meta.dirname, "..");
+  const wrangler = resolve(repositoryRoot, "node_modules/.bin/wrangler");
+  const deletedAsset = spawnSync(
+    wrangler,
+    [
+      "d1",
+      "execute",
+      "DB",
+      "--local",
+      "--env",
+      "dev",
+      "--persist-to",
+      worker.stateDir,
+      "--command",
+      `DELETE FROM assets WHERE id = '${asset.id}'`,
+    ],
+    { cwd: repositoryRoot, encoding: "utf8", timeout: 30000 },
+  );
+  assert.equal(
+    deletedAsset.status,
+    0,
+    `Could not remove the published image metadata:\n${deletedAsset.stdout}\n${deletedAsset.stderr}`,
+  );
+  const unavailableSubmission = await fetch(new URL(formAction, worker.origin), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: worker.origin,
+    },
+    body: new URLSearchParams({ name: "Ada Lovelace", email: "ada@example.test", _request_consent: "on" }),
+    redirect: "manual",
+  });
+  assert.equal(unavailableSubmission.status, 404);
+  const unavailableSubmissionError = await unavailableSubmission.json();
+  assert.equal(unavailableSubmissionError.code, "not_found/slug");
+  const unavailableMedia = await fetch(`${worker.origin}/media/${asset.id}`);
+  assert.equal(unavailableMedia.status, 404);
   assert.deepEqual(errors, [], `Browser errors: ${errors.join("\n")}`);
-  console.log(JSON.stringify({ workflow: "upload -> select -> edit alt -> preview -> save -> publish -> submit image-backed form", assetId: asset.id, bytes: imageBytes.length, criticalAxeFindings: 0 }));
+  console.log(JSON.stringify({ workflow: "upload -> select -> edit alt -> preview -> save -> publish -> submit image-backed form -> reject submission after image metadata removal", assetId: asset.id, bytes: imageBytes.length, criticalAxeFindings: 0 }));
 } finally {
   await finalizePr019Browser(closeBrowser, worker);
 }

@@ -679,6 +679,27 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert response_headers.get("cache-control") == "no-store", response_headers
         assert b"ada@example.test" not in body
 
+        absent_form_page_path = (
+            f"/api/public/funnels/{slug}/pages/{internal_page_id}/forms/{form_id}/submissions?"
+            + urlencode(
+                {
+                    "key": str(uuid.uuid4()),
+                    "revision_id": updated_revision_id,
+                    "channel": "unattributed",
+                }
+            )
+        )
+        absent_form_page_status, absent_form_page_body, _ = request_form_with_transport_retry(
+            absent_form_page_path,
+            payload,
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert absent_form_page_status == 404, (
+            absent_form_page_status,
+            absent_form_page_body,
+        )
+        assert b"not_found/slug" in absent_form_page_body
+
         duplicate_status, duplicate_body, _ = request_form_with_transport_retry(
             action_path,
             payload,
@@ -746,6 +767,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "Origin": f"http://localhost:{port}",
             "X-EezFunnel-Interaction-Consent": "granted",
         }
+
+        invalid_event_status, invalid_event_body, _ = request(
+            "POST", interaction_path, b"not-json", interaction_headers_granted
+        )
+        assert invalid_event_status == 400, (invalid_event_status, invalid_event_body)
 
         def make_interaction_event(event_id, *, revision_id=updated_revision_id, page_id="page-home", kind="page_viewed"):
             result = {
@@ -1167,7 +1193,42 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--command",
-                "UPDATE public_form_submissions SET submitted_at = unixepoch(date('now', '-1 day')) + 43200, expires_at = unixepoch() + 86400 WHERE submission_id = '90000000-0000-4000-8000-000000000001'; UPDATE public_form_submissions SET submitted_at = unixepoch() - 300, expires_at = unixepoch() WHERE submission_id = '90000000-0000-4000-8000-000000000002'",
+                "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300, expires_at = unixepoch() WHERE submission_id = '90000000-0000-4000-8000-000000000002'",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Anchor retained rows to fully elapsed UTC days while preserving the
+        # inbox sort order. The smoke can cross midnight during its browser flow.
+        historical_report_fixtures_sql = f"""
+            WITH ranked AS MATERIALIZED (
+                SELECT submission_id,
+                    ROW_NUMBER() OVER (ORDER BY submitted_at, submission_id) - 1 AS order_offset
+                FROM public_form_submissions
+                WHERE funnel_id = {sql_quote(funnel_id)}
+                    AND expires_at > unixepoch()
+                    AND submission_id <> '90000000-0000-4000-8000-000000000001'
+            )
+            UPDATE public_form_submissions
+            SET submitted_at = CASE
+                WHEN submission_id = '90000000-0000-4000-8000-000000000001'
+                    THEN unixepoch(date('now', '-2 days')) + 43200
+                ELSE unixepoch(date('now', '-1 day')) + 43200 + (
+                    SELECT order_offset FROM ranked
+                    WHERE ranked.submission_id = public_form_submissions.submission_id
+                )
+            END
+            WHERE funnel_id = {sql_quote(funnel_id)}
+                AND expires_at > unixepoch()
+        """
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", historical_report_fixtures_sql,
             ],
             cwd=root,
             check=True,
