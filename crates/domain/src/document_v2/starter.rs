@@ -3,6 +3,7 @@ use super::model::{
     FormPresentation, FormResult, FormV2, PageId, PageV2, PublicLanguage, SectionId, SectionKind,
     SectionV2, StableDocumentId, TextPresentation,
 };
+use super::{GeneratedPlaceholderCode, GeneratedPlaceholderMarker, GeneratedPlaceholderTarget};
 
 pub(super) fn starter_section(
     section_type: SectionKind,
@@ -179,6 +180,47 @@ pub(super) fn starter_section(
         section_type,
         blocks,
     })
+}
+
+pub(super) fn generated_placeholders(
+    blueprint_id: BlueprintId,
+    language: PublicLanguage,
+) -> Result<Vec<GeneratedPlaceholderMarker>, DocumentError> {
+    let mut markers = Vec::new();
+    if blueprint_id != BlueprintId::LeadGen {
+        markers.push(GeneratedPlaceholderMarker {
+            target: GeneratedPlaceholderTarget::Block {
+                page_id: PageId::parse("page-home")?,
+                section_id: SectionId::parse("section-hero")?,
+                block_id: BlockId::parse("block-hero-copy")?,
+            },
+            code: GeneratedPlaceholderCode::OfferText,
+            expected_text: copy(
+                language,
+                "Replace this text with your offer.",
+                "Remplacez ce texte par votre offre.",
+            ),
+        });
+    }
+    if matches!(
+        blueprint_id,
+        BlueprintId::Vsl | BlueprintId::Webinar | BlueprintId::Launch
+    ) {
+        markers.push(GeneratedPlaceholderMarker {
+            target: GeneratedPlaceholderTarget::Block {
+                page_id: PageId::parse("page-home")?,
+                section_id: SectionId::parse("section-testimonials")?,
+                block_id: BlockId::parse("block-testimonials-copy")?,
+            },
+            code: GeneratedPlaceholderCode::TestimonialPrompt,
+            expected_text: copy(
+                language,
+                "Add a real customer story and attribution here, or remove this section.",
+                "Ajoutez ici un témoignage client réel et son attribution, ou supprimez cette section.",
+            ),
+        });
+    }
+    Ok(markers)
 }
 
 pub(super) fn service_request_form(language: PublicLanguage) -> Result<FormV2, DocumentError> {

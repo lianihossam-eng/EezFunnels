@@ -655,6 +655,8 @@ impl DocumentV2 {
             }
         };
 
+        data.generated_placeholders =
+            super::placeholders::derive_generated_placeholders(self, &data);
         let expected_funnel_id = data.funnel_id.as_str().to_owned();
         super::validate::validate_data(&mut data, &expected_funnel_id)?;
         let document = DocumentV2::from_validated(data)?;

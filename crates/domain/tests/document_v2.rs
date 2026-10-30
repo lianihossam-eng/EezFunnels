@@ -1,7 +1,8 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
     FontFamily, FormField, FormId, FormPresentation, FormResult, FormSubmissionIssueCode,
-    FormSubmissionIssueTarget, FormSubmissionValue, IdKind, IdSource, PublicLanguage, SectionKind,
+    FormSubmissionIssueTarget, FormSubmissionValue, GeneratedPlaceholderPageField,
+    GeneratedPlaceholderTarget, IdKind, IdSource, NewBlock, PublicLanguage, SectionId, SectionKind,
     TextPresentation, ThemeColors, ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
@@ -47,6 +48,301 @@ fn document_with_lead_form_with_name_limit(max_length: u32) -> DocumentV2 {
     }]);
     let encoded = serde_json::to_vec(&value).expect("form document serialization");
     DocumentV2::decode(&encoded, "funnel-01").expect("valid lead form document")
+}
+
+#[test]
+fn generated_placeholders_follow_edits_and_cannot_be_removed_from_unchanged_snapshots() {
+    let original =
+        DocumentV2::starter("funnel-placeholder", BlueprintId::Vsl, ThemePreset::Minimal)
+            .expect("VSL starter");
+    assert_eq!(original.generated_placeholders().len(), 2);
+
+    let mut ids = TestIds(0);
+    let edited = original
+        .apply(
+            Edit::SetBlock {
+                block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                    .expect("placeholder block"),
+                value: NewBlock::Text {
+                    text: "A defined service offer".to_owned(),
+                },
+            },
+            &mut ids,
+        )
+        .expect("replace offer placeholder")
+        .document;
+    assert_eq!(edited.generated_placeholders().len(), 1);
+    assert_eq!(
+        edited.generated_placeholders()[0].code,
+        eez_domain::document_v2::GeneratedPlaceholderCode::TestimonialPrompt
+    );
+    assert!(original.has_valid_generated_placeholder_transition(&edited));
+
+    let duplicated = original
+        .apply(
+            Edit::DuplicateBlock {
+                section: SectionId::parse("section-hero").expect("hero section"),
+                block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                    .expect("placeholder block"),
+            },
+            &mut ids,
+        )
+        .expect("duplicate marked text")
+        .document;
+    assert_eq!(duplicated.generated_placeholders().len(), 3);
+    assert!(original.has_valid_generated_placeholder_transition(&duplicated));
+
+    let mut tampered_value: serde_json::Value =
+        serde_json::from_slice(original.canonical_bytes()).expect("starter JSON");
+    tampered_value["generated_placeholders"] = serde_json::json!([]);
+    let tampered = DocumentV2::decode(
+        &serde_json::to_vec(&tampered_value).expect("tampered JSON"),
+        "funnel-placeholder",
+    )
+    .expect("a structurally valid snapshot without markers");
+    assert!(!original.has_valid_generated_placeholder_transition(&tampered));
+}
+
+#[test]
+fn generated_placeholder_edits_reconcile_against_the_persisted_base_and_allow_restoration() {
+    let original = DocumentV2::starter(
+        "funnel-placeholder",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+    )
+    .expect("Tripwire starter");
+    let expected_text = original.generated_placeholders()[0].expected_text.clone();
+    let mut ids = TestIds(0);
+    let resolved = original
+        .apply(
+            Edit::SetBlock {
+                block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                    .expect("placeholder block"),
+                value: NewBlock::Text {
+                    text: "A defined service offer".to_owned(),
+                },
+            },
+            &mut ids,
+        )
+        .expect("resolve generated offer copy")
+        .document;
+    let retyped = resolved
+        .apply(
+            Edit::SetBlock {
+                block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                    .expect("placeholder block"),
+                value: NewBlock::Text {
+                    text: expected_text,
+                },
+            },
+            &mut ids,
+        )
+        .expect("retype the generated offer copy")
+        .document;
+    assert!(retyped.generated_placeholders().is_empty());
+
+    let retyped = retyped
+        .reconcile_generated_placeholders_from(&original)
+        .expect("the persisted base restores unresolved marker provenance");
+    assert_eq!(retyped.generated_placeholders().len(), 1);
+    assert!(original.has_valid_generated_placeholder_transition(&retyped));
+
+    let restored = original
+        .reconcile_generated_placeholders_from(&resolved)
+        .expect("a restored historic document can retain its blocker");
+    assert!(resolved.has_valid_generated_placeholder_transition(&restored));
+    assert_eq!(restored.generated_placeholders().len(), 1);
+}
+
+#[test]
+fn generated_placeholder_markers_follow_text_when_retyped_into_other_public_block_kinds() {
+    let original = DocumentV2::starter(
+        "funnel-placeholder-retype",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+    )
+    .expect("Tripwire starter");
+    let expected_text = original.generated_placeholders()[0].expected_text.clone();
+    let block_id =
+        eez_domain::document_v2::BlockId::parse("block-hero-copy").expect("placeholder block");
+    let mut ids = TestIds(0);
+
+    let candidates = [
+        NewBlock::Heading {
+            level: 1,
+            text: expected_text.clone(),
+        },
+        NewBlock::List {
+            items: vec![expected_text.clone()],
+        },
+        NewBlock::Button {
+            label: expected_text,
+            action: ActionV2::ExternalHttps {
+                url: "https://example.test/offer".to_owned(),
+            },
+        },
+    ];
+
+    for value in candidates {
+        let edited = original
+            .apply(
+                Edit::SetBlock {
+                    block: block_id.clone(),
+                    value,
+                },
+                &mut ids,
+            )
+            .expect("valid text-bearing block replacement")
+            .document;
+
+        assert_eq!(edited.generated_placeholders().len(), 1);
+        let GeneratedPlaceholderTarget::Block {
+            block_id: marked_block,
+            ..
+        } = &edited.generated_placeholders()[0].target
+        else {
+            panic!("retyped text marker targets its block");
+        };
+        assert_eq!(marked_block, &block_id);
+        assert!(original.has_valid_generated_placeholder_transition(&edited));
+    }
+}
+
+#[test]
+fn generated_placeholder_markers_follow_text_into_public_page_metadata() {
+    let original = DocumentV2::starter(
+        "funnel-placeholder-page-fields",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+    )
+    .expect("Tripwire starter");
+    let expected_text = original.generated_placeholders()[0].expected_text.clone();
+    let page_id = eez_domain::document_v2::PageId::parse("page-home").expect("home page");
+    let block_id =
+        eez_domain::document_v2::BlockId::parse("block-hero-copy").expect("placeholder block");
+
+    for field in [
+        GeneratedPlaceholderPageField::Title,
+        GeneratedPlaceholderPageField::SeoTitle,
+        GeneratedPlaceholderPageField::SeoDescription,
+    ] {
+        let mut ids = TestIds(0);
+        let copied = original
+            .apply(
+                match field {
+                    GeneratedPlaceholderPageField::Title => Edit::SetPage {
+                        page: page_id.clone(),
+                        title: expected_text.clone(),
+                        slug: original.pages()[0].slug().to_owned(),
+                    },
+                    GeneratedPlaceholderPageField::SeoTitle => Edit::SetPageSeoTitle {
+                        page: page_id.clone(),
+                        value: expected_text.clone(),
+                    },
+                    GeneratedPlaceholderPageField::SeoDescription => Edit::SetPageSeoDescription {
+                        page: page_id.clone(),
+                        value: expected_text.clone(),
+                    },
+                },
+                &mut ids,
+            )
+            .expect("generated text can be copied to public page metadata")
+            .document
+            .apply(
+                Edit::SetBlock {
+                    block: block_id.clone(),
+                    value: NewBlock::Text {
+                        text: "A defined service offer".to_owned(),
+                    },
+                },
+                &mut ids,
+            )
+            .expect("the original marked block can be resolved")
+            .document;
+
+        assert!(copied.generated_placeholders().iter().any(|marker| {
+            marker.target
+                == GeneratedPlaceholderTarget::PageField {
+                    page_id: page_id.clone(),
+                    field,
+                }
+        }));
+        assert!(original.has_valid_generated_placeholder_transition(&copied));
+    }
+}
+
+#[test]
+fn generated_placeholder_markers_follow_text_into_form_content() {
+    let original = DocumentV2::starter(
+        "funnel-placeholder-form",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+    )
+    .expect("Tripwire starter");
+    let expected_text = original.generated_placeholders()[0].expected_text.clone();
+    let mut ids = TestIds(0);
+    let with_form = original
+        .apply(
+            Edit::CreateForm {
+                section: SectionId::parse("section-hero").expect("hero section"),
+                after: None,
+            },
+            &mut ids,
+        )
+        .expect("form can be added to the hero section")
+        .document;
+    let (form_block_id, form_id) = with_form.pages()[0].sections()[0]
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            BlockV2::Form { id, form_id } => Some((id.clone(), form_id.clone())),
+            _ => None,
+        })
+        .expect("new form block exists");
+    let with_prompt_in_form = with_form
+        .apply(
+            Edit::SetFormPurpose {
+                form: form_id,
+                purpose: expected_text,
+            },
+            &mut ids,
+        )
+        .expect("form purpose can contain the generated text")
+        .document;
+    let resolved_block = with_prompt_in_form
+        .apply(
+            Edit::SetBlock {
+                block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                    .expect("placeholder block"),
+                value: NewBlock::Text {
+                    text: "A defined service offer".to_owned(),
+                },
+            },
+            &mut ids,
+        )
+        .expect("the original marked block can be resolved")
+        .document;
+
+    assert!(resolved_block
+        .generated_placeholders()
+        .iter()
+        .any(|marker| {
+            matches!(
+                &marker.target,
+                GeneratedPlaceholderTarget::Block { block_id, .. } if block_id == &form_block_id
+            )
+        }));
+    assert!(original.has_valid_generated_placeholder_transition(&resolved_block));
+}
+
+#[test]
+fn leadgen_and_legacy_documents_do_not_gain_unmarked_placeholders() {
+    let leadgen = DocumentV2::starter("funnel-leadgen", BlueprintId::LeadGen, ThemePreset::Minimal)
+        .expect("LeadGen starter");
+    assert!(leadgen.generated_placeholders().is_empty());
+    assert!(!std::str::from_utf8(decode(MINIMAL).canonical_bytes())
+        .expect("canonical fixture")
+        .contains("generated_placeholders"));
 }
 
 #[test]

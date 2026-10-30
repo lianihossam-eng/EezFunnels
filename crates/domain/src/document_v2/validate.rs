@@ -9,6 +9,7 @@ use super::model::{
     FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
     FormSubmissionValue, FormV2, PageId, TextPresentation, ValidatedFormSubmission,
 };
+use super::placeholders::target_contains_text;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DocumentIndex {
@@ -262,6 +263,27 @@ pub(crate) fn validate_data(
     }
 
     validate_forms_and_graph(data, &page_ids)?;
+    validate_generated_placeholders(data)?;
+    Ok(())
+}
+
+fn validate_generated_placeholders(data: &DocumentData) -> Result<(), DocumentError> {
+    let mut seen = BTreeSet::new();
+    for marker in &data.generated_placeholders {
+        if marker.expected_text.is_empty() || marker.expected_text.len() > 8192 {
+            return Err(DocumentError::at(
+                "validation/generated_placeholder_invalid",
+                "generated_placeholders",
+            ));
+        }
+        let is_targeted_text = target_contains_text(data, &marker.target, &marker.expected_text);
+        if !is_targeted_text || !seen.insert(marker.clone()) {
+            return Err(DocumentError::at(
+                "validation/generated_placeholder_invalid",
+                "generated_placeholders",
+            ));
+        }
+    }
     Ok(())
 }
 

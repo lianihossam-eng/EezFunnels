@@ -663,6 +663,8 @@ pub(crate) fn apply_editor_changes(
         .collect();
     edited.snapshot.schema_version = 1;
     edited.snapshot.contents = edited.contents.clone();
+    edited.snapshot.generated_placeholders =
+        super::reconcile_v1_generated_placeholders(&source.snapshot, &edited.snapshot);
     edited.theme = theme;
     edited.revision = revision;
     Ok(edited)
@@ -934,6 +936,7 @@ pub(crate) fn encode_snapshot(snapshot: &SnapshotData) -> Result<String, FunnelC
             theme_id: snapshot.theme_id,
             sections: snapshot.sections.clone(),
             contents: snapshot.contents.clone(),
+            generated_placeholders: snapshot.generated_placeholders.clone(),
         })
     } else {
         serde_json::to_string(&FunnelSnapshotV2 {
@@ -944,6 +947,7 @@ pub(crate) fn encode_snapshot(snapshot: &SnapshotData) -> Result<String, FunnelC
             sections: snapshot.sections.clone(),
             contents: snapshot.contents.clone(),
             theme_overrides: snapshot.theme_overrides.clone(),
+            generated_placeholders: snapshot.generated_placeholders.clone(),
         })
     }
     .map_err(|_| FunnelCommandError::Internal)?;

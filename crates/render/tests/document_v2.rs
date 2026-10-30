@@ -11,12 +11,20 @@ use eez_render::document_v2::{
 };
 
 fn document() -> DocumentV2 {
-    DocumentV2::starter(
+    let starter = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Tripwire,
         eez_domain::ThemePreset::Minimal,
     )
-    .expect("valid V2 starter")
+    .expect("valid V2 starter");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(starter.canonical_bytes()).expect("canonical document JSON");
+    value["generated_placeholders"] = serde_json::json!([]);
+    DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("historical fixture serialization"),
+        "funnel-01",
+    )
+    .expect("valid markerless historical document")
 }
 
 fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String {

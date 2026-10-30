@@ -873,6 +873,24 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                             }
                         }
                     }
+                    if dirty {
+                        p { class: "editor-publication-help", "Save the draft to check its publication readiness." }
+                    } else if let Some(readiness) = view.publication_readiness.as_ref().filter(|readiness| readiness.revision_id == view.base_revision_id) {
+                        if !readiness.findings.is_empty() {
+                            ul { class: "editor-readiness-findings", "aria-label": "Publication readiness findings",
+                                for finding in &readiness.findings {
+                                    li {
+                                        class: if finding.severity == PublicationReadinessSeverity::Blocking { "editor-readiness-blocker" } else { "editor-readiness-warning" },
+                                        strong { if finding.severity == PublicationReadinessSeverity::Blocking { "Must fix" } else { "Suggestion" } }
+                                        p { "{finding.message()}" }
+                                        code { "{finding.target_label()}" }
+                                    }
+                                }
+                            }
+                        }
+                    } else if view.publication_readiness.is_some() {
+                        p { class: "editor-publication-help", role: "status", "Checking publication readiness for this saved revision…" }
+                    }
                     if let Some(status) = view.publication_status.as_ref() {
                         p { class: "editor-publication-status", role: "status", "aria-live": "polite", "aria-atomic": "true", "{status}" }
                     }
