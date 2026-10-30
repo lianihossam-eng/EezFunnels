@@ -1877,6 +1877,7 @@ h1 {
 
 .webhook-delivery-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
   margin: 0 0 1.5rem;
   padding: 1.25rem;
@@ -2719,6 +2720,14 @@ h1 {
 }
 
 @media (max-width: 680px) {
+  .webhook-delivery-heading {
+    flex-direction: column;
+  }
+
+  .webhook-delivery-badge {
+    align-self: flex-start;
+  }
+
   .submission-toolbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
