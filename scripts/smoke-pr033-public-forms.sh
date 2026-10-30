@@ -13,6 +13,7 @@ python3 "$repo_root/scripts/test-pr067-interaction-migration.py"
 python3 "$repo_root/scripts/test-pr069-interaction-report-query.py"
 python3 "$repo_root/scripts/test-pub007-migration.py"
 python3 "$repo_root/scripts/test-pub008-migration.py"
+python3 "$repo_root/scripts/test-pub009-migration.py"
 
 python3 - "$repo_root" <<'PY'
 import concurrent.futures
@@ -45,7 +46,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
     persist = state / "persist"
     interaction_env_file = state / "interaction.env"
     interaction_env_file.write_text(
-        f"INTERACTION_REPLAY_KEY={secrets.token_hex(32)}\n", encoding="utf-8"
+        f"INTERACTION_REPLAY_KEY={secrets.token_hex(32)}\n"
+        f"WEBHOOK_SIGNING_SECRET={secrets.token_hex(32)}\n",
+        encoding="utf-8",
     )
     interaction_env_file.chmod(0o600)
     subprocess.run(
@@ -1625,8 +1628,33 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             text=True,
             timeout=30,
         )
+        unknown_cron_status, unknown_cron_body, _ = request(
+            "GET", "/__scheduled?cron=0+3+*+*+*"
+        )
+        assert unknown_cron_status == 200, unknown_cron_body
+        minute_status, minute_body, _ = request(
+            "GET", "/__scheduled?cron=%2A+%2A+%2A+%2A+%2A"
+        )
+        assert minute_status == 200, minute_body
+        before_cleanup_query = subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--json", "--command",
+                "SELECT (SELECT COUNT(*) FROM public_form_submissions) AS submissions, (SELECT COUNT(*) FROM public_interaction_events) AS interaction_events",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        before_cleanup = find_mapping(json.loads(before_cleanup_query), "submissions")
+        assert before_cleanup is not None, before_cleanup_query
+        assert before_cleanup["submissions"] > 0, before_cleanup
+        assert before_cleanup["interaction_events"] > 0, before_cleanup
+
         cleanup_status, cleanup_body, _ = request(
-            "GET", "/__scheduled?cron=%2A+%2F15+*+*+*+*"
+            "GET", "/__scheduled?cron=%2A%2F15+%2A+%2A+%2A+%2A"
         )
         assert cleanup_status == 200, cleanup_body
         cleanup_query = subprocess.run(
@@ -2750,6 +2778,25 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "markers",
         )["markers"] == 23
 
+        delivery_cron_status, delivery_cron_body, _ = request(
+            "GET", "/__scheduled?cron=%2A+%2A+%2A+%2A+%2A"
+        )
+        assert delivery_cron_status == 200, delivery_cron_body
+        invalid_destination_result = d1_query(
+            "SELECT COUNT(*) AS terminal_tasks, MIN(state.status) AS status, "
+            "MAX(state.attempt_count) AS attempts, MIN(state.last_outcome_code) AS outcome "
+            "FROM public_submission_delivery_outbox AS task "
+            "JOIN public_submission_delivery_state AS state ON state.task_id = task.task_id "
+            f"WHERE task.funnel_id = {sql_quote(funnel_id)}",
+            "terminal_tasks",
+        )
+        assert invalid_destination_result == {
+            "terminal_tasks": 2,
+            "status": "failed",
+            "attempts": 0,
+            "outcome": "invalid_destination",
+        }, invalid_destination_result
+
         log.close()
         worker_log = log_path.read_text(encoding="utf-8")
         assert "ada@example.test" not in worker_log, worker_log
@@ -2806,3 +2853,5 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             )
             raise RuntimeError(f"Local Worker exited with status {worker.returncode}")
 PY
+
+node "$repo_root/scripts/smoke-pub009-webhook.cjs"

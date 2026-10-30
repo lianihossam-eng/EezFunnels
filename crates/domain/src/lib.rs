@@ -13,6 +13,7 @@ pub mod form_submission_status;
 pub mod interaction_event;
 pub mod interaction_report;
 pub mod service_brief;
+pub mod webhook_delivery;
 
 pub use form_completions::FormCompletionPeriod;
 pub use form_submission_channel::FormSubmissionChannel;
