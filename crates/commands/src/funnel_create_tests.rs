@@ -73,7 +73,7 @@ fn tripwire_creation_prepares_a_renderable_three_section_initial_revision() {
 }
 
 #[test]
-fn v2_create_prepares_a_closed_typed_starter_with_renderer_v3_manifest() {
+fn v2_create_preserves_omitted_language_and_prepares_current_renderer_manifest() {
     let command =
         FunnelCreateCommandV2::from_json(r#"{"name":"A typed offer","blueprint":"lead_gen"}"#)
             .expect("valid V2 create command");
@@ -88,6 +88,7 @@ fn v2_create_prepares_a_closed_typed_starter_with_renderer_v3_manifest() {
     assert_eq!(document["document_type"], "eezfunnel.funnel-document");
     assert_eq!(document["schema_version"], 2);
     assert_eq!(document["blueprint_id"], "lead_gen");
+    assert!(document.get("language").is_none());
     assert_eq!(document["pages"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         document["pages"][0]["sections"]
@@ -110,6 +111,32 @@ fn v2_create_prepares_a_closed_typed_starter_with_renderer_v3_manifest() {
     assert!(html.contains("Welcome to your new funnel"));
     assert!(html.contains("What makes this offer valuable"));
     assert!(html.contains("Take the next step today."));
+}
+
+#[test]
+fn v2_create_accepts_french_language_and_localizes_generated_public_copy() {
+    let command = FunnelCreateCommandV2::from_json(
+        r#"{"name":"Offre de service","blueprint":"lead_gen","language":"fr"}"#,
+    )
+    .expect("French create command");
+    let prepared = command
+        .prepare("funnel-fr", "revision-fr")
+        .expect("French funnel");
+    let document: Value =
+        serde_json::from_str(&prepared.revision().data_json).expect("canonical French document");
+
+    assert_eq!(document["language"], "fr");
+    assert_eq!(document["pages"][0]["title"], "Accueil");
+    let html = eez_render::document_v2::render_published(
+        prepared.revision().schema_version,
+        "funnel-fr",
+        "revision-fr",
+        &prepared.revision().data_json,
+        &prepared.revision().render_manifest_json,
+    )
+    .expect("French public page");
+    assert!(html.contains("<html lang=\"fr\">"));
+    assert!(html.contains("Bienvenue dans votre nouvel entonnoir"));
 }
 
 #[test]

@@ -1598,15 +1598,20 @@ async fn public_form_submission_response(
     .await;
     let success_location = match result {
         Ok(SubmitPublicFormOutcome::Accepted { success_location }) => success_location,
-        Ok(SubmitPublicFormOutcome::KeyReuseMismatch { current_page_slug }) => {
+        Ok(SubmitPublicFormOutcome::KeyReuseMismatch {
+            current_page_slug,
+            language,
+        }) => {
             if prefers_html {
                 let recovery_path =
                     public_form_recovery_path(route.funnel_slug, current_page_slug.as_deref());
-                return form_submission_html_error(
+                return form_submission_html_response(
                     StatusCode::CONFLICT,
-                    "Form response already used",
-                    "This form key is already tied to a different response. Reload the current form and enter your answers again.",
-                    Some(&recovery_path),
+                    eez_render::document_v2::render_form_error_page(
+                        language,
+                        eez_render::document_v2::FormErrorPageKind::KeyReuseMismatch,
+                        Some(&recovery_path),
+                    ),
                     &correlation_id,
                     None,
                 );
@@ -1664,15 +1669,20 @@ async fn public_form_submission_response(
             }
             return funnel_slug_not_found_response(&correlation_id);
         }
-        Err(SubmitPublicFormError::StaleRevision { current_page_slug }) => {
+        Err(SubmitPublicFormError::StaleRevision {
+            current_page_slug,
+            language,
+        }) => {
             if prefers_html {
                 let recovery_path =
                     public_form_recovery_path(route.funnel_slug, current_page_slug.as_deref());
-                return form_submission_html_error(
+                return form_submission_html_response(
                     StatusCode::CONFLICT,
-                    "This form has changed",
-                    "Reload the current page and review its information before sending your request again.",
-                    Some(&recovery_path),
+                    eez_render::document_v2::render_form_error_page(
+                        language,
+                        eez_render::document_v2::FormErrorPageKind::StaleRevision,
+                        Some(&recovery_path),
+                    ),
                     &correlation_id,
                     None,
                 );

@@ -4,6 +4,7 @@
   const script = document.currentScript;
   const page = document.querySelector("main#funnel");
   if (!script || !page) return;
+  const french = document.documentElement.lang === "fr";
 
   const funnelId = script.dataset.funnelId;
   const revisionId = script.dataset.revisionId;
@@ -45,22 +46,26 @@
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.className = "eezfunnel-privacy-trigger";
-  trigger.textContent = "Privacy choices";
+  trigger.textContent = french ? "Choix de confidentialité" : "Privacy choices";
   const panel = document.createElement("section");
   panel.className = "eezfunnel-privacy-panel";
-  panel.setAttribute("aria-label", "Interaction measurement choices");
+  panel.setAttribute(
+    "aria-label",
+    french ? "Choix de mesure des interactions" : "Interaction measurement choices",
+  );
   panel.setAttribute("role", "region");
   const description = document.createElement("p");
-  description.textContent =
-    "Allow interaction measurement? We count published page and form interactions only. We do not store visitor or session IDs or form answers. Your choice is saved in this browser and can be changed at any time.";
+  description.textContent = french
+    ? "Autoriser la mesure des interactions ? Nous comptons uniquement les interactions avec les pages et formulaires publiés. Aucun identifiant de visiteur ou de session ni aucune réponse n’est conservé. Votre choix est enregistré dans ce navigateur et peut être modifié à tout moment."
+    : "Allow interaction measurement? We count published page and form interactions only. We do not store visitor or session IDs or form answers. Your choice is saved in this browser and can be changed at any time.";
   const actions = document.createElement("div");
   actions.className = "eezfunnel-privacy-actions";
   const allow = document.createElement("button");
   allow.type = "button";
-  allow.textContent = "Allow measurement";
+  allow.textContent = french ? "Autoriser la mesure" : "Allow measurement";
   const refuse = document.createElement("button");
   refuse.type = "button";
-  refuse.textContent = "No thanks";
+  refuse.textContent = french ? "Non merci" : "No thanks";
   actions.append(allow, refuse);
   panel.append(description, actions);
   controls.append(trigger, panel);

@@ -2,7 +2,8 @@ use super::orchestration::dispatch_v2_edit;
 use super::state::{DeterministicIds, V2EditorState};
 use dioxus::prelude::*;
 use eez_domain::document_v2::{
-    DocumentV2, Edit, FormField, FormResult, FormV2, NewFormField, PageId, PageV2, ValidationRange,
+    DocumentV2, Edit, FormField, FormPresentation, FormResult, FormV2, NewFormField, PageId,
+    PageV2, PublicLanguage, TextPresentation, ValidationRange,
 };
 
 #[cfg(feature = "browser")]
@@ -50,7 +51,7 @@ impl V2NewFormFieldKind {
         Self::ALL.into_iter().find(|item| item.id() == value)
     }
 
-    fn create(self, form: &FormV2) -> NewFormField {
+    fn create(self, form: &FormV2, language: PublicLanguage) -> NewFormField {
         let mut suffix = form.fields().len() + 1;
         let name = loop {
             let candidate = format!("field_{suffix}");
@@ -64,13 +65,18 @@ impl V2NewFormFieldKind {
             suffix += 1;
         };
         let label = match self {
-            Self::Text => "New text field",
-            Self::Email => "Email address",
-            Self::Phone => "Phone number",
-            Self::Checkbox => "Checkbox",
-            Self::Select => "Choose an option",
-        }
-        .to_owned();
+            Self::Text => {
+                super::public_default_text(language, "New text field", "Nouveau champ texte")
+            }
+            Self::Email => super::public_default_text(language, "Email address", "Adresse e-mail"),
+            Self::Phone => {
+                super::public_default_text(language, "Phone number", "Numéro de téléphone")
+            }
+            Self::Checkbox => super::public_default_text(language, "Checkbox", "Case à cocher"),
+            Self::Select => {
+                super::public_default_text(language, "Choose an option", "Choisissez une option")
+            }
+        };
         match self {
             Self::Text => NewFormField::Text {
                 name,
@@ -78,6 +84,7 @@ impl V2NewFormFieldKind {
                 help: None,
                 required: false,
                 validation: None,
+                presentation: TextPresentation::SingleLine,
             },
             Self::Email => NewFormField::Email {
                 name,
@@ -184,6 +191,14 @@ fn form_field_validation(field: &FormField) -> Option<&ValidationRange> {
 }
 
 #[cfg(feature = "browser")]
+fn form_field_presentation(field: &FormField) -> Option<TextPresentation> {
+    match field {
+        FormField::Text { presentation, .. } => Some(*presentation),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "browser")]
 fn form_field_validation_cap(field: &FormField) -> Option<u32> {
     match field {
         FormField::Text { .. } => Some(8192),
@@ -196,6 +211,17 @@ fn form_field_validation_cap(field: &FormField) -> Option<u32> {
 #[cfg(feature = "browser")]
 fn form_setting_key(form_id: &str, setting: &str) -> String {
     format!("form:{form_id}:setting:{setting}")
+}
+
+#[cfg(feature = "browser")]
+fn optional_form_presentation(
+    submit_label: Option<String>,
+    information_url: Option<String>,
+) -> Option<FormPresentation> {
+    (submit_label.is_some() || information_url.is_some()).then_some(FormPresentation {
+        submit_label,
+        information_url,
+    })
 }
 
 #[cfg(feature = "browser")]
@@ -336,6 +362,7 @@ fn validation_range_update(
             help,
             required,
             validation,
+            presentation: form_field_presentation(field).unwrap_or_default(),
         },
         FormField::Email { .. } => NewFormField::Email {
             name,
@@ -372,6 +399,7 @@ fn new_form_field_with_common(
             help,
             required,
             validation: validation.clone(),
+            presentation: form_field_presentation(field).unwrap_or_default(),
         },
         FormField::Email { validation, .. } => NewFormField::Email {
             name,
@@ -404,6 +432,32 @@ fn new_form_field_with_common(
 }
 
 #[cfg(feature = "browser")]
+fn new_form_field_with_text_presentation(
+    field: &FormField,
+    presentation: TextPresentation,
+) -> Option<NewFormField> {
+    let FormField::Text {
+        name,
+        label,
+        help,
+        required,
+        validation,
+        ..
+    } = field
+    else {
+        return None;
+    };
+    Some(NewFormField::Text {
+        name: name.clone(),
+        label: label.clone(),
+        help: help.clone(),
+        required: *required,
+        validation: validation.clone(),
+        presentation,
+    })
+}
+
+#[cfg(feature = "browser")]
 fn new_form_field_as_kind(field: &FormField, kind: V2NewFormFieldKind) -> NewFormField {
     let name = form_field_name(field).to_owned();
     let label = form_field_label(field).to_owned();
@@ -416,6 +470,7 @@ fn new_form_field_as_kind(field: &FormField, kind: V2NewFormFieldKind) -> NewFor
             help,
             required,
             validation: None,
+            presentation: form_field_presentation(field).unwrap_or_default(),
         },
         V2NewFormFieldKind::Email => NewFormField::Email {
             name,
@@ -527,6 +582,10 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
     let marketing_enabled = marketing_copy.is_some();
     let marketing_copy_for_toggle = marketing_copy.clone();
     let document = state.with(|state| state.document.clone());
+    let language = document
+        .as_ref()
+        .map(DocumentV2::public_language)
+        .unwrap_or(PublicLanguage::English);
     let pages = document
         .as_ref()
         .map(|document| form_success_pages(document, &form))
@@ -584,11 +643,127 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
     let marketing_copy_key_for_input = marketing_copy_key.clone();
     let marketing_copy_key_for_change = marketing_copy_key.clone();
     let fields = form.fields().to_vec();
+    let current_presentation = form.presentation().cloned().unwrap_or(FormPresentation {
+        submit_label: None,
+        information_url: None,
+    });
+    let submit_label_key = form_setting_key(form_id.as_str(), "submit-label");
+    let submit_label_value = input_value(
+        state,
+        &submit_label_key,
+        current_presentation
+            .submit_label
+            .as_deref()
+            .unwrap_or_default(),
+    );
+    let submit_label_error = input_error(state, &submit_label_key);
+    let submit_label_error_message = submit_label_error.unwrap_or_default();
+    let submit_label_invalid = !submit_label_error_message.is_empty();
+    let information_url_key = form_setting_key(form_id.as_str(), "information-url");
+    let information_url_value = input_value(
+        state,
+        &information_url_key,
+        current_presentation
+            .information_url
+            .as_deref()
+            .unwrap_or_default(),
+    );
+    let information_url_error = input_error(state, &information_url_key);
+    let information_url_error_message = information_url_error.unwrap_or_default();
+    let information_url_invalid = !information_url_error_message.is_empty();
+    let submit_label_key_for_input = submit_label_key.clone();
+    let submit_label_key_for_change = submit_label_key.clone();
+    let information_url_key_for_input = information_url_key.clone();
+    let information_url_key_for_change = information_url_key.clone();
+    let form_for_submit_label = form_id.clone();
+    let form_for_information_url = form_id.clone();
+    let information_url_for_submit_label = current_presentation.information_url.clone();
+    let submit_label_for_information_url = current_presentation.submit_label.clone();
 
     rsx! {
         fieldset { class: "editor-form-builder", "aria-label": "Form settings",
             legend { "Form settings" }
             p { class: "editor-keyboard-help", "Submission purpose, required request consent, and optional marketing consent are stored separately." }
+            label { class: "editor-setting-control",
+                "Submit button label (optional)"
+                input {
+                    id: "{form_id_text}-submit-label",
+                    value: "{submit_label_value}",
+                    maxlength: "120",
+                    disabled: locked,
+                    "aria-invalid": "{submit_label_invalid}",
+                    "aria-describedby": "{form_id_text}-submit-label-error",
+                    oninput: move |event| {
+                        let value = event.value();
+                        if value.len() <= 120 {
+                            update_form_input(state, submit_label_key_for_input.clone(), value);
+                        } else {
+                            reject_form_input(state, submit_label_key_for_input.clone(), value, "Use 120 characters or fewer.");
+                        }
+                    },
+                    onchange: move |event| {
+                        let value = event.value();
+                        if value.len() <= 120 && (value.is_empty() || !value.trim().is_empty()) {
+                            accept_form_input(state, submit_label_key_for_change.clone());
+                            dispatch_v2_edit(state, Edit::SetFormPresentation {
+                                form: form_for_submit_label.clone(),
+                                presentation: optional_form_presentation(
+                                    (!value.is_empty()).then_some(value),
+                                    information_url_for_submit_label.clone(),
+                                ),
+                            });
+                        } else if value.len() > 120 {
+                            reject_form_input(state, submit_label_key_for_change.clone(), value, "Use 120 characters or fewer.");
+                        } else {
+                            reject_form_input(state, submit_label_key_for_change.clone(), value, "Enter visible button text, or clear the optional label.");
+                        }
+                    },
+                }
+                span { id: "{form_id_text}-submit-label-error", class: "editor-form-input-error", role: "alert", aria_live: "polite", "{submit_label_error_message}" }
+            }
+            label { class: "editor-setting-control",
+                "Information link URL (optional)"
+                input {
+                    id: "{form_id_text}-information-url",
+                    r#type: "url",
+                    value: "{information_url_value}",
+                    maxlength: "2048",
+                    disabled: locked,
+                    "aria-invalid": "{information_url_invalid}",
+                    "aria-describedby": "{form_id_text}-information-url-error",
+                    oninput: move |event| {
+                        let value = event.value();
+                        if value.len() <= 2048 {
+                            update_form_input(state, information_url_key_for_input.clone(), value);
+                        } else {
+                            reject_form_input(state, information_url_key_for_input.clone(), value, "Use an HTTPS URL up to 2,048 characters.");
+                        }
+                    },
+                    onchange: move |event| {
+                        let value = event.value();
+                        let normalized_url = if value.is_empty() {
+                            Some(String::new())
+                        } else if value.len() <= 2048 {
+                            eez_domain::document_v2::canonical_information_url(&value).ok()
+                        } else {
+                            None
+                        };
+                        if let Some(normalized_url) = normalized_url {
+                            accept_form_input(state, information_url_key_for_change.clone());
+                            dispatch_v2_edit(state, Edit::SetFormPresentation {
+                                form: form_for_information_url.clone(),
+                                presentation: optional_form_presentation(
+                                    submit_label_for_information_url.clone(),
+                                    (!normalized_url.is_empty()).then_some(normalized_url),
+                                ),
+                            });
+                        } else {
+                            reject_form_input(state, information_url_key_for_change.clone(), value, "Enter an HTTPS URL up to 2,048 characters.");
+                        }
+                    },
+                }
+                span { id: "{form_id_text}-information-url-error", class: "editor-form-input-error", role: "alert", aria_live: "polite", "{information_url_error_message}" }
+            }
             label { class: "editor-setting-control",
                 "Submission purpose"
                 textarea {
@@ -634,7 +809,11 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                             dispatch_v2_edit(state, Edit::SetFormResult {
                                 form: form_id_for_result_mode.clone(),
                                 result: FormResult::Inline {
-                                    message: "Thanks for reaching out. We’ll be in touch soon.".to_owned(),
+                                    message: super::public_default_text(
+                                        language,
+                                        "Thanks for reaching out. We’ll be in touch soon.",
+                                        "Merci, votre demande a bien été reçue.",
+                                    ),
                                 },
                             });
                         } else if let Ok(page_id) = PageId::parse(selected) {
@@ -736,7 +915,13 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                     disabled: locked,
                     onchange: move |event| {
                         let value = if event.checked() {
-                            Some(marketing_copy_for_toggle.clone().unwrap_or_else(|| "Send me occasional product updates.".to_owned()))
+                            Some(marketing_copy_for_toggle.clone().unwrap_or_else(|| {
+                                super::public_default_text(
+                                    language,
+                                    "Send me occasional product updates.",
+                                    "Je souhaite recevoir ponctuellement des nouvelles du produit.",
+                                )
+                            }))
                         } else {
                             None
                         };
@@ -840,6 +1025,12 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                         let min_error_id = format!("{min_id}-error");
                         let max_error_id = format!("{max_id}-error");
                         let current_required = form_field_required(field);
+                        let current_text_presentation = form_field_presentation(field);
+                        let text_presentation_id = format!(
+                            "form-{}-field-{}-presentation",
+                            form_id.as_str(),
+                            field_name_id
+                        );
                         let base_kind = form_field_kind_id(field).to_owned();
                         let base_kind_for_type = base_kind.clone();
                         let current_kind = pending_field_type(state, &type_key).unwrap_or(base_kind);
@@ -868,6 +1059,7 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                         let field_for_label = field.clone();
                         let field_for_help = field.clone();
                         let field_for_required = field.clone();
+                        let field_for_presentation = field.clone();
                         let field_for_options = field.clone();
                         let field_for_min = field.clone();
                         let field_for_min_input = field.clone();
@@ -878,6 +1070,7 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                         let form_for_label = form_id.clone();
                         let form_for_help = form_id.clone();
                         let form_for_required = form_id.clone();
+                        let form_for_presentation = form_id.clone();
                         let form_for_options = form_id.clone();
                         let form_for_min = form_id.clone();
                         let form_for_max = form_id.clone();
@@ -885,6 +1078,7 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                         let id_for_label = field_id.clone();
                         let id_for_help = field_id.clone();
                         let id_for_required = field_id.clone();
+                        let id_for_presentation = field_id.clone();
                         let id_for_type_apply = field_id.clone();
                         let id_for_options = field_id.clone();
                         let id_for_min = field_id.clone();
@@ -927,11 +1121,22 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                         let loses_dropdown_options = pending_kind_value.is_some()
                             && form_field_options(field).is_some()
                             && pending_kind_value != Some(V2NewFormFieldKind::Select);
-                        let conversion_warning = match (loses_length_rules, loses_dropdown_options) {
-                            (true, true) => Some("Applying this change clears the saved length rules and dropdown options."),
-                            (true, false) => Some("Applying this change clears the saved length rules."),
-                            (false, true) => Some("Applying this change clears the saved dropdown options."),
-                            (false, false) => None,
+                        let loses_multiline = current_text_presentation
+                            == Some(TextPresentation::Multiline)
+                            && pending_kind_value.is_some_and(|kind| kind != V2NewFormFieldKind::Text);
+                        let conversion_warning = match (
+                            loses_length_rules,
+                            loses_dropdown_options,
+                            loses_multiline,
+                        ) {
+                            (true, true, true) => Some("Applying this change clears the saved length rules, dropdown options, and multiline setting."),
+                            (true, true, false) => Some("Applying this change clears the saved length rules and dropdown options."),
+                            (true, false, true) => Some("Applying this change clears the saved length rules and multiline setting."),
+                            (false, true, true) => Some("Applying this change clears the saved dropdown options and multiline setting."),
+                            (true, false, false) => Some("Applying this change clears the saved length rules."),
+                            (false, true, false) => Some("Applying this change clears the saved dropdown options."),
+                            (false, false, true) => Some("Applying this change clears the saved multiline setting."),
+                            (false, false, false) => None,
                         };
                         rsx! {
                             div { class: "editor-form-field-row", role: "listitem",
@@ -1122,6 +1327,34 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                                     }
                                     "Required"
                                 }
+                                if let Some(current_presentation) = current_text_presentation {
+                                    label { class: "editor-setting-control", r#for: "{text_presentation_id}",
+                                        "Text presentation"
+                                        select {
+                                            id: "{text_presentation_id}",
+                                            value: if current_presentation == TextPresentation::Multiline { "multiline" } else { "single_line" },
+                                            disabled: locked,
+                                            onchange: move |event| {
+                                                let next = match event.value().as_str() {
+                                                    "multiline" => Some(TextPresentation::Multiline),
+                                                    "single_line" => Some(TextPresentation::SingleLine),
+                                                    _ => None,
+                                                };
+                                                if let Some(next) = next {
+                                                    if let Some(value) = new_form_field_with_text_presentation(&field_for_presentation, next) {
+                                                        dispatch_v2_edit(state, Edit::SetFormField {
+                                                            form: form_for_presentation.clone(),
+                                                            field: id_for_presentation.clone(),
+                                                            value,
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                            option { value: "single_line", "Single line" }
+                                            option { value: "multiline", "Multiple lines" }
+                                        }
+                                    }
+                                }
                                 if form_field_validation_cap(field).is_some() {
                                     div { class: "editor-form-length-row",
                                         label { class: "editor-setting-control",
@@ -1300,7 +1533,7 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                                 onclick: move |_| dispatch_v2_edit(state, Edit::AddFormField {
                                     form: form_for_add.clone(),
                                     after: field.clone(),
-                                    field: kind.create(&form_for_field),
+                                            field: kind.create(&form_for_field, language),
                                 }),
                                 "Add {kind.label().to_lowercase()} field"
                             }

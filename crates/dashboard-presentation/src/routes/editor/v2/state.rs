@@ -212,20 +212,27 @@ impl V2NewBlockKind {
         Self::ALL.into_iter().find(|item| item.id() == value)
     }
 
-    pub(super) fn create(self) -> NewBlock {
+    pub(super) fn create(self, language: PublicLanguage) -> NewBlock {
         match self {
             Self::Heading => NewBlock::Heading {
                 level: 2,
-                text: "New heading".to_owned(),
+                text: public_default_text(language, "New heading", "Nouveau titre"),
             },
             Self::Text => NewBlock::Text {
-                text: "Add your text here.".to_owned(),
+                text: public_default_text(
+                    language,
+                    "Add your text here.",
+                    "Ajoutez votre texte ici.",
+                ),
             },
             Self::List => NewBlock::List {
-                items: vec!["First item".to_owned(), "Second item".to_owned()],
+                items: vec![
+                    public_default_text(language, "First item", "Premier élément"),
+                    public_default_text(language, "Second item", "Deuxième élément"),
+                ],
             },
             Self::Button => NewBlock::Button {
-                label: "Continue".to_owned(),
+                label: public_default_text(language, "Continue", "Continuer"),
                 action: ActionV2::ExternalHttps {
                     url: "https://example.invalid".to_owned(),
                 },
@@ -561,7 +568,7 @@ impl V2EditorState {
                         return false;
                     }
                     match setting {
-                        "purpose" | "request-consent" => true,
+                        "purpose" | "request-consent" | "submit-label" | "information-url" => true,
                         "result-message" => matches!(form.result(), FormResult::Inline { .. }),
                         "marketing-copy" => form.marketing_opt_in().is_some(),
                         _ => false,
@@ -593,6 +600,7 @@ impl V2EditorState {
                                 | FormField::Email { .. }
                                 | FormField::Phone { .. }
                         ),
+                        "presentation" => matches!(field, FormField::Text { .. }),
                         "type" => allow_type_setting,
                         _ => false,
                     }
@@ -1209,7 +1217,7 @@ impl V2EditorState {
             FocusTarget::Section(section) => {
                 self.selected_section = Some(section.as_str().to_owned())
             }
-            FocusTarget::Block(_) => {}
+            FocusTarget::Block(_) | FocusTarget::None => {}
         }
     }
 }
@@ -1413,6 +1421,40 @@ mod tests {
     }
 
     #[test]
+    fn changing_public_language_preserves_the_selected_page_and_its_pending_settings() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(
+                document_with_secondary_page(),
+                Some(stage_capacity()),
+            )),
+        );
+        let _ = state.select_page("page-thanks");
+        state.update_page_input(
+            "page-thanks",
+            "title",
+            "Confirmation in progress".to_owned(),
+        );
+
+        let capture = state
+            .apply_local_edit(
+                Edit::SetPublicLanguage {
+                    language: Some(eez_domain::document_v2::PublicLanguage::French),
+                },
+                "operation-language-change".to_owned(),
+            )
+            .expect("language change applies without focusing a page");
+
+        assert_eq!(state.selected_page, "page-thanks");
+        assert_eq!(capture.page_id, "page-thanks");
+        assert_eq!(state.page_input_page.as_deref(), Some("page-thanks"));
+        assert_eq!(state.page_title_input, "Confirmation in progress");
+        assert!(state.has_uncommitted_editor_inputs());
+    }
+
+    #[test]
     fn unresolved_form_inputs_block_save_publish_and_history_actions() {
         let mut state = V2EditorState::for_route("funnel-a".to_owned());
         state.finish_load(
@@ -1584,6 +1626,7 @@ mod tests {
                         help: None,
                         required: false,
                         validation: None,
+                        presentation: eez_domain::document_v2::TextPresentation::SingleLine,
                     },
                 },
                 "convert-select-to-text".to_owned(),
@@ -1922,7 +1965,9 @@ mod tests {
 
     #[test]
     fn new_button_defaults_to_an_editable_reserved_external_url() {
-        let NewBlock::Button { action, .. } = V2NewBlockKind::Button.create() else {
+        let NewBlock::Button { action, .. } =
+            V2NewBlockKind::Button.create(PublicLanguage::English)
+        else {
             panic!("button kind creates a button block");
         };
 
@@ -1932,6 +1977,31 @@ mod tests {
                 url: "https://example.invalid".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn new_block_copy_follows_the_public_language() {
+        let NewBlock::Heading { text, .. } = V2NewBlockKind::Heading.create(PublicLanguage::French)
+        else {
+            panic!("heading kind creates a heading block");
+        };
+        assert_eq!(text, "Nouveau titre");
+
+        let NewBlock::Text { text } = V2NewBlockKind::Text.create(PublicLanguage::French) else {
+            panic!("text kind creates a text block");
+        };
+        assert_eq!(text, "Ajoutez votre texte ici.");
+
+        let NewBlock::List { items } = V2NewBlockKind::List.create(PublicLanguage::French) else {
+            panic!("list kind creates a list block");
+        };
+        assert_eq!(items, ["Premier élément", "Deuxième élément"]);
+
+        let NewBlock::Button { label, .. } = V2NewBlockKind::Button.create(PublicLanguage::French)
+        else {
+            panic!("button kind creates a button block");
+        };
+        assert_eq!(label, "Continuer");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use url::Url;
 use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
     FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
-    FormSubmissionValue, FormV2, PageId, ValidatedFormSubmission,
+    FormSubmissionValue, FormV2, PageId, TextPresentation, ValidatedFormSubmission,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -390,12 +390,12 @@ fn validate_block(block: &mut BlockV2) -> Result<(), DocumentError> {
 }
 
 fn validate_forms_and_graph(
-    data: &DocumentData,
+    data: &mut DocumentData,
     pages: &BTreeMap<PageId, usize>,
 ) -> Result<(), DocumentError> {
     let mut forms = BTreeMap::new();
     let mut field_ids = BTreeSet::new();
-    for (form_index, form) in data.forms.iter().enumerate() {
+    for (form_index, form) in data.forms.iter_mut().enumerate() {
         if forms.insert(form.id.clone(), form_index).is_some() {
             return Err(DocumentError::at(
                 "validation/form_id_duplicate",
@@ -409,6 +409,26 @@ fn validate_forms_and_graph(
             ));
         }
         validate_nonempty_text(&form.purpose, 1024, "forms.purpose")?;
+        if let Some(presentation) = &mut form.presentation {
+            if presentation.submit_label.is_none() && presentation.information_url.is_none() {
+                return Err(DocumentError::at(
+                    "validation/form_presentation_empty",
+                    "forms.presentation",
+                ));
+            }
+            if let Some(label) = &presentation.submit_label {
+                if label.trim().is_empty() {
+                    return Err(DocumentError::at(
+                        "validation/form_submit_label_empty",
+                        "forms.presentation.submit_label",
+                    ));
+                }
+                validate_nonempty_text(label, 120, "forms.presentation.submit_label")?;
+            }
+            if let Some(url) = &mut presentation.information_url {
+                *url = canonical_information_url(url)?;
+            }
+        }
         validate_consent_copy(
             form.request_consent.copy_version.as_str(),
             &form.request_consent.copy,
@@ -716,12 +736,26 @@ pub fn validate_form_submission(
                     }
                     continue;
                 };
-                if value.chars().count() <= field.max_value_length() as usize
-                    && !value.chars().any(char::is_control)
-                {
-                    recoverable_values.insert(name.to_owned(), value.clone());
+                let multiline = matches!(
+                    field,
+                    FormField::Text {
+                        presentation: TextPresentation::Multiline,
+                        ..
+                    }
+                );
+                let normalized_value = normalize_form_text_value(value, multiline);
+                if let Some(normalized) = normalized_value.as_ref().filter(|normalized| {
+                    normalized.chars().count() <= field.max_value_length() as usize
+                }) {
+                    recoverable_values.insert(name.to_owned(), normalized.clone());
                 }
-                if *required && value.trim().is_empty() {
+                if *required
+                    && normalized_value
+                        .as_deref()
+                        .unwrap_or(value)
+                        .trim()
+                        .is_empty()
+                {
                     push_field_submission_issue(
                         &mut issues,
                         field,
@@ -729,7 +763,21 @@ pub fn validate_form_submission(
                     );
                     continue;
                 }
-                if !valid_form_text_value(value, *required, validation, field.max_value_length()) {
+                let Some(normalized_value) = normalized_value else {
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::InvalidValue,
+                    );
+                    continue;
+                };
+                if !valid_form_text_value(
+                    &normalized_value,
+                    *required,
+                    validation,
+                    field.max_value_length(),
+                    multiline,
+                ) {
                     push_field_submission_issue(
                         &mut issues,
                         field,
@@ -737,8 +785,10 @@ pub fn validate_form_submission(
                     );
                     continue;
                 }
-                if !value.is_empty() {
-                    if matches!(field, FormField::Email { .. }) && !valid_submitted_email(value) {
+                if !normalized_value.is_empty() {
+                    if matches!(field, FormField::Email { .. })
+                        && !valid_submitted_email(&normalized_value)
+                    {
                         push_field_submission_issue(
                             &mut issues,
                             field,
@@ -746,7 +796,9 @@ pub fn validate_form_submission(
                         );
                         continue;
                     }
-                    if matches!(field, FormField::Phone { .. }) && !valid_submitted_phone(value) {
+                    if matches!(field, FormField::Phone { .. })
+                        && !valid_submitted_phone(&normalized_value)
+                    {
                         push_field_submission_issue(
                             &mut issues,
                             field,
@@ -755,7 +807,7 @@ pub fn validate_form_submission(
                         continue;
                     }
                 }
-                values.insert(name.to_owned(), FormSubmissionValue::Text(value.clone()));
+                values.insert(name.to_owned(), FormSubmissionValue::Text(normalized_value));
             }
             FormField::Checkbox { required, .. } => {
                 let checked = match submitted_fields.get(name).map(String::as_str) {
@@ -853,8 +905,12 @@ fn valid_form_text_value(
     required: bool,
     validation: Option<&super::ValidationRange>,
     maximum: u32,
+    allow_line_feed: bool,
 ) -> bool {
-    if value.chars().any(char::is_control) {
+    if value
+        .chars()
+        .any(|character| character.is_control() && !(allow_line_feed && character == '\n'))
+    {
         return false;
     }
     if required && value.trim().is_empty() {
@@ -875,6 +931,18 @@ fn valid_form_text_value(
                 .max_length
                 .is_none_or(|maximum| length <= maximum as usize)
     })
+}
+
+fn normalize_form_text_value(value: &str, multiline: bool) -> Option<String> {
+    let normalized = if multiline {
+        value.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        value.to_owned()
+    };
+    (!normalized
+        .chars()
+        .any(|character| character.is_control() && !(multiline && character == '\n')))
+    .then_some(normalized)
 }
 
 fn valid_submitted_email(value: &str) -> bool {
@@ -952,11 +1020,16 @@ fn valid_field_name(value: &str) -> bool {
 }
 
 fn canonical_https_url(value: &str) -> Result<String, DocumentError> {
+    canonical_https_url_at(value, "blocks.action.url")
+}
+
+pub fn canonical_information_url(value: &str) -> Result<String, DocumentError> {
+    canonical_https_url_at(value, "forms.presentation.information_url")
+}
+
+fn canonical_https_url_at(value: &str, path: &str) -> Result<String, DocumentError> {
     if value.len() > 2048 {
-        return Err(DocumentError::at(
-            "validation/url_invalid",
-            "blocks.action.url",
-        ));
+        return Err(DocumentError::at("validation/url_invalid", path));
     }
     let bytes = value.as_bytes();
     if value.chars().any(|character| {
@@ -964,31 +1037,22 @@ fn canonical_https_url(value: &str) -> Result<String, DocumentError> {
             || character.is_whitespace()
             || matches!(character, '"' | '\'' | '<' | '>' | '\\')
     }) {
-        return Err(DocumentError::at(
-            "validation/url_invalid",
-            "blocks.action.url",
-        ));
+        return Err(DocumentError::at("validation/url_invalid", path));
     }
     if !has_https_scheme_and_authority(value) || !valid_percent_escapes(bytes) {
-        return Err(DocumentError::at(
-            "validation/url_invalid",
-            "blocks.action.url",
-        ));
+        return Err(DocumentError::at("validation/url_invalid", path));
     }
-    let parsed = Url::parse(value)
-        .map_err(|_| DocumentError::at("validation/url_invalid", "blocks.action.url"))?;
-    let authority = raw_authority(value)
-        .ok_or_else(|| DocumentError::at("validation/url_invalid", "blocks.action.url"))?;
+    let parsed =
+        Url::parse(value).map_err(|_| DocumentError::at("validation/url_invalid", path))?;
+    let authority =
+        raw_authority(value).ok_or_else(|| DocumentError::at("validation/url_invalid", path))?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none_or(str::is_empty)
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || authority.contains('@')
     {
-        return Err(DocumentError::at(
-            "validation/url_invalid",
-            "blocks.action.url",
-        ));
+        return Err(DocumentError::at("validation/url_invalid", path));
     }
     Ok(parsed.to_string())
 }

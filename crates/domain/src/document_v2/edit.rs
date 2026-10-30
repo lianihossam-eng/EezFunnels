@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::model::{
     BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FieldId, FormField,
-    FormId, FormResult, FormV2, PageId, PageV2, SectionId, SectionKind, SectionV2, ValidationRange,
+    FormId, FormPresentation, FormResult, FormV2, PageId, PageV2, PublicLanguage, SectionId,
+    SectionKind, SectionV2, TextPresentation, ValidationRange,
 };
 use super::theme::ThemeOverrides;
 use crate::ThemePreset;
@@ -58,6 +59,8 @@ pub enum NewFormField {
         help: Option<String>,
         required: bool,
         validation: Option<ValidationRange>,
+        #[serde(default, skip_serializing_if = "TextPresentation::is_single_line")]
+        presentation: TextPresentation,
     },
     Email {
         name: String,
@@ -91,6 +94,9 @@ pub enum NewFormField {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
+    SetPublicLanguage {
+        language: Option<PublicLanguage>,
+    },
     AddPage {
         from: PageId,
         title: String,
@@ -168,6 +174,10 @@ pub enum Edit {
         form: FormId,
         purpose: String,
     },
+    SetFormPresentation {
+        form: FormId,
+        presentation: Option<FormPresentation>,
+    },
     SetFormResult {
         form: FormId,
         result: FormResult,
@@ -203,6 +213,7 @@ pub enum Edit {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum FocusTarget {
+    None,
     Page(PageId),
     Section(SectionId),
     Block(super::BlockId),
@@ -212,7 +223,7 @@ impl FocusTarget {
     pub fn section_id(&self) -> Option<&SectionId> {
         match self {
             Self::Section(section) => Some(section),
-            Self::Block(_) | Self::Page(_) => None,
+            Self::Block(_) | Self::None | Self::Page(_) => None,
         }
     }
 }
@@ -227,6 +238,10 @@ impl DocumentV2 {
     pub fn apply(&self, edit: Edit, ids: &mut impl IdSource) -> Result<EditOutcome, DocumentError> {
         let mut data = self.data.clone();
         let focus = match edit {
+            Edit::SetPublicLanguage { language } => {
+                data.language = language;
+                FocusTarget::None
+            }
             Edit::AddPage { from, title, slug } => {
                 if data.pages.len() >= 50 {
                     return Err(DocumentError::at("validation/page_count", "pages"));
@@ -255,12 +270,13 @@ impl DocumentV2 {
                         .rposition(|section| {
                             section.section_type == SectionKind::Cta && section.blocks.len() < 50
                         });
+                let continue_label = localized_default(data.language, "Continue", "Continuer");
                 if let Some(section_index) = cta_section_index {
                     data.pages[source_index].sections[section_index]
                         .blocks
                         .push(BlockV2::Button {
                             id: block_id,
-                            label: "Continue".to_owned(),
+                            label: continue_label,
                             action: super::ActionV2::NavigatePage {
                                 page_id: id.clone(),
                             },
@@ -276,7 +292,7 @@ impl DocumentV2 {
                         section_type: SectionKind::Cta,
                         blocks: vec![BlockV2::Button {
                             id: block_id,
-                            label: "Continue".to_owned(),
+                            label: continue_label,
                             action: super::ActionV2::NavigatePage {
                                 page_id: id.clone(),
                             },
@@ -312,13 +328,14 @@ impl DocumentV2 {
                         });
                     }
                 }
+                let inline_confirmation = localized_default(data.language, "Thank you.", "Merci.");
                 for form in &mut data.forms {
                     if matches!(
                         &form.result,
                         FormResult::SuccessPage { page_id } if page_id == &page
                     ) {
                         form.result = FormResult::Inline {
-                            message: "Thank you.".to_owned(),
+                            message: inline_confirmation.clone(),
                         };
                     }
                 }
@@ -525,6 +542,10 @@ impl DocumentV2 {
                 form_mut(&mut data, &form)?.purpose = purpose;
                 form_focus_target(&data, &form)?
             }
+            Edit::SetFormPresentation { form, presentation } => {
+                form_mut(&mut data, &form)?.presentation = presentation;
+                form_focus_target(&data, &form)?
+            }
             Edit::SetFormResult { form, result } => {
                 form_mut(&mut data, &form)?.result = result;
                 form_focus_target(&data, &form)?
@@ -663,6 +684,7 @@ impl NewFormField {
                 help,
                 required,
                 validation,
+                presentation,
             } => FormField::Text {
                 id,
                 name,
@@ -670,6 +692,7 @@ impl NewFormField {
                 help,
                 required,
                 validation,
+                presentation,
             },
             Self::Email {
                 name,
@@ -736,36 +759,64 @@ fn new_form(data: &DocumentData, ids: &mut impl IdSource) -> Result<FormV2, Docu
     used_fields.insert(name_id.clone());
     let email_id = allocate_id(ids, IdKind::Field, used_fields)?;
     let copy_version = allocate_consent_version(ids, data)?;
+    let english = data.language.unwrap_or(PublicLanguage::English) == PublicLanguage::English;
     Ok(FormV2 {
         id: form_id,
         fields: vec![
             FormField::Text {
                 id: FieldId::from_validated(name_id),
                 name: "name".to_owned(),
-                label: "Your name".to_owned(),
+                label: if english { "Your name" } else { "Votre nom" }.to_owned(),
                 help: None,
                 required: false,
                 validation: None,
+                presentation: TextPresentation::SingleLine,
             },
             FormField::Email {
                 id: FieldId::from_validated(email_id),
                 name: "email".to_owned(),
-                label: "Email address".to_owned(),
+                label: if english {
+                    "Email address"
+                } else {
+                    "Adresse e-mail"
+                }
+                .to_owned(),
                 help: None,
                 required: true,
                 validation: None,
             },
         ],
-        purpose: "Respond to this request.".to_owned(),
+        purpose: localized_default(
+            data.language,
+            "Respond to this request.",
+            "Répondre à cette demande.",
+        ),
         request_consent: ConsentCopy {
             copy_version: super::StableDocumentId::from_validated(copy_version),
-            copy: "I agree to be contacted about this request.".to_owned(),
+            copy: localized_default(
+                data.language,
+                "I agree to be contacted about this request.",
+                "J’accepte d’être contacté au sujet de cette demande.",
+            ),
         },
         marketing_opt_in: None,
         result: FormResult::Inline {
-            message: "Thanks — your request has been received.".to_owned(),
+            message: localized_default(
+                data.language,
+                "Thanks — your request has been received.",
+                "Merci, votre demande a bien été reçue.",
+            ),
         },
+        presentation: None,
     })
+}
+
+fn localized_default(language: Option<PublicLanguage>, english: &str, french: &str) -> String {
+    match language.unwrap_or(PublicLanguage::English) {
+        PublicLanguage::English => english,
+        PublicLanguage::French => french,
+    }
+    .to_owned()
 }
 
 fn allocate_consent_version(

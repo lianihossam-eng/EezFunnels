@@ -381,6 +381,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                     "name": "name",
                     "label": "Name",
                     "required": True,
+                    "presentation": "multiline",
                     "validation": {"min_length": 2, "max_length": 40},
                 },
             },
@@ -709,7 +710,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert consent_html_headers.get("vary") == "Accept", consent_html_headers
         assert b'role="alert"' in consent_html_body, consent_html_body
         assert b'href="#form-' + form_id.encode() + b'-request-consent"' in consent_html_body
-        assert b'value="Ada Lovelace"' in consent_html_body, consent_html_body
+        assert b'>\nAda Lovelace</textarea>' in consent_html_body, consent_html_body
         assert b'value="ada@example.test"' in consent_html_body, consent_html_body
         assert b'name="_request_consent" value="on" required checked' not in consent_html_body
         assert b"Ada%20Lovelace" not in consent_html_body
@@ -1076,16 +1077,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert limited_headers.get("retry-after") == "60", limited_headers
 
         rate_limit_key = "3da91eb0-7f65-49c1-9341-a28eb9d10c27"
+        rate_limit_payload = urlencode(
+            {"name": "\r\nAda Lovelace", "email": "ada@example.test", "_request_consent": "on"}
+        ).encode()
         rate_status, rate_body, rate_headers = request_form_with_transport_retry(
             re.sub(r"(?<=key=)[0-9a-f-]{36}", rate_limit_key, action_path),
-            payload,
+            rate_limit_payload,
             {"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert rate_status == 429, (rate_status, rate_body)
         assert rate_headers.get("retry-after") == "60", rate_headers
         rate_html_status, rate_html_body, rate_html_headers = request_form_with_transport_retry(
             re.sub(r"(?<=key=)[0-9a-f-]{36}", rate_limit_key, action_path),
-            payload,
+            rate_limit_payload,
             {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "text/html",
@@ -1095,7 +1099,20 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert rate_html_headers.get("retry-after") == "60", rate_html_headers
         assert rate_html_headers.get("cache-control") == "private, no-store", rate_html_headers
         assert b"Please wait before trying again" in rate_html_body, rate_html_body
-        assert b'value="Ada Lovelace"' in rate_html_body, rate_html_body
+        assert b">\n\nAda Lovelace</textarea>" in rate_html_body, rate_html_body
+        if os.environ.get("PR033_BROWSER") == "1":
+            rate_html_fixture = Path(directory) / "rate-limit-recovery.html"
+            rate_html_fixture.write_bytes(rate_html_body)
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-public-form-recovery-browser.mjs"),
+                    str(rate_html_fixture),
+                ],
+                cwd=root,
+                check=True,
+                timeout=45,
+            )
 
         read_status, read_body, _ = request(
             "GET", action_path.split("?", 1)[0]

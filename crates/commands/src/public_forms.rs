@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use eez_domain::document_v2::{
-    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormSubmissionIssue, FormV2,
-    PageId, PageV2,
+    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormSubmissionIssue,
+    FormSubmissionValue, FormV2, PageId, PageV2, PublicLanguage,
 };
 use eez_domain::FormSubmissionChannel;
 use eez_render::document_v2::{
     referenced_asset_ids, render_published_route_with_submission_feedback,
-    validate_revision_v2_with_assets, AssetDigestRecord, FormSubmissionFeedback,
-    PublishedRevisionInput,
+    validate_revision_v2_with_assets, AssetDigestRecord, FormRecoveryNotice,
+    FormSubmissionFeedback, PublishedRevisionInput,
 };
 use eez_storage::media::MediaAssetRepository;
 use eez_storage::repository::{
@@ -31,9 +31,16 @@ pub struct SubmitPublicFormInput<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmitPublicFormOutcome {
-    Accepted { success_location: String },
-    KeyReuseMismatch { current_page_slug: Option<String> },
-    RateLimited { recovery_html: Option<String> },
+    Accepted {
+        success_location: String,
+    },
+    KeyReuseMismatch {
+        current_page_slug: Option<String>,
+        language: PublicLanguage,
+    },
+    RateLimited {
+        recovery_html: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +48,7 @@ pub enum SubmitPublicFormError {
     NotFound,
     StaleRevision {
         current_page_slug: Option<String>,
+        language: PublicLanguage,
     },
     InvalidPayload {
         recovery_html: Option<String>,
@@ -73,7 +81,10 @@ pub async fn submit_public_form(
         (page.id() != unvalidated_document.entry_page_id()).then(|| page.slug().to_owned())
     });
     if revision.id != input.revision_id {
-        return Err(SubmitPublicFormError::StaleRevision { current_page_slug });
+        return Err(SubmitPublicFormError::StaleRevision {
+            current_page_slug,
+            language: unvalidated_document.public_language(),
+        });
     }
 
     let asset_ids = referenced_asset_ids(&unvalidated_document);
@@ -133,20 +144,21 @@ pub async fn submit_public_form(
                 values: &validation.recoverable_values,
                 request_consent_accepted: validation.request_consent_accepted,
                 marketing_opt_in: validation.marketing_opt_in,
-                summary_message: None,
+                notice: None,
             });
             return Err(SubmitPublicFormError::InvalidPayload { recovery_html });
         }
     };
+    let recovery_values = submission_recovery_values(submission.values());
     let field_values_json = match serde_json::to_string(submission.values()) {
         Ok(value) => value,
         Err(_) => {
             let recovery_html = recovery_context.render(FormRecoveryState {
                 issues: &[],
-                values: input.fields,
+                values: &recovery_values,
                 request_consent_accepted: input.request_consent_accepted,
                 marketing_opt_in: input.marketing_opt_in,
-                summary_message: Some("We could not confirm your submission. If you retry, keep the same answers; this form reuses the same submission key."),
+                notice: Some(FormRecoveryNotice::SubmissionUncertain),
             });
             return Err(SubmitPublicFormError::SerializationFailure { recovery_html });
         }
@@ -180,10 +192,10 @@ pub async fn submit_public_form(
         Err(error) => {
             let recovery_html = recovery_context.render(FormRecoveryState {
                 issues: &[],
-                values: input.fields,
+                values: &recovery_values,
                 request_consent_accepted: input.request_consent_accepted,
                 marketing_opt_in: input.marketing_opt_in,
-                summary_message: Some("We could not confirm your submission. If you retry, keep the same answers; this form reuses the same submission key."),
+                notice: Some(FormRecoveryNotice::SubmissionUncertain),
             });
             return Err(SubmitPublicFormError::Storage {
                 code: error.code(),
@@ -195,20 +207,26 @@ pub async fn submit_public_form(
     match storage_result {
         PublicFormSubmissionResult::Stored | PublicFormSubmissionResult::Duplicate => {}
         PublicFormSubmissionResult::KeyReuseMismatch => {
-            return Ok(SubmitPublicFormOutcome::KeyReuseMismatch { current_page_slug })
+            return Ok(SubmitPublicFormOutcome::KeyReuseMismatch {
+                current_page_slug,
+                language: document.public_language(),
+            })
         }
         PublicFormSubmissionResult::RateLimited => {
             let recovery_html = recovery_context.render(FormRecoveryState {
                 issues: &[],
-                values: input.fields,
+                values: &recovery_values,
                 request_consent_accepted: input.request_consent_accepted,
                 marketing_opt_in: input.marketing_opt_in,
-                summary_message: Some("Please wait before trying again. Your answers are kept here and this form will reuse the same submission key."),
+                notice: Some(FormRecoveryNotice::RateLimited),
             });
             return Ok(SubmitPublicFormOutcome::RateLimited { recovery_html });
         }
         PublicFormSubmissionResult::NotCurrent => {
-            return Err(SubmitPublicFormError::StaleRevision { current_page_slug })
+            return Err(SubmitPublicFormError::StaleRevision {
+                current_page_slug,
+                language: document.public_language(),
+            })
         }
     }
 
@@ -231,7 +249,7 @@ struct FormRecoveryState<'a> {
     values: &'a BTreeMap<String, String>,
     request_consent_accepted: bool,
     marketing_opt_in: bool,
-    summary_message: Option<&'a str>,
+    notice: Option<FormRecoveryNotice>,
 }
 
 impl FormRecoveryContext<'_> {
@@ -244,7 +262,7 @@ impl FormRecoveryContext<'_> {
             values: state.values,
             request_consent_accepted: state.request_consent_accepted,
             marketing_opt_in: state.marketing_opt_in,
-            summary_message: state.summary_message,
+            notice: state.notice,
         };
         render_published_route_with_submission_feedback(
             PublishedRevisionInput {
@@ -261,6 +279,24 @@ impl FormRecoveryContext<'_> {
         )
         .ok()
     }
+}
+
+fn submission_recovery_values(
+    values: &BTreeMap<String, FormSubmissionValue>,
+) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                FormSubmissionValue::Text(value) | FormSubmissionValue::Select(value) => {
+                    value.clone()
+                }
+                FormSubmissionValue::Checkbox(true) => "on".to_owned(),
+                FormSubmissionValue::Checkbox(false) => String::new(),
+            };
+            (name.clone(), value)
+        })
+        .collect()
 }
 
 fn public_form_success_location(

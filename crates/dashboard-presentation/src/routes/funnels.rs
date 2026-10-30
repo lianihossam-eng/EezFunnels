@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use eez_domain::FunnelBlueprint;
+use eez_domain::{document_v2::PublicLanguage, FunnelBlueprint};
 #[cfg(any(feature = "browser", test))]
 use std::future::Future;
 
@@ -85,6 +85,7 @@ pub(super) fn Funnels() -> Element {
     let mut create_open = use_signal(|| false);
     let mut funnel_name = use_signal(String::new);
     let mut blueprint = use_signal(|| FunnelBlueprint::Tripwire);
+    let mut language = use_signal(|| PublicLanguage::English);
     let mut create_pending = use_signal(|| false);
     let mut create_error = use_signal(|| None::<String>);
     let mut create_idempotency_key = use_signal(|| None::<IdempotencyKeyState>);
@@ -239,9 +240,12 @@ pub(super) fn Funnels() -> Element {
                     #[cfg(feature = "browser")]
                     let request_blueprint = blueprint();
                     #[cfg(feature = "browser")]
+                    let request_language = language();
+                    #[cfg(feature = "browser")]
                     let request_body = serde_json::json!({
                         "name": request_name.clone(),
                         "blueprint": request_blueprint.id(),
+                        "language": request_language.as_str(),
                     }).to_string();
                     #[cfg(feature = "browser")]
                     let prepared_key = match prepare_idempotency_key(
@@ -277,6 +281,7 @@ pub(super) fn Funnels() -> Element {
                                 create_open.set(false);
                                 funnel_name.set(String::new());
                                 blueprint.set(FunnelBlueprint::Tripwire);
+                                language.set(PublicLanguage::English);
                                 create_idempotency_key.set(None);
                             },
                             move |message| {
@@ -293,6 +298,7 @@ pub(super) fn Funnels() -> Element {
                 CreateFields {
                     name: funnel_name(),
                     blueprint: blueprint(),
+                    language: language(),
                     pending: create_pending(),
                     on_name_change: move |value| {
                         if create_pending() { return; }
@@ -302,6 +308,11 @@ pub(super) fn Funnels() -> Element {
                     on_blueprint_change: move |value| {
                         if create_pending() { return; }
                         blueprint.set(value);
+                        create_idempotency_key.set(None);
+                    },
+                    on_language_change: move |value| {
+                        if create_pending() { return; }
+                        language.set(value);
                         create_idempotency_key.set(None);
                     },
                 }
@@ -483,9 +494,11 @@ fn can_create_funnel(name: &str) -> bool {
 fn CreateFields(
     name: String,
     blueprint: FunnelBlueprint,
+    language: PublicLanguage,
     pending: bool,
     on_name_change: EventHandler<String>,
     on_blueprint_change: EventHandler<FunnelBlueprint>,
+    on_language_change: EventHandler<PublicLanguage>,
 ) -> Element {
     rsx! {
         label { "Funnel name"
@@ -497,6 +510,23 @@ fn CreateFields(
                 disabled: pending,
                 value: "{name}",
                 oninput: move |event| on_name_change.call(event.value()),
+            }
+        }
+        label { class: "editor-setting-control",
+            "Public language"
+            select {
+                name: "language",
+                value: language.as_str(),
+                disabled: pending,
+                onchange: move |event| {
+                    match event.value().as_str() {
+                        "fr" => on_language_change.call(PublicLanguage::French),
+                        "en" => on_language_change.call(PublicLanguage::English),
+                        _ => {}
+                    }
+                },
+                option { value: "en", "English" }
+                option { value: "fr", "Français" }
             }
         }
         if !name.trim().is_empty() && name.trim().len() > MAX_FUNNEL_NAME_BYTES {
@@ -536,9 +566,11 @@ mod tests {
                 CreateFields {
                     name: "Offer".to_owned(),
                     blueprint: FunnelBlueprint::Tripwire,
+                    language: PublicLanguage::English,
                     pending: true,
                     on_name_change: move |_| {},
                     on_blueprint_change: move |_| {},
+                    on_language_change: move |_| {},
                 }
             }
         });
@@ -546,7 +578,7 @@ mod tests {
         let html = dioxus::ssr::render(&virtual_dom);
 
         assert_eq!(html.matches("<input").count(), 6, "{html}");
-        assert_eq!(html.matches("disabled").count(), 6, "{html}");
+        assert_eq!(html.matches("disabled").count(), 7, "{html}");
     }
 
     #[test]
@@ -564,9 +596,11 @@ mod tests {
                 CreateFields {
                     name: "😀".repeat(31),
                     blueprint: FunnelBlueprint::Tripwire,
+                    language: PublicLanguage::English,
                     pending: false,
                     on_name_change: move |_| {},
                     on_blueprint_change: move |_| {},
+                    on_language_change: move |_| {},
                 }
             }
         });

@@ -1,7 +1,8 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
-    FontFamily, FormId, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
-    IdKind, IdSource, ThemeColors, ThemeOverrides, TypeScale,
+    FontFamily, FormId, FormPresentation, FormSubmissionIssueCode, FormSubmissionIssueTarget,
+    FormSubmissionValue, IdKind, IdSource, PublicLanguage, SectionKind, ThemeColors,
+    ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -273,6 +274,218 @@ fn public_form_submission_recovery_keeps_valid_multibyte_text_when_another_value
         .expect_err("missing consent requires recovery");
 
     assert_eq!(error.recoverable_values.get("name"), Some(&name));
+}
+
+#[test]
+fn legacy_documents_omit_public_language_form_presentation_and_single_line_defaults() {
+    let legacy = decode(MINIMAL);
+    assert_eq!(legacy.explicit_language(), None);
+    assert!(!String::from_utf8_lossy(legacy.canonical_bytes()).contains("\"language\""));
+
+    let form_document = document_with_lead_form();
+    let canonical = String::from_utf8_lossy(form_document.canonical_bytes());
+    assert!(!canonical.contains("\"language\""));
+    assert!(!canonical.contains("\"presentation\""));
+    assert_eq!(form_document.public_language(), PublicLanguage::English);
+    assert_eq!(
+        form_document.forms()[0].presentation(),
+        None,
+        "legacy forms resolve missing presentation without materializing it"
+    );
+}
+
+#[test]
+fn french_language_defaults_are_generated_without_rewriting_authored_copy() {
+    let french = DocumentV2::starter_with_language(
+        "funnel-fr",
+        BlueprintId::LeadGen,
+        ThemePreset::Minimal,
+        Some(PublicLanguage::French),
+    )
+    .expect("French starter");
+    assert_eq!(french.pages()[0].title(), "Accueil");
+    assert_eq!(french.public_language(), PublicLanguage::French);
+    assert!(String::from_utf8_lossy(french.canonical_bytes()).contains("\"language\":\"fr\""));
+    assert!(french.pages()[0].sections()[0].blocks().iter().any(|block| {
+        matches!(block, BlockV2::Heading { text, .. } if text == "Bienvenue dans votre nouvel entonnoir")
+    }));
+
+    let section = french.pages()[0]
+        .sections()
+        .iter()
+        .find(|section| section.section_type() == SectionKind::Cta)
+        .expect("CTA section")
+        .id()
+        .clone();
+    let mut ids = TestIds(0);
+    let french_with_form = french
+        .apply(
+            Edit::CreateForm {
+                section,
+                after: None,
+            },
+            &mut ids,
+        )
+        .expect("create translated form")
+        .document;
+    let form = &french_with_form.forms()[0];
+    assert_eq!(form.fields()[0].label(), "Votre nom");
+    assert_eq!(form.fields()[1].label(), "Adresse e-mail");
+    assert_eq!(form.purpose(), "Répondre à cette demande.");
+    assert_eq!(
+        form.request_consent().copy(),
+        "J’accepte d’être contacté au sujet de cette demande."
+    );
+
+    let mut ids = TestIds(0);
+    let language_changed = with_form("email")
+        .expect("authored English form")
+        .apply(
+            Edit::SetPublicLanguage {
+                language: Some(PublicLanguage::French),
+            },
+            &mut ids,
+        )
+        .expect("switch public language");
+    let authored_form = &language_changed.document.forms()[0];
+    assert_eq!(
+        language_changed.focus,
+        eez_domain::document_v2::FocusTarget::None
+    );
+    assert_eq!(authored_form.fields()[0].label(), "Email");
+    assert_eq!(authored_form.purpose(), "Contact request");
+    assert_eq!(
+        authored_form.request_consent().copy(),
+        "I agree to be contacted."
+    );
+}
+
+#[test]
+fn multiline_text_normalizes_line_endings_for_values_recovery_and_retry_identity() {
+    let original = document_with_lead_form();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(original.canonical_bytes()).expect("form canonical JSON");
+    value["forms"][0]["fields"][0]["presentation"] = serde_json::json!("multiline");
+    let document = DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("multiline JSON"),
+        "funnel-01",
+    )
+    .expect("multiline form");
+    let form = &document.forms()[0];
+
+    let submission = |name: &str| {
+        std::collections::BTreeMap::from([
+            ("name".to_owned(), name.to_owned()),
+            ("email".to_owned(), "ada@example.test".to_owned()),
+            ("secondary_email".to_owned(), String::new()),
+            ("phone".to_owned(), String::new()),
+            ("topic".to_owned(), "Demo".to_owned()),
+            ("follow_up".to_owned(), "on".to_owned()),
+        ])
+    };
+    let crlf = submission("Ada\r\nLovelace");
+    let lf = submission("Ada\nLovelace");
+    let cr = submission("Ada\rLovelace");
+    let accepted = validate_form_submission(form, &crlf, true, false).expect("valid multiline");
+    let expected = FormSubmissionValue::Text("Ada\nLovelace".to_owned());
+    assert_eq!(accepted.values().get("name"), Some(&expected));
+    assert_eq!(
+        validate_form_submission(form, &lf, true, false)
+            .expect("LF multiline")
+            .values(),
+        accepted.values()
+    );
+    assert_eq!(
+        validate_form_submission(form, &cr, true, false)
+            .expect("isolated CR multiline")
+            .values(),
+        accepted.values()
+    );
+    let recovery = validate_form_submission(form, &crlf, false, false)
+        .expect_err("request consent remains required");
+    assert_eq!(
+        recovery.recoverable_values.get("name"),
+        Some(&"Ada\nLovelace".to_owned())
+    );
+    assert!(
+        validate_form_submission(form, &submission("Ada\u{000b}Lovelace"), true, false).is_err()
+    );
+}
+
+#[test]
+fn form_presentation_is_bounded_https_only_and_empty_groups_are_rejected() {
+    let document = with_form("email").expect("valid form");
+    let form = document.forms()[0].id().clone();
+    let mut ids = TestIds(0);
+    let updated = document
+        .apply(
+            Edit::SetFormPresentation {
+                form: form.clone(),
+                presentation: Some(FormPresentation {
+                    submit_label: Some("Envoyer".to_owned()),
+                    information_url: Some("HTTPS://EXAMPLE.TEST:443/privacy".to_owned()),
+                }),
+            },
+            &mut ids,
+        )
+        .expect("valid presentation")
+        .document;
+    let presentation = updated.forms()[0].presentation().expect("presentation");
+    assert_eq!(presentation.submit_label.as_deref(), Some("Envoyer"));
+    assert_eq!(
+        presentation.information_url.as_deref(),
+        Some("https://example.test/privacy")
+    );
+    assert_eq!(
+        eez_domain::document_v2::canonical_information_url("HTTPS://EXAMPLE.TEST:443/privacy")
+            .expect("shared URL validation"),
+        "https://example.test/privacy"
+    );
+    for invalid_url in ["https://", "https://example.test/%"] {
+        assert!(eez_domain::document_v2::canonical_information_url(invalid_url).is_err());
+    }
+
+    let empty = updated.apply(
+        Edit::SetFormPresentation {
+            form: form.clone(),
+            presentation: Some(FormPresentation {
+                submit_label: None,
+                information_url: None,
+            }),
+        },
+        &mut ids,
+    );
+    assert_eq!(
+        empty.expect_err("empty aggregate is not persisted").code(),
+        "validation/form_presentation_empty"
+    );
+    let whitespace_label = updated.apply(
+        Edit::SetFormPresentation {
+            form: form.clone(),
+            presentation: Some(FormPresentation {
+                submit_label: Some("   ".to_owned()),
+                information_url: Some("https://example.test/privacy".to_owned()),
+            }),
+        },
+        &mut ids,
+    );
+    assert_eq!(
+        whitespace_label
+            .expect_err("submit label must have a visible accessible name")
+            .code(),
+        "validation/form_submit_label_empty"
+    );
+    let invalid = updated.apply(
+        Edit::SetFormPresentation {
+            form,
+            presentation: Some(FormPresentation {
+                submit_label: Some("Send".to_owned()),
+                information_url: Some("javascript:alert(1)".to_owned()),
+            }),
+        },
+        &mut ids,
+    );
+    assert!(invalid.is_err());
 }
 
 #[test]

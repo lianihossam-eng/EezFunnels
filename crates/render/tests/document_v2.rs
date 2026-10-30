@@ -1,12 +1,13 @@
 use eez_domain::document_v2::{
     BlueprintId, DocumentV2, FormId, FormSubmissionIssue, FormSubmissionIssueCode,
-    FormSubmissionIssueTarget,
+    FormSubmissionIssueTarget, PublicLanguage,
 };
 use eez_render::document_v2::{
     prepare_revision, prepare_revision_with_assets, render_owner_preview,
     render_owner_preview_with_assets, render_published, render_published_route_with_assets,
     render_published_route_with_submission_feedback, validate_revision_v2, AssetDigestRecord,
-    FormSubmissionFeedback, PublishedRevisionInput, V2RenderError,
+    FormErrorPageKind, FormRecoveryNotice, FormSubmissionFeedback, PublishedRevisionInput,
+    V2RenderError,
 };
 
 fn document() -> DocumentV2 {
@@ -27,7 +28,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v7_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v8_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -36,7 +37,7 @@ fn exact_renderer_v7_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v7");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v8");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -166,7 +167,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v7", "renderer-v7-next");
+        .replace("renderer-v8", "renderer-v8-next");
     assert!(matches!(
         render_published(
             2,
@@ -411,6 +412,113 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
 }
 
 #[test]
+fn renderer_v8_localizes_forms_and_keeps_multiline_fields_and_information_links_inert_in_preview() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["language"] = serde_json::json!("fr");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"form-block", "kind":"form", "form_id":"form-one"}
+    ]);
+    value["forms"] = serde_json::json!([{
+        "id":"form-one",
+        "fields":[
+            {"id":"field-name", "name":"name", "label":"Votre nom", "kind":"text", "required":true, "presentation":"multiline"},
+            {"id":"field-email", "name":"email", "label":"Adresse e-mail", "kind":"email", "required":true}
+        ],
+        "purpose":"Demande de contact",
+        "request_consent":{"copy_version":"request-v1", "copy":"J’accepte d’être contacté."},
+        "result":{"kind":"inline", "message":"Merci."},
+        "presentation":{"submit_label":"Envoyer ma demande", "information_url":"https://example.test/privacy"}
+    }]);
+    let document = DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("French JSON"),
+        "funnel-01",
+    )
+    .expect("French form document");
+    let prepared = prepare_revision(&document, "revision-fr-form").expect("French revision");
+    let published = render_published_route_with_assets(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-fr-form",
+            data_json: &prepared.data_json,
+            render_manifest_json: &prepared.render_manifest_json,
+        },
+        "lead-funnel",
+        None,
+        &[],
+    )
+    .expect("published French form");
+    let preview = render_owner_preview(&document, document.entry_page_id()).expect("preview");
+
+    assert_eq!(document.public_language(), PublicLanguage::French);
+    assert!(published.contains("<html lang=\"fr\">"));
+    assert!(published.contains("<textarea id=\"form-form-one-field-field-name\" name=\"name\" rows=\"4\" maxlength=\"8192\" required"));
+    assert!(published.contains("Obligatoire"));
+    assert!(published.contains("Envoyer ma demande"));
+    assert!(published.contains("<a href=\"https://example.test/privacy\""));
+    assert!(published.contains("Informations sur cette demande"));
+    assert!(preview.contains("<span aria-disabled=\"true\">Informations sur cette demande</span>"));
+    assert!(!preview.contains("<a href=\"https://example.test/privacy\""));
+
+    let form_id = FormId::parse("form-one").expect("form id");
+    let issues = [FormSubmissionIssue {
+        target: FormSubmissionIssueTarget::Field("field-name".to_owned()),
+        code: FormSubmissionIssueCode::Required,
+    }];
+    let values =
+        std::collections::BTreeMap::from([("name".to_owned(), "\nGrace\nHopper".to_owned())]);
+    let feedback = FormSubmissionFeedback {
+        form_id: &form_id,
+        issues: &issues,
+        values: &values,
+        request_consent_accepted: true,
+        marketing_opt_in: false,
+        notice: Some(FormRecoveryNotice::SubmissionUncertain),
+    };
+    let recovery = eez_render::document_v2::render_published_route_with_submission_feedback(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-fr-form",
+            data_json: &prepared.data_json,
+            render_manifest_json: &prepared.render_manifest_json,
+        },
+        "lead-funnel",
+        None,
+        &[],
+        &feedback,
+    )
+    .expect("French recovery page");
+    assert!(recovery.contains("Ce formulaire contient une erreur"));
+    assert!(recovery.contains("Ce champ est obligatoire."));
+    assert!(recovery.contains("Nous n’avons pas pu confirmer votre demande."));
+    assert!(recovery.contains(">\n\nGrace\nHopper</textarea>"));
+}
+
+#[test]
+fn stale_revision_and_key_reuse_pages_use_the_trusted_document_language() {
+    let stale = eez_render::document_v2::render_form_error_page(
+        PublicLanguage::French,
+        FormErrorPageKind::StaleRevision,
+        Some("/f/service"),
+    );
+    assert!(stale.contains("<html lang=\"fr\">"));
+    assert!(stale.contains("Ce formulaire a été modifié"));
+    assert!(stale.contains("Rechargez la page actuelle"));
+    assert!(stale.contains("href=\"/f/service\">Ouvrir le formulaire actuel</a>"));
+
+    let conflict = eez_render::document_v2::render_form_error_page(
+        PublicLanguage::English,
+        FormErrorPageKind::KeyReuseMismatch,
+        Some("/f/service?x=\"bad\""),
+    );
+    assert!(conflict.contains("<html lang=\"en\">"));
+    assert!(conflict.contains("Form response already used"));
+    assert!(conflict.contains("href=\"/f/service?x=&quot;bad&quot;\""));
+}
+
+#[test]
 fn form_validation_feedback_links_errors_and_preserves_only_safe_known_values() {
     let mut form_value: serde_json::Value = serde_json::from_str(
         std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
@@ -461,7 +569,7 @@ fn form_validation_feedback_links_errors_and_preserves_only_safe_known_values() 
         values: &values,
         request_consent_accepted: false,
         marketing_opt_in: false,
-        summary_message: None,
+        notice: None,
     };
 
     let html = render_published_route_with_submission_feedback(
@@ -629,7 +737,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn v7_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
+fn renderer_v8_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
     let mut value: serde_json::Value =
         serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
     value["pages"][0]["seo_title"] = serde_json::json!("Offer <sale> & \"launch\"");
@@ -638,7 +746,7 @@ fn v7_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
     let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
         .expect("metadata document");
     let prepared = prepare_revision(&document, "revision-seo").expect("metadata revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v7");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v8");
     let published = render_published(
         2,
         "funnel-01",
@@ -681,7 +789,7 @@ fn v7_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
 }
 
 #[test]
-fn v7_falls_back_to_page_title_and_omits_unset_description_and_robots() {
+fn renderer_v8_falls_back_to_page_title_and_omits_unset_description_and_robots() {
     let document = document();
     let prepared = prepare_revision(&document, "revision-default-seo").expect("revision");
     let html = render_published(
@@ -701,7 +809,7 @@ fn v7_falls_back_to_page_title_and_omits_unset_description_and_robots() {
 }
 
 #[test]
-fn page_metadata_stays_on_its_page_and_is_rejected_by_all_legacy_renderers() {
+fn page_metadata_stays_on_its_page_and_is_rejected_before_renderer_v7() {
     use eez_render::document_v2::render_published_route;
 
     let mut value: serde_json::Value =
@@ -781,5 +889,108 @@ fn page_metadata_stays_on_its_page_and_is_rejected_by_all_legacy_renderers() {
                 V2RenderError::MetadataNotEnabled
             );
         }
+    }
+}
+
+#[test]
+fn renderer_v7_preserves_english_form_output_and_rejects_renderer_v8_features() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"form-block", "kind":"form", "form_id":"form-one"}
+    ]);
+    value["forms"] = serde_json::json!([{
+        "id":"form-one",
+        "fields":[
+            {"id":"field-name", "name":"name", "label":"Your name", "kind":"text", "required":true},
+            {"id":"field-topic", "name":"topic", "label":"Topic", "kind":"select", "required":false, "options":["Demo"]}
+        ],
+        "purpose":"Contact request",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to be contacted."},
+        "result":{"kind":"inline", "message":"Thanks."}
+    }]);
+    let base_document = DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("base form JSON"),
+        "funnel-01",
+    )
+    .expect("base form document");
+    let prepared = prepare_revision(&base_document, "revision-v7-form").expect("revision");
+    let renderer_v7 = manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v7");
+    let html = eez_render::document_v2::render_published_route(
+        2,
+        "funnel-01",
+        "revision-v7-form",
+        &prepared.data_json,
+        &renderer_v7,
+        "lead-funnel",
+        None,
+    )
+    .expect("renderer v7 keeps its old form presentation");
+    assert!(html.contains("<html lang=\"en\">"));
+    assert!(
+        html.contains("<input type=\"text\" id=\"form-form-one-field-field-name\" name=\"name\"")
+    );
+    assert!(html.contains("<button class=\"v2-button\" type=\"submit\">Send</button>"));
+    assert!(!html.contains("<textarea"));
+    assert!(!html.contains("v2-field-requirement"));
+    assert!(!html.contains("<option value=\"\" selected>Choose an option</option>"));
+
+    let mut localized = value.clone();
+    localized["language"] = serde_json::json!("fr");
+    let french_document = DocumentV2::decode(
+        &serde_json::to_vec(&localized).expect("French document JSON"),
+        "funnel-01",
+    )
+    .expect("French document remains a valid draft");
+    let french_revision =
+        prepare_revision(&french_document, "revision-v7-language").expect("French revision");
+    assert_eq!(
+        validate_revision_v2(
+            2,
+            "funnel-01",
+            "revision-v7-language",
+            &french_revision.data_json,
+            &manifest_with_renderer_version(&french_revision.render_manifest_json, "renderer-v7",),
+        )
+        .expect_err("v7 cannot render explicit language metadata"),
+        V2RenderError::PublicLanguageNotEnabled
+    );
+
+    for (feature, expected_error) in [
+        ("presentation", V2RenderError::FormPresentationNotEnabled),
+        ("multiline", V2RenderError::MultilineTextNotEnabled),
+    ] {
+        let mut feature_value = value.clone();
+        match feature {
+            "presentation" => {
+                feature_value["forms"][0]["presentation"] = serde_json::json!({
+                    "submit_label":"Send the request"
+                });
+            }
+            _ => {
+                feature_value["forms"][0]["fields"][0]["presentation"] =
+                    serde_json::json!("multiline");
+            }
+        }
+        let feature_document = DocumentV2::decode(
+            &serde_json::to_vec(&feature_value).expect("feature document JSON"),
+            "funnel-01",
+        )
+        .expect("v8 feature document remains a valid draft");
+        let feature_revision = prepare_revision(&feature_document, "revision-v7-feature")
+            .expect("revision preparation");
+        let feature_manifest =
+            manifest_with_renderer_version(&feature_revision.render_manifest_json, "renderer-v7");
+        assert_eq!(
+            validate_revision_v2(
+                2,
+                "funnel-01",
+                "revision-v7-feature",
+                &feature_revision.data_json,
+                &feature_manifest,
+            )
+            .expect_err("v7 rejects v8-only form feature"),
+            expected_error
+        );
     }
 }
