@@ -38,6 +38,7 @@ pub mod host;
 mod json;
 mod mcp;
 mod origin;
+mod service_brief;
 mod sitemap;
 
 const INTERACTION_SCRIPT: &str = include_str!("interaction.js");
@@ -162,6 +163,8 @@ pub async fn fetch(
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/interaction-report") {
         funnel_interaction_report_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/service-brief") {
+        service_brief::response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(route) = public_interaction_events_route_from_path(&request_path) {
         public_interaction_events_response(&env, request, route, correlation_id.clone(), None).await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
@@ -256,6 +259,7 @@ pub async fn fetch(
 
     if funnel_subroute(&request_path, "/completions").is_some()
         || funnel_subroute(&request_path, "/interaction-report").is_some()
+        || funnel_subroute(&request_path, "/service-brief").is_some()
         || request_path == "/api/submissions"
         || request_path.starts_with("/api/submissions/")
     {

@@ -26,6 +26,12 @@ The public journey may record that a request arrived, that an owner contacted or
 
 The service journey is a working product hypothesis, not a validated result from user research. Test fixtures, sample funnels, and reference receivers use fictional scenarios; demos are not evidence of customer outcomes or conversion uplift.
 
+## Private service brief
+
+The owner may keep an incomplete service brief with the funnel to clarify its audience, need, offer, scope, terms, intended action, promised next step, and available evidence. The owner can choose contact, quote request, or diagnostic candidacy; these intentions do not add booking, payment, scoring, or automated follow-up.
+
+The brief is stored apart from the public document and has its own modification version. Saving against a stale version cannot silently overwrite newer notes; a retry succeeds when its requested contents are still current, and otherwise returns a conflict for the owner to resolve. Only the current brief is retained, not a private edit history. The owner API follows the configured access perimeter and marks every response private and non-cacheable. Brief values are excluded from public HTML, previews, reports, and public revisions. See [ADR 0005](adr/0005-private-service-brief.md).
+
 The system has three independent choices:
 
 - Request acknowledgement is required to process a submission.

@@ -63,6 +63,12 @@ The owner's private view of retained submissions and their follow-up information
 **Qualification**:
 An owner-recorded assessment that a submission meets the owner's stated criteria. It is not inferred from contact, reservation, sale, or payment.
 
+**Service brief**:
+Private, owner-authored planning notes about an audience, need, offer, scope, terms, intended action, promised next step, and available evidence. A brief may be incomplete and is not part of a public page or revision.
+
+**Service intention**:
+The purpose an owner chooses for a service funnel: contact, quote request, or diagnostic candidacy. It describes the request being invited; it does not establish a reservation, assessment, sale, or payment.
+
 **Reservation**:
 An agreed appointment or place in a service. Form submission alone is not a reservation.
 

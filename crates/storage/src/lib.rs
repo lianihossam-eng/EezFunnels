@@ -9,6 +9,7 @@ use worker::{Env, Error, Result};
 
 pub mod media;
 pub mod repository;
+pub mod service_brief;
 pub mod stage;
 
 pub const MAX_PUBLIC_FORM_SUBMISSION_BYTES: usize = 512 * 1024;
@@ -57,6 +58,10 @@ impl Bindings {
 
     pub fn document_stage_repository(&self) -> stage::DocumentStageRepository<'_> {
         stage::DocumentStageRepository::new(&self.database, &self.bucket, self.stage_capacity)
+    }
+
+    pub fn service_brief_repository(&self) -> service_brief::ServiceBriefRepository<'_> {
+        service_brief::ServiceBriefRepository::new(&self.database)
     }
 
     pub fn media_asset_repository(&self) -> media::MediaAssetRepository<'_> {

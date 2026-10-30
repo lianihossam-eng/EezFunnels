@@ -161,6 +161,17 @@ mod tests {
     }
 
     #[test]
+    fn private_service_brief_route_renders_on_direct_ssr_navigation() {
+        let html = render_document("/funnels/demo-1/brief")
+            .expect("private service brief dashboard route");
+
+        assert!(html.contains("Service brief"));
+        assert!(html.contains("private service brief"));
+        assert!(html.contains("Workspace / Service brief"));
+        assert_valid_hydration_data(&html);
+    }
+
+    #[test]
     fn submissions_route_renders_a_hydratable_dashboard_shell() {
         let html = render_document("/submissions").expect("submissions dashboard route");
 
@@ -197,6 +208,7 @@ mod tests {
             "/funnels/demo/extra",
             "/funnels/demo/completions/extra",
             "/funnels/demo/interaction-report/extra",
+            "/funnels/demo/brief/extra",
             "/unknown",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");

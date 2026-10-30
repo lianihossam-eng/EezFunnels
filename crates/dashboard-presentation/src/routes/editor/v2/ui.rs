@@ -652,6 +652,7 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                 h1 { "{title}" }
                 p { class: "page-description", "Compose typed sections and blocks. Changes stay as a local draft until you save a new revision." }
                 code { class: "detail-id", "Funnel ID: {id}" }
+                Link { to: RouteView::ServiceBriefPage { id: id.clone() }, class: "secondary-button completion-report-link", "Service brief" }
                 Link { to: RouteView::FunnelCompletions { id: id.clone() }, class: "secondary-button completion-report-link", "View form completions" }
                 Link { to: RouteView::FunnelInteractionReport { id: id.clone() }, class: "secondary-button completion-report-link", "View interaction counts" }
             }

@@ -45,7 +45,9 @@ impl ApiError {
             | "validation/schema_version_unsupported"
             | "validation/section_type_unknown"
             | "validation/section_missing_id"
-            | "validation/media_asset_invalid" => (
+            | "validation/media_asset_invalid"
+            | "validation/service_brief_invalid"
+            | "validation/service_brief_format_unsupported" => (
                 code.to_owned(),
                 ErrorCategory::Validation,
                 400,
@@ -57,6 +59,13 @@ impl ApiError {
                 ErrorCategory::Validation,
                 413,
                 "The uploaded image exceeds the size limit.",
+                false,
+            ),
+            "validation/service_brief_too_large" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                413,
+                "The service brief exceeds the size limit.",
                 false,
             ),
             "validation/operation_not_supported" => (
@@ -111,7 +120,8 @@ impl ApiError {
             | "conflict/v2_publication_blocked"
             | "conflict/v2_typed_command_required"
             | "conflict/v2_stage_active"
-            | "conflict/media_asset_conflict" => (
+            | "conflict/media_asset_conflict"
+            | "conflict/service_brief_stale" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
@@ -209,6 +219,21 @@ mod tests {
             ErrorCategory::Validation,
             413,
         ),
+        (
+            "validation/service_brief_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/service_brief_format_unsupported",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/service_brief_too_large",
+            ErrorCategory::Validation,
+            413,
+        ),
         ("validation/missing_field", ErrorCategory::Validation, 400),
         ("validation/order_duplicate", ErrorCategory::Validation, 400),
         (
@@ -299,6 +324,7 @@ mod tests {
             ErrorCategory::Conflict,
             409,
         ),
+        ("conflict/service_brief_stale", ErrorCategory::Conflict, 409),
         ("rate_limit/exceeded", ErrorCategory::RateLimit, 429),
         ("external/timeout", ErrorCategory::External, 504),
         ("external/unavailable", ErrorCategory::External, 503),
