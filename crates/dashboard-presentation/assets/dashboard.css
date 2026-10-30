@@ -1886,6 +1886,10 @@ h1 {
   background: var(--surface, #fff);
 }
 
+.webhook-delivery-panel > * {
+  min-width: 0;
+}
+
 .webhook-delivery-heading,
 .webhook-form-settings-heading {
   display: flex;
@@ -1923,7 +1927,9 @@ h1 {
 .webhook-form-delivery-settings,
 .webhook-form-delivery-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.8rem;
+  min-width: 0;
 }
 
 .webhook-destination-form > label:first-child,
