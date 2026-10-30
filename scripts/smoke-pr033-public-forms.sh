@@ -11,6 +11,7 @@ export WRANGLER_SEND_METRICS=false
 python3 "$repo_root/scripts/test-pr057-migration.py"
 python3 "$repo_root/scripts/test-pr067-interaction-migration.py"
 python3 "$repo_root/scripts/test-pr069-interaction-report-query.py"
+python3 "$repo_root/scripts/test-pub007-migration.py"
 
 python3 - "$repo_root" <<'PY'
 import hashlib
@@ -177,6 +178,26 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         result = find_mapping(json.loads(output), key)
         assert result is not None, output
         return result
+
+    def run_d1(sql):
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", sql,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def submission_replay_digest(funnel_id, form_id, submission_key):
+        encoded = b"eezfunnel-submission-erasure-v1\0"
+        for part in (funnel_id, form_id, submission_key):
+            value = part.encode()
+            encoded += len(value).to_bytes(4, "big") + value
+        return hashlib.sha256(encoded).hexdigest()
 
     def active_group_members(process_group):
         members = []
@@ -1744,11 +1765,547 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "Describe your project": "I need help planning a move for my small shop.",
         }, starter_item
 
+        erasure_id = starter_item["submission_id"]
+        export_status, export_body, export_headers = request(
+            "GET", f"/api/submissions/{erasure_id}/export"
+        )
+        assert export_status == 200, export_body
+        assert export_headers.get("cache-control") == "private, no-store", export_headers
+        assert export_headers.get("content-disposition", "").endswith(
+            f'filename="submission-{erasure_id}.json"'
+        ), export_headers
+        exported = json.loads(export_body)
+        assert exported["format"] == "eezfunnel.submission", exported
+        assert exported["version"] == 1, exported
+        assert exported["submission"]["values"]["email"] == "starter-visitor@example.test"
+        assert exported["submission"]["request_consent"]["acknowledged"] is True
+        assert "submission_key" not in exported["submission"]
+        assert "request_fingerprint" not in exported["submission"]
+        assert b"submission_key" not in export_body and b"request_fingerprint" not in export_body
+
+        erasure_source = d1_query(
+            "SELECT submission_id, funnel_id, revision_id, page_id, form_id, "
+            "submission_channel, submission_key, request_fingerprint, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, "
+            "marketing_opt_in_copy, marketing_opt_in_recorded_at, triage_status, submitted_at, "
+            f"expires_at FROM public_form_submissions WHERE submission_id = '{erasure_id}'",
+            "submission_id",
+        )
+        erasure_columns = [
+            "submission_id",
+            "funnel_id",
+            "revision_id",
+            "page_id",
+            "form_id",
+            "submission_channel",
+            "submission_key",
+            "request_fingerprint",
+            "field_values_json",
+            "request_consent_acknowledged",
+            "request_consent_copy_version",
+            "request_consent_copy",
+            "request_consent_recorded_at",
+            "marketing_opt_in",
+            "marketing_opt_in_copy_version",
+            "marketing_opt_in_copy",
+            "marketing_opt_in_recorded_at",
+            "triage_status",
+            "submitted_at",
+            "expires_at",
+        ]
+
+        def sql_literal(value):
+            if value is None:
+                return "NULL"
+            if isinstance(value, int):
+                return str(value)
+            return sql_quote(str(value))
+
+        def insert_submission_snapshot(source):
+            run_d1(
+                "INSERT INTO public_form_submissions ("
+                + ", ".join(erasure_columns)
+                + ") VALUES ("
+                + ", ".join(sql_literal(source[column]) for column in erasure_columns)
+                + ")"
+            )
+
+        def make_submission_snapshot(source, submission_id, submission_key, later_by):
+            snapshot = dict(source)
+            now = d1_query("SELECT unixepoch() AS now", "now")["now"]
+            snapshot.update(
+                submission_id=submission_id,
+                submission_key=submission_key,
+                request_fingerprint=hashlib.sha256(submission_id.encode()).hexdigest(),
+                field_values_json=json.dumps(
+                    {
+                        "email": f"{submission_id[:8]}@example.test",
+                        "project_details": "PUB-007 lifecycle fixture",
+                    },
+                    separators=(",", ":"),
+                ),
+                submitted_at=now,
+                expires_at=max(source["expires_at"] + later_by, now + later_by),
+                triage_status="new",
+            )
+            return snapshot
+
+        delete_headers = {"Origin": f"http://localhost:{port}"}
+        cascaded_before_request = make_submission_snapshot(
+            erasure_source,
+            "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "44444444-4444-4444-8444-444444444444",
+            86_400,
+        )
+        insert_submission_snapshot(cascaded_before_request)
+        run_d1(
+            "DELETE FROM public_form_submissions "
+            f"WHERE submission_id = '{cascaded_before_request['submission_id']}'"
+        )
+        absent_after_cascade_status, absent_after_cascade_body, _ = request(
+            "DELETE",
+            f"/api/submissions/{cascaded_before_request['submission_id']}",
+            headers=delete_headers,
+        )
+        assert absent_after_cascade_status == 404, absent_after_cascade_body
+
+        delete_status, delete_body, delete_response_headers = request(
+            "DELETE", f"/api/submissions/{erasure_id}", headers=delete_headers
+        )
+        assert delete_status == 204, delete_body
+        assert delete_response_headers.get("cache-control") == "private, no-store"
+        assert request(
+            "DELETE", f"/api/submissions/{erasure_id}", headers=delete_headers
+        )[0] == 204
+        delayed_retry_digest = submission_replay_digest(
+            erasure_source["funnel_id"],
+            erasure_source["form_id"],
+            erasure_source["submission_key"],
+        )
+        run_d1(
+            "INSERT INTO public_submission_erasure_intents "
+            "(submission_id, replay_digest, source_expires_at, deleted_at, retain_until) "
+            f"VALUES ('{erasure_id}', '{delayed_retry_digest}', "
+            f"{erasure_source['expires_at']}, unixepoch() + 10, "
+            f"MAX({erasure_source['expires_at']}, unixepoch() + 2592010))"
+        )
+        delayed_retry_status, delayed_retry_body, _ = request(
+            "DELETE", f"/api/submissions/{erasure_id}", headers=delete_headers
+        )
+        assert delayed_retry_status == 204, delayed_retry_body
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_submission_erasure_intents "
+            f"WHERE submission_id = '{erasure_id}'",
+            "count",
+        )["count"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS submissions FROM public_form_submissions "
+            f"WHERE submission_id = '{erasure_id}'",
+            "submissions",
+        )["submissions"] == 0
+        marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers",
+            "replay_digest",
+        )
+        reused_submission_key = starter_action.group(2).decode()
+        expected_digest = submission_replay_digest(
+            starter_funnel_id, starter_form_id, reused_submission_key
+        )
+        assert marker == {
+            "replay_digest": expected_digest,
+            "expires_at": erasure_source["expires_at"],
+        }, marker
+
+        reused_high = make_submission_snapshot(
+            erasure_source,
+            "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            reused_submission_key,
+            172_800,
+        )
+        run_d1(
+            "UPDATE public_submission_erasure_markers SET expires_at = unixepoch() - 1 "
+            f"WHERE replay_digest = '{expected_digest}'"
+        )
+        insert_submission_snapshot(reused_high)
+        high_delete_status, high_delete_body, _ = request(
+            "DELETE",
+            f"/api/submissions/{reused_high['submission_id']}",
+            headers=delete_headers,
+        )
+        assert high_delete_status == 204, high_delete_body
+        high_marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers "
+            f"WHERE replay_digest = '{expected_digest}'",
+            "replay_digest",
+        )
+        assert high_marker["expires_at"] == reused_high["expires_at"], high_marker
+
+        reused_low = make_submission_snapshot(
+            reused_high,
+            "00000000-0000-4000-8000-000000000001",
+            reused_submission_key,
+            259_200,
+        )
+        run_d1(
+            "UPDATE public_submission_erasure_markers SET expires_at = unixepoch() - 1 "
+            f"WHERE replay_digest = '{expected_digest}'"
+        )
+        insert_submission_snapshot(reused_low)
+        low_delete_status, low_delete_body, _ = request(
+            "DELETE",
+            f"/api/submissions/{reused_low['submission_id']}",
+            headers=delete_headers,
+        )
+        assert low_delete_status == 204, low_delete_body
+        low_marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers "
+            f"WHERE replay_digest = '{expected_digest}'",
+            "replay_digest",
+        )
+        assert low_marker["expires_at"] == reused_low["expires_at"], low_marker
+
+        assert request("GET", f"/api/submissions/{erasure_id}/export")[0] == 404
+        hidden_inbox_status, hidden_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={starter_funnel_id}"
+        )
+        assert hidden_inbox_status == 200, hidden_inbox_body
+        assert json.loads(hidden_inbox_body)["items"] == [], hidden_inbox_body
+        assert request(
+            "POST",
+            f"/api/submissions/{erasure_id}/status",
+            b'{"status":"contacted"}',
+            {"Content-Type": "application/json"},
+        )[0] == 404
+        completion_after_erasure_status, completion_after_erasure_body, _ = request(
+            "GET", f"/api/funnels/{starter_funnel_id}/completions?period=7"
+        )
+        assert completion_after_erasure_status == 200, completion_after_erasure_body
+        assert json.loads(completion_after_erasure_body)["total_completions"] == 0
+
+        interrupted_source = make_submission_snapshot(
+            erasure_source,
+            "55555555-5555-4555-8555-555555555555",
+            "66666666-6666-4666-8666-666666666666",
+            172_800,
+        )
+        interrupted_digest = submission_replay_digest(
+            interrupted_source["funnel_id"],
+            interrupted_source["form_id"],
+            interrupted_source["submission_key"],
+        )
+        insert_submission_snapshot(interrupted_source)
+
+        recovery_headers = {
+            "Content-Type": "application/json",
+            "Origin": f"http://localhost:{port}",
+        }
+        close_status, close_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            b'{"action":"close"}',
+            recovery_headers,
+        )
+        assert close_status == 200, close_body
+        recovery = json.loads(close_body)
+        generation = recovery["generation"]
+        assert recovery["phase"] == "preparing", recovery
+
+        run_d1(
+            "INSERT INTO public_submission_erasure_intents "
+            "(submission_id, replay_digest, source_expires_at, deleted_at, retain_until) "
+            "SELECT submission_id, "
+            f"'{interrupted_digest}', expires_at, unixepoch(), "
+            "MAX(expires_at, unixepoch() + 2592000) "
+            "FROM public_form_submissions "
+            f"WHERE submission_id = '{interrupted_source['submission_id']}'"
+        )
+        run_d1(
+            "INSERT INTO public_submission_erasure_markers (replay_digest, expires_at) "
+            "SELECT replay_digest, source_expires_at "
+            "FROM public_submission_erasure_intents "
+            f"WHERE submission_id = '{interrupted_source['submission_id']}'"
+        )
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_submission_erasure_intents "
+            f"WHERE submission_id = '{interrupted_source['submission_id']}'",
+            "count",
+        )["count"] == 1
+
+        prepare_status, prepare_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "prepare", "generation": generation}, separators=(",", ":")
+            ).encode(),
+            recovery_headers,
+        )
+        assert prepare_status == 200, prepare_body
+        prepared = json.loads(prepare_body)
+        assert prepared["phase"] == "awaiting_restore", prepared
+        assert prepared["pending"] == 0, prepared
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_submission_erasure_intents "
+            f"WHERE submission_id = '{interrupted_source['submission_id']}'",
+            "count",
+        )["count"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_form_submissions "
+            f"WHERE submission_id = '{interrupted_source['submission_id']}'",
+            "count",
+        )["count"] == 0
+
+        insert_submission_snapshot(erasure_source)
+        insert_submission_snapshot(interrupted_source)
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command",
+                "DELETE FROM public_submission_erasure_markers",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        for method, path in (
+            ("GET", "/api/submissions"),
+            ("GET", f"/api/submissions/{erasure_id}/export"),
+            ("GET", f"/api/funnels/{starter_funnel_id}/completions?period=7"),
+            ("POST", f"/api/submissions/{erasure_id}/status"),
+        ):
+            closed_status, _, closed_headers = request(
+                method,
+                path,
+                b'{"status":"contacted"}' if method == "POST" else None,
+                {"Content-Type": "application/json"} if method == "POST" else None,
+            )
+            assert closed_status == 503, (method, path, closed_status)
+            assert closed_headers.get("cache-control") == "private, no-store", closed_headers
+        closed_public_status, _, _ = request_form_with_transport_retry(
+            starter_action.group(1).decode(),
+            urlencode(
+                {
+                    "email": "starter-visitor@example.test",
+                    "project_details": "I need help planning a move for my small shop.",
+                    "_request_consent": "on",
+                }
+            ).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert closed_public_status == 503, closed_public_status
+
+        reconcile_status, reconcile_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "reconcile", "generation": generation}, separators=(",", ":")
+            ).encode(),
+            recovery_headers,
+        )
+        assert reconcile_status == 200, reconcile_body
+        assert json.loads(reconcile_body)["phase"] == "ready", reconcile_body
+        assert d1_query(
+            "SELECT COUNT(*) AS submissions FROM public_form_submissions "
+            f"WHERE submission_id = '{erasure_id}'",
+            "submissions",
+        )["submissions"] == 0
+        restored_marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers "
+            f"WHERE replay_digest = '{expected_digest}'",
+            "replay_digest",
+        )
+        assert restored_marker == {
+            "replay_digest": expected_digest,
+            "expires_at": reused_low["expires_at"],
+        }, restored_marker
+        restored_interrupted_marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers "
+            f"WHERE replay_digest = '{interrupted_digest}'",
+            "replay_digest",
+        )
+        assert restored_interrupted_marker == {
+            "replay_digest": interrupted_digest,
+            "expires_at": interrupted_source["expires_at"],
+        }, restored_interrupted_marker
+        old_key_replay_status, old_key_replay_body, _ = request_form_with_transport_retry(
+            starter_action.group(1).decode(),
+            urlencode(
+                {
+                    "email": "different-value@example.test",
+                    "project_details": "Changed payload must not reuse an erased key.",
+                    "_request_consent": "on",
+                }
+            ).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert old_key_replay_status == 409, (old_key_replay_status, old_key_replay_body)
+        assert b"conflict/idempotency_payload_mismatch" in old_key_replay_body
+        assert b"different-value@example.test" not in old_key_replay_body
+
+        reused_restore_close_status, reused_restore_close_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            b'{"action":"close"}',
+            recovery_headers,
+        )
+        assert reused_restore_close_status == 200, reused_restore_close_body
+        reused_restore_generation = json.loads(reused_restore_close_body)["generation"]
+        reused_restore_prepare_status, reused_restore_prepare_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "prepare", "generation": reused_restore_generation},
+                separators=(",", ":"),
+            ).encode(),
+            recovery_headers,
+        )
+        assert reused_restore_prepare_status == 200, reused_restore_prepare_body
+        assert json.loads(reused_restore_prepare_body)["phase"] == "awaiting_restore"
+        insert_submission_snapshot(reused_low)
+        run_d1("DELETE FROM public_submission_erasure_markers")
+        reused_reconcile_status, reused_reconcile_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "reconcile", "generation": reused_restore_generation},
+                separators=(",", ":"),
+            ).encode(),
+            recovery_headers,
+        )
+        assert reused_reconcile_status == 200, reused_reconcile_body
+        assert json.loads(reused_reconcile_body)["phase"] == "ready"
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_form_submissions "
+            f"WHERE submission_id = '{reused_low['submission_id']}'",
+            "count",
+        )["count"] == 0
+        reused_restored_marker = d1_query(
+            "SELECT replay_digest, expires_at FROM public_submission_erasure_markers "
+            f"WHERE replay_digest = '{expected_digest}'",
+            "replay_digest",
+        )
+        assert reused_restored_marker == {
+            "replay_digest": expected_digest,
+            "expires_at": reused_low["expires_at"],
+        }, reused_restored_marker
+
+        multi_page_fixture_sql = f"""
+            WITH RECURSIVE fixtures(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM fixtures WHERE n < 21
+            )
+            INSERT INTO public_form_submissions (
+                submission_id, funnel_id, revision_id, page_id, form_id, submission_channel,
+                submission_key, request_fingerprint, field_values_json,
+                request_consent_acknowledged, request_consent_copy_version,
+                request_consent_copy, request_consent_recorded_at, submitted_at, expires_at
+            )
+            SELECT printf('f0000000-0000-4000-8000-%012x', fixtures.n), funnels.id,
+                revisions.id, 'page-home', {sql_quote(starter_form_id)}, 'unattributed',
+                printf('e0000000-0000-4000-8000-%012x', fixtures.n),
+                lower(hex(randomblob(32))),
+                json_object('email', printf('lifecycle-%02d@example.test', fixtures.n),
+                            'project_details', 'PUB-007 bounded recovery fixture'),
+                1, 'request-v1', 'I agree to be contacted about this request.',
+                unixepoch(), unixepoch(), unixepoch() + 86400
+            FROM fixtures
+            JOIN funnels ON funnels.id = {sql_quote(starter_funnel_id)}
+            JOIN revisions ON revisions.id = {sql_quote(starter_saved_revision_id)}
+                AND revisions.funnel_id = funnels.id
+        """
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", multi_page_fixture_sql,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        multi_page_ids = [
+            f"f0000000-0000-4000-8000-{number:012x}" for number in range(1, 22)
+        ]
+        for submission_id in multi_page_ids:
+            multi_delete_status, multi_delete_body, _ = request(
+                "DELETE", f"/api/submissions/{submission_id}", headers=delete_headers
+            )
+            assert multi_delete_status == 204, (submission_id, multi_delete_body)
+
+        multi_close_status, multi_close_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            b'{"action":"close"}',
+            recovery_headers,
+        )
+        assert multi_close_status == 200, multi_close_body
+        multi_generation = json.loads(multi_close_body)["generation"]
+        multi_prepare_status, multi_prepare_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "prepare", "generation": multi_generation},
+                separators=(",", ":"),
+            ).encode(),
+            recovery_headers,
+        )
+        assert multi_prepare_status == 200, multi_prepare_body
+        assert json.loads(multi_prepare_body)["phase"] == "awaiting_restore"
+        subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command",
+                "DELETE FROM public_submission_erasure_markers",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        first_reconcile_status, first_reconcile_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "reconcile", "generation": multi_generation},
+                separators=(",", ":"),
+            ).encode(),
+            recovery_headers,
+        )
+        assert first_reconcile_status == 200, first_reconcile_body
+        first_reconcile = json.loads(first_reconcile_body)
+        assert first_reconcile["phase"] == "reconciling", first_reconcile
+        assert first_reconcile["processed"] == 20, first_reconcile
+        second_reconcile_status, second_reconcile_body, _ = request(
+            "POST",
+            "/api/submissions/recovery",
+            json.dumps(
+                {"action": "reconcile", "generation": multi_generation},
+                separators=(",", ":"),
+            ).encode(),
+            recovery_headers,
+        )
+        assert second_reconcile_status == 200, second_reconcile_body
+        second_reconcile = json.loads(second_reconcile_body)
+        assert second_reconcile["phase"] == "ready", second_reconcile
+        assert second_reconcile["processed"] == 5, second_reconcile
+        assert d1_query(
+            "SELECT COUNT(*) AS submissions FROM public_form_submissions "
+            f"WHERE funnel_id = '{starter_funnel_id}'",
+            "submissions",
+        )["submissions"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS markers FROM public_submission_erasure_markers",
+            "markers",
+        )["markers"] == 23
+
         log.close()
         worker_log = log_path.read_text(encoding="utf-8")
         assert "ada@example.test" not in worker_log, worker_log
         assert "starter-visitor@example.test" not in worker_log, worker_log
-        print("PR-067/PR-033 local Worker/D1 flows and PUB-004 service starter journey passed")
+        print("PR-067/PR-033 local Worker/D1 flows, PUB-004 starter, and PUB-007 export/delete/recovery passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

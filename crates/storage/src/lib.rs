@@ -11,6 +11,7 @@ pub mod media;
 pub mod repository;
 pub mod service_brief;
 pub mod stage;
+pub mod submission_lifecycle;
 
 pub const MAX_PUBLIC_FORM_SUBMISSION_BYTES: usize = 512 * 1024;
 
@@ -62,6 +63,12 @@ impl Bindings {
 
     pub fn service_brief_repository(&self) -> service_brief::ServiceBriefRepository<'_> {
         service_brief::ServiceBriefRepository::new(&self.database)
+    }
+
+    pub fn submission_lifecycle_repository(
+        &self,
+    ) -> submission_lifecycle::SubmissionLifecycleRepository<'_> {
+        submission_lifecycle::SubmissionLifecycleRepository::new(&self.database, &self.bucket)
     }
 
     pub fn media_asset_repository(&self) -> media::MediaAssetRepository<'_> {

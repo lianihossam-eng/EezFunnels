@@ -1771,6 +1771,56 @@ h1 {
   font-size: 12px;
 }
 
+.submission-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.submission-delete-confirmation {
+  display: grid;
+  gap: 8px;
+  max-width: 440px;
+  color: #344159;
+  font-size: 13px;
+}
+
+.submission-delete-confirmation summary {
+  color: #8c2525;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.submission-delete-confirmation p {
+  margin: 0;
+}
+
+.submission-delete-confirmation button {
+  justify-self: start;
+}
+
+.submission-delete-feedback,
+.submission-delete-error {
+  color: #344159;
+  font-size: 13px;
+}
+
+.submission-delete-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #e7c5bd;
+  border-radius: 10px;
+  background: #fff8f5;
+}
+
+.submission-delete-error p {
+  margin: 0;
+}
+
 .submission-entry-content {
   display: grid;
   gap: 19px;

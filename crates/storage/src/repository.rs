@@ -264,6 +264,7 @@ pub enum PublicFormSubmissionResult {
     Stored,
     Duplicate,
     KeyReuseMismatch,
+    ErasedReplay,
     RateLimited,
     NotCurrent,
 }
@@ -297,6 +298,7 @@ struct PublicFormSubmissionState {
     is_duplicate: i64,
     is_key_reuse: i64,
     is_rate_limited: i64,
+    is_erased_replay: i64,
 }
 
 #[derive(Deserialize)]
@@ -1413,6 +1415,13 @@ impl<'a> Repository<'a> {
         let form_id = D1Type::Text(input.form_id);
         let submission_channel = D1Type::Text(input.submission_channel.as_str());
         let submission_key = D1Type::Text(input.submission_key);
+        let erased_replay_digest = crate::submission_lifecycle::replay_digest(
+            input.funnel_id,
+            input.form_id,
+            input.submission_key,
+        )
+        .map_err(|_| RepositoryError::InvalidField("submission_key"))?;
+        let erased_replay_digest = D1Type::Text(&erased_replay_digest);
         let request_fingerprint = D1Type::Text(&request_fingerprint);
         let field_values_json = D1Type::Text(input.field_values_json);
         let request_consent_copy_version = D1Type::Text(input.request_consent_copy_version);
@@ -1432,7 +1441,7 @@ impl<'a> Repository<'a> {
         let inserted = self
             .database
             .prepare(
-                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, submission_key, request_fingerprint, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
+                "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, submission_key, request_fingerprint, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_markers WHERE replay_digest = ? AND expires_at > unixepoch()) ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
             )
             .bind_refs([
                 &submission_id,
@@ -1454,6 +1463,7 @@ impl<'a> Repository<'a> {
                 &funnel_slug,
                 &revision_id,
                 &limit_per_minute,
+                &erased_replay_digest,
             ])?
             .first::<String>(Some("submission_id"))
             .await?;
@@ -1464,7 +1474,7 @@ impl<'a> Repository<'a> {
         let state = self
             .database
             .prepare(
-                "SELECT EXISTS(SELECT 1 FROM funnels WHERE id = ? AND slug = ? AND published_revision_id = ?) AS is_current, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ? AND request_fingerprint = ?) AS is_duplicate, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS is_key_reuse, (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = ? AND submitted_at >= unixepoch() - 60) >= ? AS is_rate_limited",
+                "SELECT EXISTS(SELECT 1 FROM funnels WHERE id = ? AND slug = ? AND published_revision_id = ?) AS is_current, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ? AND request_fingerprint = ?) AS is_duplicate, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS is_key_reuse, (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = ? AND submitted_at >= unixepoch() - 60) >= ? AS is_rate_limited, EXISTS(SELECT 1 FROM public_submission_erasure_markers WHERE replay_digest = ? AND expires_at > unixepoch()) AS is_erased_replay",
             )
             .bind_refs([
                 &funnel_id,
@@ -1479,6 +1489,7 @@ impl<'a> Repository<'a> {
                 &submission_key,
                 &funnel_id,
                 &limit_per_minute,
+                &erased_replay_digest,
             ])?
             .first::<PublicFormSubmissionState>(None)
             .await?
@@ -1486,6 +1497,9 @@ impl<'a> Repository<'a> {
 
         if state.is_current != 1 {
             return Ok(PublicFormSubmissionResult::NotCurrent);
+        }
+        if state.is_erased_replay == 1 {
+            return Ok(PublicFormSubmissionResult::ErasedReplay);
         }
         if state.is_duplicate == 1 {
             return Ok(PublicFormSubmissionResult::Duplicate);
@@ -1505,7 +1519,7 @@ impl<'a> Repository<'a> {
             let deleted = self
                 .database
                 .prepare(
-                    "DELETE FROM public_form_submissions WHERE submission_id IN (SELECT submission_id FROM public_form_submissions WHERE expires_at <= unixepoch() ORDER BY expires_at LIMIT ?)",
+                    "DELETE FROM public_form_submissions WHERE submission_id IN (SELECT source.submission_id FROM public_form_submissions AS source WHERE source.expires_at <= unixepoch() AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents AS intent WHERE intent.submission_id = source.submission_id) ORDER BY source.expires_at LIMIT ?)",
                 )
                 .bind_refs([&batch_size])?
                 .run()
@@ -1709,7 +1723,7 @@ impl<'a> Repository<'a> {
         };
         let limit = D1Type::Integer((PUBLIC_FORM_SUBMISSION_PAGE_SIZE + 1) as i32);
         let query = format!(
-            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2{funnel_predicate}{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
+            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents AS intent WHERE intent.submission_id = public_form_submissions.submission_id){funnel_predicate}{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
         );
         let mut bindings = Vec::with_capacity(7);
         if let Some(funnel_id) = funnel_id {
@@ -1755,7 +1769,7 @@ impl<'a> Repository<'a> {
         let updated = self
             .database
             .prepare(
-                "UPDATE public_form_submissions SET triage_status = ? WHERE submission_id = ? AND expires_at > unixepoch() RETURNING submission_id",
+                "UPDATE public_form_submissions SET triage_status = ? WHERE submission_id = ? AND expires_at > unixepoch() AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = public_form_submissions.submission_id) RETURNING submission_id",
             )
             .bind_refs([&status, &submission_id])?
             .first::<String>(Some("submission_id"))
@@ -1774,7 +1788,7 @@ impl<'a> Repository<'a> {
         let rows = self
             .database
             .prepare(
-                "WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), retained AS MATERIALIZED (SELECT submissions.submitted_at, submissions.form_id, submissions.submission_channel FROM public_form_submissions AS submissions JOIN funnel ON funnel.id = submissions.funnel_id CROSS JOIN bounds WHERE submissions.submitted_at >= bounds.start_at AND submissions.submitted_at < bounds.end_at AND submissions.expires_at > bounds.now), daily AS (SELECT strftime('%Y-%m-%d', submitted_at, 'unixepoch') AS utc_day, COUNT(*) AS completions FROM retained GROUP BY strftime('%Y-%m-%d', submitted_at, 'unixepoch')), forms AS (SELECT form_id, COUNT(*) AS completions FROM retained GROUP BY form_id), channels AS (SELECT submission_channel, COUNT(*) AS completions FROM retained GROUP BY submission_channel) SELECT 'day' AS row_type, days.utc_day, NULL AS form_id, NULL AS submission_channel, COALESCE(daily.completions, 0) AS completions FROM days CROSS JOIN funnel LEFT JOIN daily ON daily.utc_day = days.utc_day UNION ALL SELECT 'form' AS row_type, NULL AS utc_day, forms.form_id, NULL AS submission_channel, forms.completions FROM forms UNION ALL SELECT 'channel' AS row_type, NULL AS utc_day, NULL AS form_id, channels.submission_channel, channels.completions FROM channels ORDER BY row_type ASC, utc_day ASC, form_id ASC, submission_channel ASC",
+                "WITH RECURSIVE clock(now) AS (SELECT unixepoch()), funnel(id) AS (SELECT id FROM funnels WHERE id = ?), bounds(now, start_at, end_at) AS (SELECT clock.now, unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))), unixepoch(date(clock.now, 'unixepoch', '+1 day')) FROM clock), days(utc_day, offset) AS (SELECT date(bounds.start_at, 'unixepoch'), 0 FROM bounds UNION ALL SELECT date(days.utc_day, '+1 day'), days.offset + 1 FROM days WHERE days.offset + 1 < ?), retained AS MATERIALIZED (SELECT submissions.submitted_at, submissions.form_id, submissions.submission_channel FROM public_form_submissions AS submissions JOIN funnel ON funnel.id = submissions.funnel_id CROSS JOIN bounds WHERE submissions.submitted_at >= bounds.start_at AND submissions.submitted_at < bounds.end_at AND submissions.expires_at > bounds.now AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents AS intent WHERE intent.submission_id = submissions.submission_id)), daily AS (SELECT strftime('%Y-%m-%d', submitted_at, 'unixepoch') AS utc_day, COUNT(*) AS completions FROM retained GROUP BY strftime('%Y-%m-%d', submitted_at, 'unixepoch')), forms AS (SELECT form_id, COUNT(*) AS completions FROM retained GROUP BY form_id), channels AS (SELECT submission_channel, COUNT(*) AS completions FROM retained GROUP BY submission_channel) SELECT 'day' AS row_type, days.utc_day, NULL AS form_id, NULL AS submission_channel, COALESCE(daily.completions, 0) AS completions FROM days CROSS JOIN funnel LEFT JOIN daily ON daily.utc_day = days.utc_day UNION ALL SELECT 'form' AS row_type, NULL AS utc_day, forms.form_id, NULL AS submission_channel, forms.completions FROM forms UNION ALL SELECT 'channel' AS row_type, NULL AS utc_day, NULL AS form_id, channels.submission_channel, channels.completions FROM channels ORDER BY row_type ASC, utc_day ASC, form_id ASC, submission_channel ASC",
             )
             .bind_refs([
                 &funnel_id,

@@ -82,6 +82,7 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 | Mapped custom funnel host `/` and `/:page_slug` | Render one mapped funnel; dashboard, owner APIs, and MCP are not available on that host |
 | `/api/public/funnels/:slug/pages/:page_id/forms/:form_id/submissions` | Accept a public form submission after validating a supplied Origin |
 | `/api/submissions` and `/api/submissions/:submission_id/status` | Read retained submissions and update their follow-up status |
+| `/api/submissions/:submission_id/export` and `DELETE /api/submissions/:submission_id` | Export or erase one retained response; see the [erasure and recovery runbook](docs/runbooks/submission-erasure.md) |
 | `/api/funnels/:funnel_id/completions?period=7|30|90` | Read retained form completion counts for one funnel |
 | `/funnels/:id/completions` | View aggregate form completion counts for one funnel |
 | `/api/funnels/:funnel_id/interaction-report?period=7|30|90` | Read consented, retained interaction event aggregates for one funnel |

@@ -117,11 +117,27 @@ pub async fn fetch(
     let (platform_hosts, custom_hosts) = request_host_configuration(&env);
     let custom_host = custom_hosts.for_headers(request.headers());
     let host_is_allowed = platform_hosts.allows_headers(request.headers()) || custom_host.is_some();
+    let recovery_route = request_path == "/api/submissions/recovery";
+    let submission_gate_open =
+        if host_is_allowed && !recovery_route && submission_recovery_gated_path(&request_path) {
+            match eez_storage::Bindings::from_env(&env) {
+                Ok(bindings) => bindings
+                    .submission_lifecycle_repository()
+                    .require_recovery_ready()
+                    .await
+                    .is_ok(),
+                Err(_) => false,
+            }
+        } else {
+            true
+        };
 
     let mut response = if !host_is_allowed {
         let error = ApiError::from_code("authorization/host_not_allowed");
         log_api_error(&error, &correlation_id, "request host is not allowlisted");
         error_response(&error, correlation_id.clone())
+    } else if !submission_gate_open {
+        lifecycle_unavailable_response(&correlation_id)
     } else if let Some(mapping) = custom_host.as_ref() {
         custom_host_response(
             &env,
@@ -145,6 +161,12 @@ pub async fn fetch(
         media_asset_response(&env, request, asset_id, correlation_id.clone()).await
     } else if request_path == "/api/v2/stage-capacity" {
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
+    } else if request_path == "/api/submissions/recovery" {
+        submission_recovery_response(&env, request, correlation_id.clone()).await
+    } else if let Some(submission_id) = form_submission_export_id_from_path(&request_path) {
+        form_submission_export_response(&env, request, submission_id, correlation_id.clone()).await
+    } else if let Some(submission_id) = form_submission_delete_id_from_path(&request_path) {
+        form_submission_delete_response(&env, request, submission_id, correlation_id.clone()).await
     } else if let Some(submission_id) = form_submission_status_id_from_path(&request_path) {
         form_submission_status_response(&env, request, submission_id, correlation_id.clone()).await
     } else if request_path == "/api/submissions" {
@@ -292,12 +314,41 @@ pub async fn scheduled(
             return;
         }
     };
-    if let Err(error) = bindings
-        .repository()
-        .cleanup_expired_public_form_submissions()
-        .await
-    {
-        worker::console_error!("Expired public form submission cleanup failed: {error:?}");
+    let lifecycle = bindings.submission_lifecycle_repository();
+    match lifecycle.recovery_status().await {
+        Ok(status) if status.phase == eez_storage::submission_lifecycle::RecoveryPhase::Ready => {
+            if let Err(error) =
+                eez_commands::submission_lifecycle::maintain_pending(&lifecycle, 16).await
+            {
+                worker::console_error!("Pending submission erasure maintenance failed: {error:?}");
+            }
+            if let Err(error) = bindings
+                .repository()
+                .cleanup_expired_public_form_submissions()
+                .await
+            {
+                worker::console_error!("Expired public form submission cleanup failed: {error:?}");
+            }
+            if lifecycle.cleanup_expired_markers().await.is_err() {
+                worker::console_error!("Expired submission erasure marker cleanup failed");
+            }
+            if lifecycle.cleanup_journal_page().await.is_err() {
+                worker::console_error!("Submission erasure journal cleanup failed");
+            }
+        }
+        Ok(status)
+            if status.phase == eez_storage::submission_lifecycle::RecoveryPhase::Preparing =>
+        {
+            if let Err(error) =
+                eez_commands::submission_lifecycle::maintain_pending(&lifecycle, 16).await
+            {
+                worker::console_error!("Pending submission erasure maintenance failed: {error:?}");
+            }
+        }
+        Ok(_) => {}
+        Err(_) => worker::console_error!(
+            "Submission recovery gate unavailable; submission cleanup paused"
+        ),
     }
     if let Err(error) = bindings
         .repository()
@@ -2218,6 +2269,31 @@ fn form_submission_status_id_from_path(path: &str) -> Option<&str> {
     (suffix == "status" && !submission_id.is_empty()).then_some(submission_id)
 }
 
+fn form_submission_export_id_from_path(path: &str) -> Option<&str> {
+    let route = path.strip_prefix("/api/submissions/")?;
+    let (submission_id, suffix) = route.split_once('/')?;
+    (suffix == "export" && canonical_submission_id(submission_id)).then_some(submission_id)
+}
+
+fn form_submission_delete_id_from_path(path: &str) -> Option<&str> {
+    let submission_id = path.strip_prefix("/api/submissions/")?;
+    (!submission_id.contains('/') && canonical_submission_id(submission_id))
+        .then_some(submission_id)
+}
+
+fn canonical_submission_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value)
+        .map(|id| id.hyphenated().to_string() == value)
+        .unwrap_or(false)
+}
+
+fn submission_recovery_gated_path(path: &str) -> bool {
+    path == "/api/submissions"
+        || (path.starts_with("/api/submissions/") && path != "/api/submissions/recovery")
+        || funnel_subroute(path, "/completions").is_some()
+        || public_form_submission_route_from_path(path).is_some()
+}
+
 fn form_submission_status_command_parameters(
     submission_id: &str,
     body: &str,
@@ -2633,6 +2709,303 @@ async fn form_submission_status_response(
             error_response(&error, correlation_id)
         }
     }
+}
+
+async fn form_submission_export_response(
+    env: &Env,
+    request: HttpRequest,
+    submission_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return private_lifecycle_response(method_not_allowed_for(&correlation_id, "GET"));
+    }
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return lifecycle_unavailable_response(&correlation_id),
+    };
+    match eez_commands::submission_lifecycle::export_one(
+        &bindings.submission_lifecycle_repository(),
+        submission_id,
+    )
+    .await
+    {
+        Ok(export) => {
+            let Ok(body) = serde_json::to_vec(&export) else {
+                return lifecycle_unavailable_response(&correlation_id);
+            };
+            let mut response = Response::new(axum::body::Body::from(body));
+            *response.status_mut() = StatusCode::OK;
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            let disposition = format!("attachment; filename=\"submission-{submission_id}.json\"");
+            if let Ok(value) = HeaderValue::from_str(&disposition) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::CONTENT_DISPOSITION, value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+                response.headers_mut().insert("x-correlation-id", value);
+            }
+            private_lifecycle_response(response)
+        }
+        Err(error) => lifecycle_error_response(error, &correlation_id, false),
+    }
+}
+
+async fn form_submission_delete_response(
+    env: &Env,
+    request: HttpRequest,
+    submission_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::DELETE {
+        return private_lifecycle_response(method_not_allowed_for(&correlation_id, "DELETE"));
+    }
+    if !owner_mutation_origin_matches(&request) {
+        return private_lifecycle_response(error_response(
+            &ApiError::from_code("authorization/host_not_allowed"),
+            correlation_id,
+        ));
+    }
+    let Some(horizon_days) = submission_erasure_recovery_horizon_days(env) else {
+        return lifecycle_unavailable_response(&correlation_id);
+    };
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return lifecycle_unavailable_response(&correlation_id),
+    };
+    match eez_commands::submission_lifecycle::erase_one(
+        &bindings.submission_lifecycle_repository(),
+        submission_id,
+        horizon_days,
+    )
+    .await
+    {
+        Ok(_) => {
+            let mut response = Response::new(axum::body::Body::empty());
+            *response.status_mut() = StatusCode::NO_CONTENT;
+            if let Ok(value) = HeaderValue::from_str(&correlation_id) {
+                response.headers_mut().insert("x-correlation-id", value);
+            }
+            private_lifecycle_response(response)
+        }
+        Err(error) => lifecycle_error_response(error, &correlation_id, true),
+    }
+}
+
+async fn submission_recovery_response(
+    env: &Env,
+    request: HttpRequest,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => return lifecycle_unavailable_response(&correlation_id),
+    };
+    let repository = bindings.submission_lifecycle_repository();
+    if request.method() == Method::GET {
+        return match repository.recovery_status().await {
+            Ok(status) => recovery_status_response(status, None, None, &correlation_id),
+            Err(_) => lifecycle_unavailable_response(&correlation_id),
+        };
+    }
+    if request.method() != Method::POST {
+        return private_lifecycle_response(method_not_allowed_for(&correlation_id, "GET, POST"));
+    }
+    if !owner_mutation_origin_matches(&request) {
+        return private_lifecycle_response(error_response(
+            &ApiError::from_code("authorization/host_not_allowed"),
+            correlation_id,
+        ));
+    }
+    if !is_json_content_type(request.headers()) {
+        return lifecycle_error_response(
+            eez_commands::submission_lifecycle::SubmissionLifecycleError::InvalidInput,
+            &correlation_id,
+            false,
+        );
+    }
+    let body = match to_bytes(axum::body::Body::new(request.into_body()), 1_024).await {
+        Ok(body) => body,
+        Err(_) => {
+            return lifecycle_error_response(
+                eez_commands::submission_lifecycle::SubmissionLifecycleError::InvalidInput,
+                &correlation_id,
+                false,
+            )
+        }
+    };
+    let Ok(body) = std::str::from_utf8(&body) else {
+        return lifecycle_error_response(
+            eez_commands::submission_lifecycle::SubmissionLifecycleError::InvalidInput,
+            &correlation_id,
+            false,
+        );
+    };
+    let action = match submission_recovery_action(body) {
+        Ok(action) => action,
+        Err(()) => {
+            return lifecycle_error_response(
+                eez_commands::submission_lifecycle::SubmissionLifecycleError::InvalidInput,
+                &correlation_id,
+                false,
+            )
+        }
+    };
+    match action {
+        SubmissionRecoveryAction::Close => {
+            match eez_commands::submission_lifecycle::begin_recovery(&repository).await {
+                Ok(status) => recovery_status_response(status, None, None, &correlation_id),
+                Err(error) => lifecycle_error_response(error, &correlation_id, false),
+            }
+        }
+        SubmissionRecoveryAction::Prepare { generation } => {
+            match eez_commands::submission_lifecycle::prepare_recovery_step(
+                &repository,
+                &generation,
+            )
+            .await
+            {
+                Ok((status, attempted, pending)) => recovery_status_response(
+                    status,
+                    Some(attempted),
+                    Some(pending),
+                    &correlation_id,
+                ),
+                Err(error) => lifecycle_error_response(error, &correlation_id, false),
+            }
+        }
+        SubmissionRecoveryAction::Reconcile { generation } => {
+            match eez_commands::submission_lifecycle::reconcile_after_restore(
+                &repository,
+                &generation,
+            )
+            .await
+            {
+                Ok((status, processed)) => {
+                    recovery_status_response(status, Some(processed), None, &correlation_id)
+                }
+                Err(error) => lifecycle_error_response(error, &correlation_id, false),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SubmissionRecoveryAction {
+    Close,
+    Prepare { generation: String },
+    Reconcile { generation: String },
+}
+
+fn submission_recovery_action(body: &str) -> Result<SubmissionRecoveryAction, ()> {
+    validate_unique_json(body).map_err(|_| ())?;
+    let value: Value = serde_json::from_str(body).map_err(|_| ())?;
+    let object = value.as_object().ok_or(())?;
+    let action = object.get("action").and_then(Value::as_str).ok_or(())?;
+    match action {
+        "close" if object.len() == 1 => Ok(SubmissionRecoveryAction::Close),
+        "prepare" | "reconcile" if object.len() == 2 => {
+            let generation = object.get("generation").and_then(Value::as_str).ok_or(())?;
+            if !canonical_submission_id(generation) {
+                return Err(());
+            }
+            if action == "prepare" {
+                Ok(SubmissionRecoveryAction::Prepare {
+                    generation: generation.to_owned(),
+                })
+            } else {
+                Ok(SubmissionRecoveryAction::Reconcile {
+                    generation: generation.to_owned(),
+                })
+            }
+        }
+        _ => Err(()),
+    }
+}
+
+fn recovery_status_response(
+    status: eez_storage::submission_lifecycle::RecoveryStatus,
+    processed: Option<u32>,
+    pending: Option<u64>,
+    correlation_id: &str,
+) -> Response<axum::body::Body> {
+    let mut value = serde_json::json!({
+        "generation": status.generation,
+        "phase": status.phase,
+    });
+    if let Some(processed) = processed {
+        value["processed"] = serde_json::json!(processed);
+    }
+    if let Some(pending) = pending {
+        value["pending"] = serde_json::json!(pending);
+    }
+    private_lifecycle_response(json_success_response(
+        value,
+        StatusCode::OK,
+        correlation_id,
+        None,
+    ))
+}
+
+fn owner_mutation_origin_matches(request: &HttpRequest) -> bool {
+    request.headers().get_all("origin").iter().count() == 1
+        && origin::matches_request_host(request.headers(), request.uri().scheme_str())
+}
+
+fn submission_erasure_recovery_horizon_days(env: &Env) -> Option<u16> {
+    let value = match env.var("SUBMISSION_ERASURE_RECOVERY_HORIZON_DAYS") {
+        Ok(value) => value.to_string(),
+        Err(_) => return Some(30),
+    };
+    let days = value.parse::<u16>().ok()?;
+    (1..=3_650).contains(&days).then_some(days)
+}
+
+fn lifecycle_error_response(
+    error: eez_commands::submission_lifecycle::SubmissionLifecycleError,
+    correlation_id: &str,
+    erase_operation: bool,
+) -> Response<axum::body::Body> {
+    use eez_commands::submission_lifecycle::SubmissionLifecycleError;
+    match error {
+        SubmissionLifecycleError::NotFound => private_lifecycle_response(error_response(
+            &ApiError::from_code("not_found/route"),
+            correlation_id.to_owned(),
+        )),
+        SubmissionLifecycleError::Unavailable => lifecycle_unavailable_response(correlation_id),
+        SubmissionLifecycleError::InvalidInput => private_lifecycle_response(error_response(
+            &ApiError::from_code("validation/invalid_json"),
+            correlation_id.to_owned(),
+        )),
+        SubmissionLifecycleError::Conflict if erase_operation => {
+            lifecycle_unavailable_response(correlation_id)
+        }
+        SubmissionLifecycleError::Conflict => private_lifecycle_response(error_response(
+            &ApiError::from_code("conflict/idempotency_payload_mismatch"),
+            correlation_id.to_owned(),
+        )),
+    }
+}
+
+fn lifecycle_unavailable_response(correlation_id: &str) -> Response<axum::body::Body> {
+    private_lifecycle_response(error_response(
+        &ApiError::from_code("external/unavailable"),
+        correlation_id.to_owned(),
+    ))
+}
+
+fn private_lifecycle_response(
+    mut response: Response<axum::body::Body>,
+) -> Response<axum::body::Body> {
+    response.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
 }
 
 async fn funnel_completion_report_response(
@@ -4281,6 +4654,7 @@ mod tests {
     use super::{
         append_interaction_script, bind_public_form_submission_identity, correlation_id,
         custom_host_route_from_path, editor_command_parameters, form_completion_period,
+        form_submission_delete_id_from_path, form_submission_export_id_from_path,
         form_submission_status_command_parameters, form_submission_status_id_from_path,
         funnel_subroute, interaction_consent, interaction_origin_matches,
         interaction_report_period, is_json_content_type, normalize_correlation_id,
@@ -4289,7 +4663,8 @@ mod tests {
         public_form_submission_query, public_form_submission_route_from_path, public_html_etag,
         public_interaction_events_route_from_path, public_route_from_path,
         publication_command_parameters, published_document_references_asset, request_if_none_match,
-        sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
+        sitemap_revisions, stage_upload_token, submission_recovery_action,
+        submission_recovery_gated_path, v1_conversion_command_parameters,
         v2_document_revision_query, v2_edit_command_parameters, v2_preview_command_parameters,
         v2_save_command_parameters, v2_stage_command_parameters, valid_public_slug,
         CustomHostRequestRoute, EditorCommandParametersError, InteractionReportPeriod,
@@ -4316,6 +4691,7 @@ mod tests {
                     "11111111-1111-4111-8111-111111111111",
                     input,
                 );
+                let _ = submission_recovery_action(input);
             });
             assert!(
                 result.is_ok(),
@@ -5245,6 +5621,83 @@ mod tests {
         ] {
             assert_eq!(form_submission_status_id_from_path(path), None, "{path}");
         }
+    }
+
+    #[test]
+    fn submission_export_and_delete_routes_require_a_canonical_id() {
+        let submission_id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            form_submission_export_id_from_path(&format!(
+                "/api/submissions/{submission_id}/export"
+            )),
+            Some(submission_id)
+        );
+        assert_eq!(
+            form_submission_delete_id_from_path(&format!("/api/submissions/{submission_id}")),
+            Some(submission_id)
+        );
+        for path in [
+            "/api/submissions/not-a-uuid/export",
+            "/api/submissions/11111111-1111-4111-8111-11111111111A/export",
+            "/api/submissions/11111111-1111-4111-8111-111111111111/export/extra",
+            "/api/submissions/not-a-uuid",
+            "/api/submissions/11111111-1111-4111-8111-111111111111/",
+        ] {
+            assert_eq!(form_submission_export_id_from_path(path), None, "{path}");
+            assert_eq!(form_submission_delete_id_from_path(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn submission_recovery_actions_are_closed_and_generation_bound() {
+        let generation = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            submission_recovery_action(r#"{"action":"close"}"#),
+            Ok(super::SubmissionRecoveryAction::Close)
+        );
+        assert_eq!(
+            submission_recovery_action(&format!(
+                r#"{{"action":"prepare","generation":"{generation}"}}"#
+            )),
+            Ok(super::SubmissionRecoveryAction::Prepare {
+                generation: generation.to_owned()
+            })
+        );
+        assert_eq!(
+            submission_recovery_action(&format!(
+                r#"{{"action":"reconcile","generation":"{generation}"}}"#
+            )),
+            Ok(super::SubmissionRecoveryAction::Reconcile {
+                generation: generation.to_owned()
+            })
+        );
+        for body in [
+            r#"{"action":"open"}"#,
+            r#"{"action":"close","generation":"11111111-1111-4111-8111-111111111111"}"#,
+            r#"{"action":"prepare","generation":"not-a-uuid"}"#,
+            r#"{"action":"reconcile","generation":"11111111-1111-4111-8111-111111111111","complete":true}"#,
+            r#"{"action":"close","action":"reconcile"}"#,
+        ] {
+            assert_eq!(submission_recovery_action(body), Err(()), "{body}");
+        }
+    }
+
+    #[test]
+    fn submission_data_routes_share_the_recovery_gate() {
+        assert!(submission_recovery_gated_path("/api/submissions"));
+        assert!(submission_recovery_gated_path(
+            "/api/submissions/11111111-1111-4111-8111-111111111111/export"
+        ));
+        assert!(submission_recovery_gated_path(
+            "/api/public/funnels/service/pages/home/forms/contact/submissions"
+        ));
+        assert!(submission_recovery_gated_path(
+            "/api/funnels/11111111-1111-4111-8111-111111111111/completions"
+        ));
+        assert!(!submission_recovery_gated_path("/api/submissions/recovery"));
+        assert!(!submission_recovery_gated_path(
+            "/api/public/funnels/service/interaction-events"
+        ));
     }
 
     #[test]

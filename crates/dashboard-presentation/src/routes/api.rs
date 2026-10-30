@@ -388,6 +388,22 @@ pub(super) async fn update_public_form_submission_status(
 }
 
 #[cfg(feature = "browser")]
+pub(super) async fn delete_public_form_submission(submission_id: &str) -> Result<(), ()> {
+    let response = api_request(
+        "DELETE",
+        &format!("/api/submissions/{submission_id}"),
+        None,
+        None,
+    )
+    .await?;
+    if response.status == 204 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+#[cfg(feature = "browser")]
 pub(super) async fn load_service_brief(funnel_id: &str) -> Result<ServiceBriefApiResponse, ()> {
     let response = api_request(
         "GET",

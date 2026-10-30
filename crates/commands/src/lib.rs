@@ -11,6 +11,7 @@ pub mod public_forms;
 pub mod public_interactions;
 mod registry;
 pub mod service_brief;
+pub mod submission_lifecycle;
 
 pub use eez_domain::FunnelBlueprint;
 #[cfg(test)]
