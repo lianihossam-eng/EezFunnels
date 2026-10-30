@@ -12,8 +12,10 @@ python3 "$repo_root/scripts/test-pr057-migration.py"
 python3 "$repo_root/scripts/test-pr067-interaction-migration.py"
 python3 "$repo_root/scripts/test-pr069-interaction-report-query.py"
 python3 "$repo_root/scripts/test-pub007-migration.py"
+python3 "$repo_root/scripts/test-pub008-migration.py"
 
 python3 - "$repo_root" <<'PY'
+import concurrent.futures
 import hashlib
 import http.client
 import json
@@ -191,6 +193,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             text=True,
             timeout=30,
         )
+
+    def expect_d1_failure(sql):
+        result = subprocess.run(
+            [
+                str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
+                "--persist-to", str(persist), "--command", sql,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0, sql
 
     def submission_replay_digest(funnel_id, form_id, submission_key):
         encoded = b"eezfunnel-submission-erasure-v1\0"
@@ -1631,6 +1646,315 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert cleanup_result["submissions"] == 0, cleanup_result
         assert cleanup_result["interaction_events"] == 0, cleanup_result
 
+        assert d1_query(
+            "SELECT enabled FROM webhook_installation_delivery WHERE installation_id = 1",
+            "enabled",
+        )["enabled"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox", "tasks"
+        )["tasks"] == 0
+
+        outbox_page_status, outbox_page_html, _ = request("GET", f"/f/{slug}")
+        assert outbox_page_status == 200, outbox_page_html
+        outbox_action = re.search(
+            rb'action="(/api/public/funnels/[^\"]+/pages/page-home/forms/'
+            + re.escape(form_id.encode())
+            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})&channel=(unattributed|search|social|email|paid|partner|other))"',
+            outbox_page_html,
+        )
+        assert outbox_action is not None, outbox_page_html
+        assert outbox_action.group(3).decode() == updated_revision_id
+
+        def outbox_action_for_key(key):
+            return re.sub(
+                r"(?<=key=)[0-9a-f-]{36}",
+                key,
+                outbox_action.group(1).decode(),
+                count=1,
+            )
+
+        outbox_payload = urlencode(
+            {
+                "name": "Grace Hopper",
+                "email": "outbox-visitor@example.test",
+                "_request_consent": "on",
+            }
+        ).encode()
+        form_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        historical_key = str(uuid.uuid4())
+        historical_status, historical_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(historical_key), outbox_payload, form_headers
+        )
+        assert historical_status == 303, historical_body
+        historical_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(historical_key)}",
+            "submission_id",
+        )["submission_id"]
+
+        destination_a = str(uuid.uuid4())
+        destination_b = str(uuid.uuid4())
+        mapping_a = str(uuid.uuid4())
+        mapping_b = str(uuid.uuid4())
+        selected_fields = sql_quote(json.dumps([name_field["id"], email_field["id"]]))
+        run_d1(
+            "INSERT INTO webhook_destination_versions "
+            "(destination_version_id, destination_url, created_at) VALUES "
+            f"({sql_quote(destination_a)}, 'https://receiver.invalid/pub008-a', unixepoch()); "
+            "UPDATE webhook_installation_delivery SET enabled = 1, "
+            f"destination_version_id = {sql_quote(destination_a)} WHERE installation_id = 1; "
+            "INSERT INTO public_form_delivery_mapping_versions "
+            "(mapping_version_id, funnel_id, form_id, destination_version_id, "
+            "selected_fields_json, created_at) VALUES "
+            f"({sql_quote(mapping_a)}, {sql_quote(funnel_id)}, {sql_quote(form_id)}, "
+            f"{sql_quote(destination_a)}, {selected_fields}, unixepoch()); "
+            "INSERT INTO public_form_delivery_settings "
+            "(funnel_id, form_id, enabled, expected_destination_version_id, mapping_version_id) "
+            "VALUES "
+            f"({sql_quote(funnel_id)}, {sql_quote(form_id)}, 1, "
+            f"{sql_quote(destination_a)}, {sql_quote(mapping_a)})"
+        )
+        historical_retry_status, historical_retry_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(historical_key), outbox_payload, form_headers
+        )
+        assert historical_retry_status == 303, historical_retry_body
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(historical_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+        run_d1(
+            "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300 "
+            f"WHERE submission_id = {sql_quote(historical_submission_id)}"
+        )
+
+        run_d1(
+            "UPDATE webhook_installation_delivery SET enabled = 0 WHERE installation_id = 1"
+        )
+        disabled_key = str(uuid.uuid4())
+        disabled_status, disabled_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(disabled_key), outbox_payload, form_headers
+        )
+        assert disabled_status == 303, disabled_body
+        disabled_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(disabled_key)}",
+            "submission_id",
+        )["submission_id"]
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(disabled_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+        run_d1(
+            "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300 "
+            f"WHERE submission_id = {sql_quote(disabled_submission_id)}; "
+            "UPDATE webhook_installation_delivery SET enabled = 1 WHERE installation_id = 1"
+        )
+
+        concurrent_key = str(uuid.uuid4())
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            concurrent_results = list(
+                pool.map(
+                    lambda _: request_form_with_transport_retry(
+                        outbox_action_for_key(concurrent_key), outbox_payload, form_headers
+                    ),
+                    range(2),
+                )
+            )
+        assert [result[0] for result in concurrent_results] == [303, 303], concurrent_results
+        concurrent_submission = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(concurrent_key)}",
+            "submission_id",
+        )["submission_id"]
+        assert d1_query(
+            "SELECT COUNT(*) AS sources FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(concurrent_submission)}",
+            "sources",
+        )["sources"] == 1
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(concurrent_submission)}",
+            "tasks",
+        )["tasks"] == 1
+        task_a = d1_query(
+            "SELECT task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, "
+            "destination_version_id, mapping_version_id, state FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(concurrent_submission)}",
+            "task_id",
+        )
+        assert task_a["task_id"] == concurrent_submission, task_a
+        assert task_a["destination_version_id"] == destination_a, task_a
+        assert task_a["mapping_version_id"] == mapping_a, task_a
+        assert task_a["state"] == "pending", task_a
+        assert "outbox-visitor@example.test" not in json.dumps(task_a), task_a
+
+        run_d1(
+            "INSERT INTO webhook_destination_versions "
+            "(destination_version_id, destination_url, created_at) VALUES "
+            f"({sql_quote(destination_b)}, 'https://receiver.invalid/pub008-b', unixepoch()); "
+            "UPDATE webhook_installation_delivery SET destination_version_id = "
+            f"{sql_quote(destination_b)} WHERE installation_id = 1; "
+            "INSERT INTO public_form_delivery_mapping_versions "
+            "(mapping_version_id, funnel_id, form_id, destination_version_id, "
+            "selected_fields_json, created_at) VALUES "
+            f"({sql_quote(mapping_b)}, {sql_quote(funnel_id)}, {sql_quote(form_id)}, "
+            f"{sql_quote(destination_b)}, {selected_fields}, unixepoch())"
+        )
+        changed_destination_retry_status, changed_destination_retry_body, _ = (
+            request_form_with_transport_retry(
+                outbox_action_for_key(concurrent_key), outbox_payload, form_headers
+            )
+        )
+        assert changed_destination_retry_status == 303, changed_destination_retry_body
+        assert d1_query(
+            "SELECT destination_version_id, mapping_version_id "
+            "FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(concurrent_submission)}",
+            "destination_version_id",
+        ) == {"destination_version_id": destination_a, "mapping_version_id": mapping_a}
+
+        mismatch_key = str(uuid.uuid4())
+        mismatch_status, mismatch_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(mismatch_key), outbox_payload, form_headers
+        )
+        assert mismatch_status == 303, mismatch_body
+        mismatch_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(mismatch_key)}",
+            "submission_id",
+        )["submission_id"]
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(mismatch_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+        run_d1(
+            "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300 "
+            f"WHERE submission_id = {sql_quote(mismatch_submission_id)}; "
+            "UPDATE public_form_delivery_settings SET expected_destination_version_id = "
+            f"{sql_quote(destination_b)}, mapping_version_id = {sql_quote(mapping_b)} "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}"
+        )
+
+        failed_key = str(uuid.uuid4())
+        run_d1(
+            "CREATE TRIGGER pub008_test_fail_outbox BEFORE INSERT "
+            "ON public_submission_delivery_outbox BEGIN "
+            "SELECT RAISE(ABORT, 'PUB-008 forced outbox failure'); END"
+        )
+        failed_status, failed_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(failed_key), outbox_payload, form_headers
+        )
+        assert failed_status == 503, (failed_status, failed_body)
+        assert b"outbox-visitor@example.test" not in failed_body, failed_body
+        assert d1_query(
+            "SELECT COUNT(*) AS sources FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(failed_key)}",
+            "sources",
+        )["sources"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE funnel_id = {sql_quote(funnel_id)}",
+            "tasks",
+        )["tasks"] == 1
+        run_d1("DROP TRIGGER pub008_test_fail_outbox")
+        recovered_status, recovered_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(failed_key), outbox_payload, form_headers
+        )
+        assert recovered_status == 303, recovered_body
+        recovered_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(failed_key)}",
+            "submission_id",
+        )["submission_id"]
+        task_b = d1_query(
+            "SELECT task_id, source_submission_id, destination_version_id, mapping_version_id, state "
+            "FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(recovered_submission_id)}",
+            "task_id",
+        )
+        assert task_b["task_id"] == recovered_submission_id, task_b
+        assert task_b["destination_version_id"] == destination_b, task_b
+        assert task_b["mapping_version_id"] == mapping_b, task_b
+        assert task_b["state"] == "pending", task_b
+        assert d1_query(
+            "SELECT destination_version_id, mapping_version_id "
+            "FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(concurrent_submission)}",
+            "destination_version_id",
+        ) == {"destination_version_id": destination_a, "mapping_version_id": mapping_a}
+        outbox_columns = d1_query(
+            "SELECT group_concat(name, ',') AS columns "
+            "FROM pragma_table_info('public_submission_delivery_outbox')",
+            "columns",
+        )["columns"].split(",")
+        assert not {
+            "field_values_json",
+            "request_consent_copy",
+            "submission_key",
+            "request_fingerprint",
+            "secret",
+            "payload_json",
+        }.intersection(outbox_columns), outbox_columns
+        expect_d1_failure(
+            "UPDATE public_submission_delivery_outbox SET destination_version_id = "
+            f"{sql_quote(destination_a)} WHERE source_submission_id = "
+            f"{sql_quote(recovered_submission_id)}"
+        )
+        expect_d1_failure(
+            "UPDATE public_form_submissions SET field_values_json = '{}' WHERE submission_id = "
+            f"{sql_quote(recovered_submission_id)}"
+        )
+        expect_d1_failure(
+            "UPDATE webhook_destination_versions SET destination_url = "
+            "'https://receiver.invalid/changed' WHERE destination_version_id = "
+            f"{sql_quote(destination_b)}"
+        )
+        run_d1(
+            "UPDATE public_form_submissions SET triage_status = 'contacted' "
+            f"WHERE submission_id = {sql_quote(recovered_submission_id)}"
+        )
+        assert d1_query(
+            "SELECT triage_status FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(recovered_submission_id)}",
+            "triage_status",
+        )["triage_status"] == "contacted"
+
+        direct_submission_id = str(uuid.uuid4())
+        direct_key = str(uuid.uuid4())
+        run_d1(
+            "INSERT INTO public_form_submissions ("
+            "submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, "
+            "submission_key, request_fingerprint, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "request_consent_recorded_at, marketing_opt_in, submitted_at, expires_at"
+            ") SELECT "
+            f"{sql_quote(direct_submission_id)}, funnels.id, revisions.id, 'page-home', "
+            f"{sql_quote(form_id)}, 'unattributed', {sql_quote(direct_key)}, "
+            f"'{('0' * 64)}', '{{\"email\":\"direct-source@example.test\"}}', 1, "
+            "'request-v2', 'I agree to be contacted about this updated request.', "
+            "unixepoch(), 0, unixepoch(), unixepoch() + 86400 "
+            f"FROM funnels JOIN revisions ON revisions.id = {sql_quote(updated_revision_id)} "
+            f"AND revisions.funnel_id = funnels.id WHERE funnels.id = {sql_quote(funnel_id)}"
+        )
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(direct_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS visible FROM retained_visible_public_submission_delivery",
+            "visible",
+        )["visible"] == 2
+
         starter_create_status, starter_create_body, _ = post_json(
             "/api/funnels/v2",
             {"name": "PUB-004 service starter journey", "blueprint": "lead_gen"},
@@ -1712,6 +2036,24 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert starter_publish_status == 200, starter_publish_body
 
+        starter_mapping = str(uuid.uuid4())
+        starter_selected_fields = sql_quote(
+            json.dumps([field["id"] for field in starter_form["fields"]])
+        )
+        run_d1(
+            "INSERT INTO public_form_delivery_mapping_versions "
+            "(mapping_version_id, funnel_id, form_id, destination_version_id, "
+            "selected_fields_json, created_at) VALUES "
+            f"({sql_quote(starter_mapping)}, {sql_quote(starter_funnel_id)}, "
+            f"{sql_quote(starter_form_id)}, {sql_quote(destination_b)}, "
+            f"{starter_selected_fields}, unixepoch()); "
+            "INSERT INTO public_form_delivery_settings "
+            "(funnel_id, form_id, enabled, expected_destination_version_id, mapping_version_id) "
+            "VALUES "
+            f"({sql_quote(starter_funnel_id)}, {sql_quote(starter_form_id)}, 1, "
+            f"{sql_quote(destination_b)}, {sql_quote(starter_mapping)})"
+        )
+
         starter_page_status, starter_html, _ = request("GET", f"/f/{starter_slug}")
         assert starter_page_status == 200, starter_html
         assert b"Tell us what support your project needs" in starter_html
@@ -1766,6 +2108,18 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         }, starter_item
 
         erasure_id = starter_item["submission_id"]
+        erasure_task = d1_query(
+            "SELECT task_id, source_submission_id, destination_version_id, mapping_version_id "
+            "FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(erasure_id)}",
+            "task_id",
+        )
+        assert erasure_task == {
+            "task_id": erasure_id,
+            "source_submission_id": erasure_id,
+            "destination_version_id": destination_b,
+            "mapping_version_id": starter_mapping,
+        }, erasure_task
         export_status, export_body, export_headers = request(
             "GET", f"/api/submissions/{erasure_id}/export"
         )
@@ -1870,6 +2224,41 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert absent_after_cascade_status == 404, absent_after_cascade_body
 
+        run_d1(
+            "CREATE TRIGGER pub008_test_interrupt_erasure BEFORE DELETE "
+            "ON public_form_submissions WHEN OLD.submission_id = "
+            f"{sql_quote(erasure_id)} BEGIN "
+            "SELECT RAISE(ABORT, 'PUB-008 interrupted source purge'); END"
+        )
+        interrupted_delete_status, interrupted_delete_body, interrupted_delete_headers = request(
+            "DELETE", f"/api/submissions/{erasure_id}", headers=delete_headers
+        )
+        assert interrupted_delete_status == 503, (
+            interrupted_delete_status,
+            interrupted_delete_body,
+        )
+        assert interrupted_delete_headers.get("cache-control") == "private, no-store"
+        assert d1_query(
+            "SELECT COUNT(*) AS intents FROM public_submission_erasure_intents "
+            f"WHERE submission_id = {sql_quote(erasure_id)}",
+            "intents",
+        )["intents"] == 1
+        assert d1_query(
+            "SELECT COUNT(*) AS sources FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(erasure_id)}",
+            "sources",
+        )["sources"] == 1
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(erasure_id)}",
+            "tasks",
+        )["tasks"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS visible FROM retained_visible_public_submission_delivery "
+            f"WHERE source_submission_id = {sql_quote(erasure_id)}",
+            "visible",
+        )["visible"] == 0
+        run_d1("DROP TRIGGER pub008_test_interrupt_erasure")
         delete_status, delete_body, delete_response_headers = request(
             "DELETE", f"/api/submissions/{erasure_id}", headers=delete_headers
         )
@@ -1995,6 +2384,16 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             interrupted_source["submission_key"],
         )
         insert_submission_snapshot(interrupted_source)
+        run_d1(
+            "INSERT INTO public_submission_delivery_outbox "
+            "(task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, "
+            "destination_version_id, mapping_version_id, state, created_at) "
+            "SELECT submission.submission_id, submission.submission_id, submission.funnel_id, "
+            "submission.revision_id, submission.page_id, submission.form_id, "
+            f"{sql_quote(destination_b)}, {sql_quote(starter_mapping)}, 'pending', submission.submitted_at "
+            "FROM public_form_submissions AS submission "
+            f"WHERE submission.submission_id = '{interrupted_source['submission_id']}'"
+        )
 
         recovery_headers = {
             "Content-Type": "application/json",
@@ -2031,6 +2430,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"WHERE submission_id = '{interrupted_source['submission_id']}'",
             "count",
         )["count"] == 1
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM retained_visible_public_submission_delivery "
+            f"WHERE source_submission_id = '{interrupted_source['submission_id']}'",
+            "count",
+        )["count"] == 0
 
         prepare_status, prepare_body, _ = request(
             "POST",
@@ -2054,9 +2458,30 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"WHERE submission_id = '{interrupted_source['submission_id']}'",
             "count",
         )["count"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS count FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = '{interrupted_source['submission_id']}'",
+            "count",
+        )["count"] == 0
 
         insert_submission_snapshot(erasure_source)
         insert_submission_snapshot(interrupted_source)
+        run_d1(
+            "INSERT INTO public_submission_delivery_outbox "
+            "(task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, "
+            "destination_version_id, mapping_version_id, state, created_at) "
+            "SELECT source.submission_id, source.submission_id, source.funnel_id, "
+            "source.revision_id, source.page_id, source.form_id, "
+            f"{sql_quote(destination_b)}, {sql_quote(starter_mapping)}, 'pending', source.submitted_at "
+            "FROM public_form_submissions AS source "
+            f"WHERE source.submission_id IN ('{erasure_id}', "
+            f"'{interrupted_source['submission_id']}')"
+        )
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id IN ('{erasure_id}', '{interrupted_source['submission_id']}')",
+            "tasks",
+        )["tasks"] == 2
         subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
@@ -2106,6 +2531,20 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert reconcile_status == 200, reconcile_body
         assert json.loads(reconcile_body)["phase"] == "ready", reconcile_body
+        restored_submission_ids = (
+            f"{sql_quote(erasure_id)}, "
+            f"{sql_quote(interrupted_source['submission_id'])}"
+        )
+        assert d1_query(
+            "SELECT COUNT(*) AS submissions FROM public_form_submissions "
+            f"WHERE submission_id IN ({restored_submission_ids})",
+            "submissions",
+        )["submissions"] == 0
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id IN ({restored_submission_ids})",
+            "tasks",
+        )["tasks"] == 0
         assert d1_query(
             "SELECT COUNT(*) AS submissions FROM public_form_submissions "
             f"WHERE submission_id = '{erasure_id}'",
@@ -2278,6 +2717,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         first_reconcile = json.loads(first_reconcile_body)
         assert first_reconcile["phase"] == "reconciling", first_reconcile
         assert first_reconcile["processed"] == 20, first_reconcile
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id IN ('{erasure_id}', '{interrupted_source['submission_id']}')",
+            "tasks",
+        )["tasks"] == 0
         second_reconcile_status, second_reconcile_body, _ = request(
             "POST",
             "/api/submissions/recovery",
@@ -2292,6 +2736,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert second_reconcile["phase"] == "ready", second_reconcile
         assert second_reconcile["processed"] == 5, second_reconcile
         assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id IN ('{erasure_id}', '{interrupted_source['submission_id']}')",
+            "tasks",
+        )["tasks"] == 0
+        assert d1_query(
             "SELECT COUNT(*) AS submissions FROM public_form_submissions "
             f"WHERE funnel_id = '{starter_funnel_id}'",
             "submissions",
@@ -2304,6 +2753,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         log.close()
         worker_log = log_path.read_text(encoding="utf-8")
         assert "ada@example.test" not in worker_log, worker_log
+        assert "outbox-visitor@example.test" not in worker_log, worker_log
         assert "starter-visitor@example.test" not in worker_log, worker_log
         print("PR-067/PR-033 local Worker/D1 flows, PUB-004 starter, and PUB-007 export/delete/recovery passed")
     except Exception:

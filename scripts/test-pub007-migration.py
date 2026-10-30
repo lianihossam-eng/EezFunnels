@@ -24,7 +24,7 @@ def main() -> int:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     for migration in sorted((ROOT / "migrations").glob("*.sql")):
-        if migration.name != MIGRATION_NAME:
+        if migration.name < MIGRATION_NAME:
             connection.executescript(migration.read_text(encoding="utf-8"))
 
     connection.execute(

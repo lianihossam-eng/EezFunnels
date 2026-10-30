@@ -216,6 +216,7 @@ impl<'a> SubmissionLifecycleRepository<'a> {
         self.require_recovery_ready().await?;
 
         if let Some(existing) = self.load_intent(submission_id).await? {
+            self.suppress_delivery_for_intent(&existing).await?;
             self.ensure_replay_marker(&existing).await?;
             return Ok(Some(existing.into()));
         }
@@ -262,6 +263,11 @@ impl<'a> SubmissionLifecycleRepository<'a> {
                 self.database
                     .prepare(UPSERT_REPLAY_MARKER_FROM_INTENT_SQL)
                     .bind_refs([&id, &digest_value, &expires_at])?,
+                self.database
+                    .prepare(
+                        "DELETE FROM public_submission_delivery_outbox WHERE source_submission_id = ? AND EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = ? AND replay_digest = ? AND source_expires_at = ?)",
+                    )
+                    .bind_refs([&id, &id, &digest_value, &expires_at])?,
             ])
             .await?;
 
@@ -701,6 +707,20 @@ impl<'a> SubmissionLifecycleRepository<'a> {
             .first::<ErasureIntent>(None)
             .await
             .map_err(Into::into)
+    }
+
+    async fn suppress_delivery_for_intent(&self, intent: &ErasureIntent) -> LifecycleResult<()> {
+        let id = D1Type::Text(&intent.submission_id);
+        let digest = D1Type::Text(&intent.replay_digest);
+        let source_expires_at = D1Type::Real(intent.source_expires_at as f64);
+        self.database
+            .prepare(
+                "DELETE FROM public_submission_delivery_outbox WHERE source_submission_id = ? AND EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = ? AND replay_digest = ? AND source_expires_at = ?)",
+            )
+            .bind_refs([&id, &id, &digest, &source_expires_at])?
+            .run()
+            .await?;
+        Ok(())
     }
 
     async fn marker_expiry(&self, digest: &str) -> LifecycleResult<Option<i64>> {
