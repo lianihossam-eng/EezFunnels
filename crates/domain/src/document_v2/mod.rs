@@ -6,9 +6,10 @@ mod validate;
 pub use edit::{Edit, EditOutcome, FocusTarget, IdKind, IdSource, NewBlock, NewFormField};
 pub use model::{
     ActionV2, AssetId, BlockId, BlockKind, BlockV2, BlueprintId, ConsentCopy, DocumentError,
-    DocumentV2, FieldId, FormField, FormId, FormResult, FormSubmissionError, FormSubmissionValue,
-    FormV2, ImageAlt, PageId, PageV2, RevisionIdV2, SectionId, SectionKind, SectionV2,
-    StableDocumentId, V2FunnelId, ValidatedFormSubmission, ValidationRange,
+    DocumentV2, FieldId, FormField, FormId, FormResult, FormSubmissionError, FormSubmissionIssue,
+    FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue, FormV2, ImageAlt,
+    PageId, PageV2, RevisionIdV2, SectionId, SectionKind, SectionV2, StableDocumentId, V2FunnelId,
+    ValidatedFormSubmission, ValidationRange,
 };
 pub use theme::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,

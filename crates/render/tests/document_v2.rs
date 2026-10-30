@@ -1,8 +1,12 @@
-use eez_domain::document_v2::{BlueprintId, DocumentV2};
+use eez_domain::document_v2::{
+    BlueprintId, DocumentV2, FormId, FormSubmissionIssue, FormSubmissionIssueCode,
+    FormSubmissionIssueTarget,
+};
 use eez_render::document_v2::{
     prepare_revision, prepare_revision_with_assets, render_owner_preview,
     render_owner_preview_with_assets, render_published, render_published_route_with_assets,
-    validate_revision_v2, AssetDigestRecord, PublishedRevisionInput, V2RenderError,
+    render_published_route_with_submission_feedback, validate_revision_v2, AssetDigestRecord,
+    FormSubmissionFeedback, PublishedRevisionInput, V2RenderError,
 };
 
 fn document() -> DocumentV2 {
@@ -395,6 +399,8 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
     assert!(html.contains("aria-describedby=\"form-form-one-field-field-email-help\""));
     assert!(html.contains("name=\"_request_consent\" value=\"on\" required>"));
     assert!(html.contains("name=\"_marketing_opt_in\" value=\"on\">"));
+    assert!(!html.contains(".v2-form-errors"));
+    assert!(!html.contains("<option value=\"\" selected>Choose an option</option>"));
     assert!(html.contains("required"));
     assert!(html.contains("Email &amp; &lt;work&gt;"));
     assert!(html.contains("I agree to &lt;be contacted&gt;."));
@@ -402,6 +408,90 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
     assert!(html.contains("id=\"form-success-form-one\" role=\"status\""));
     assert!(html.contains("Thanks &amp; goodbye."));
     assert!(!html.contains("<work>"));
+}
+
+#[test]
+fn form_validation_feedback_links_errors_and_preserves_only_safe_known_values() {
+    let mut form_value: serde_json::Value = serde_json::from_str(
+        std::str::from_utf8(document().canonical_bytes()).expect("canonical JSON"),
+    )
+    .expect("document JSON");
+    form_value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"form-block", "kind":"form", "form_id":"form-one"}
+    ]);
+    form_value["forms"] = serde_json::json!([{
+        "id":"form-one",
+        "fields":[
+            {"id":"field-email", "name":"email", "label":"Email", "help":"Use a work address.", "kind":"email", "required":true},
+            {"id":"field-topic", "name":"topic", "label":"Topic", "kind":"select", "required":true, "options":["Demo", "Pricing"]}
+        ],
+        "purpose":"Contact request",
+        "request_consent":{"copy_version":"request-v1", "copy":"I agree to be contacted."},
+        "marketing_opt_in":{"copy_version":"marketing-v1", "copy":"Send me product updates."},
+        "result":{"kind":"inline", "message":"Thanks."}
+    }]);
+    let form_document = DocumentV2::decode(
+        &serde_json::to_vec(&form_value).expect("document serialization"),
+        "funnel-01",
+    )
+    .expect("form document");
+    let prepared = prepare_revision(&form_document, "revision-feedback").expect("revision");
+    let form_id = FormId::parse("form-one").expect("form id");
+    let issues = [
+        FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::Field("field-email".to_owned()),
+            code: FormSubmissionIssueCode::InvalidValue,
+        },
+        FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::Field("field-topic".to_owned()),
+            code: FormSubmissionIssueCode::InvalidChoice,
+        },
+        FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::RequestConsent,
+            code: FormSubmissionIssueCode::RequestConsentRequired,
+        },
+    ];
+    let values = std::collections::BTreeMap::from([(
+        "email".to_owned(),
+        "<ada>@example.test\" autofocus=\"true".to_owned(),
+    )]);
+    let feedback = FormSubmissionFeedback {
+        form_id: &form_id,
+        issues: &issues,
+        values: &values,
+        request_consent_accepted: false,
+        marketing_opt_in: false,
+        summary_message: None,
+    };
+
+    let html = render_published_route_with_submission_feedback(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-feedback",
+            data_json: &prepared.data_json,
+            render_manifest_json: &prepared.render_manifest_json,
+        },
+        "lead-funnel",
+        None,
+        &[],
+        &feedback,
+    )
+    .expect("recovery form renders");
+
+    assert!(html.contains("<meta name=\"robots\" content=\"noindex\">"));
+    assert!(html.contains("role=\"alert\""));
+    assert!(html.contains("href=\"#form-form-one-field-field-email\""));
+    assert!(html.contains("href=\"#form-form-one-field-field-topic\""));
+    assert!(html.contains("href=\"#form-form-one-request-consent\""));
+    assert!(html.contains("aria-invalid=\"true\" aria-describedby=\"form-form-one-field-field-email-help form-form-one-field-field-email-error\""));
+    assert!(html.contains("value=\"&lt;ada&gt;@example.test&quot; autofocus=&quot;true\""));
+    assert!(html.contains("id=\"form-form-one-field-field-email-error\""));
+    assert!(html.contains("<option value=\"\" selected>Choose an option</option>"));
+    assert!(!html.contains("<ada>"));
+    assert!(!html.contains("value=\"<script>\""));
+    assert!(!html.contains("name=\"_request_consent\" value=\"on\" required checked"));
+    assert!(!html.contains("name=\"_marketing_opt_in\" value=\"on\" checked"));
 }
 
 #[test]

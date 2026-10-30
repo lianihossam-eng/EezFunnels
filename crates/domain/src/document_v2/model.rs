@@ -424,11 +424,35 @@ impl ValidatedFormSubmission {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormSubmissionError {
+    pub issues: Vec<FormSubmissionIssue>,
+    pub recoverable_values: BTreeMap<String, String>,
+    pub request_consent_accepted: bool,
+    pub marketing_opt_in: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormSubmissionIssue {
+    pub target: FormSubmissionIssueTarget,
+    pub code: FormSubmissionIssueCode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FormSubmissionIssueTarget {
+    Field(String),
+    RequestConsent,
+    Form,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FormSubmissionError {
+pub enum FormSubmissionIssueCode {
+    Required,
+    InvalidValue,
+    InvalidChoice,
     RequestConsentRequired,
     MarketingConsentUnavailable,
-    InvalidFieldValues,
+    UnknownField,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

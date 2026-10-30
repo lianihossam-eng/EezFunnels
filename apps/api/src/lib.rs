@@ -1489,28 +1489,63 @@ async fn public_form_submission_response(
     route: PublicFormSubmissionRoute<'_>,
     correlation_id: String,
 ) -> Response<axum::body::Body> {
+    let prefers_html = prefers_public_form_html(request.headers());
     if request.method() != Method::POST {
         return method_not_allowed_for(&correlation_id, "POST");
     }
     if !origin::matches_request_host(request.headers(), request.uri().scheme_str()) {
-        return form_submission_origin_error(&correlation_id);
+        return form_submission_origin_error(&correlation_id, prefers_html);
     }
     if !valid_public_slug(route.funnel_slug) {
+        if prefers_html {
+            return form_submission_html_error(
+                StatusCode::NOT_FOUND,
+                "Form not found",
+                "This form is no longer available.",
+                None,
+                &correlation_id,
+                None,
+            );
+        }
         return funnel_slug_not_found_response(&correlation_id);
     }
     let page_id = match PageId::parse(route.page_id.to_owned()) {
         Ok(page_id) => page_id,
-        Err(_) => return funnel_slug_not_found_response(&correlation_id),
+        Err(_) => {
+            if prefers_html {
+                return form_submission_html_error(
+                    StatusCode::NOT_FOUND,
+                    "Form not found",
+                    "This form is no longer available.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return funnel_slug_not_found_response(&correlation_id);
+        }
     };
     let form_id = match FormId::parse(route.form_id.to_owned()) {
         Ok(form_id) => form_id,
-        Err(_) => return funnel_slug_not_found_response(&correlation_id),
+        Err(_) => {
+            if prefers_html {
+                return form_submission_html_error(
+                    StatusCode::NOT_FOUND,
+                    "Form not found",
+                    "This form is no longer available.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return funnel_slug_not_found_response(&correlation_id);
+        }
     };
     if !is_urlencoded_form(request.headers()) {
-        return form_submission_payload_error(&correlation_id);
+        return form_submission_payload_error(&correlation_id, prefers_html);
     }
     let Some(submission_identity) = public_form_submission_identity(request.uri().query()) else {
-        return form_submission_payload_error(&correlation_id);
+        return form_submission_payload_error(&correlation_id, prefers_html);
     };
     let body = match to_bytes(
         axum::body::Body::new(request.into_body()),
@@ -1519,15 +1554,27 @@ async fn public_form_submission_response(
     .await
     {
         Ok(body) => body,
-        Err(_) => return form_submission_payload_error(&correlation_id),
+        Err(_) => return form_submission_payload_error(&correlation_id, prefers_html),
     };
     let Some(parsed_body) = parse_public_form_body(&body) else {
-        return form_submission_payload_error(&correlation_id);
+        return form_submission_payload_error(&correlation_id, prefers_html);
     };
 
     let bindings = match eez_storage::Bindings::from_env(env) {
         Ok(bindings) => bindings,
-        Err(_) => return form_submission_storage_error(&correlation_id),
+        Err(_) => {
+            if prefers_html {
+                return form_submission_html_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Submission unavailable",
+                    "We could not confirm your request. Return to the form and try again with the same answers.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return form_submission_storage_error(&correlation_id);
+        }
     };
     let repository = bindings.repository();
     let media_assets = bindings.media_asset_repository();
@@ -1551,13 +1598,49 @@ async fn public_form_submission_response(
     .await;
     let success_location = match result {
         Ok(SubmitPublicFormOutcome::Accepted { success_location }) => success_location,
-        Ok(SubmitPublicFormOutcome::KeyReuseMismatch) => {
+        Ok(SubmitPublicFormOutcome::KeyReuseMismatch { current_page_slug }) => {
+            if prefers_html {
+                let recovery_path =
+                    public_form_recovery_path(route.funnel_slug, current_page_slug.as_deref());
+                return form_submission_html_error(
+                    StatusCode::CONFLICT,
+                    "Form response already used",
+                    "This form key is already tied to a different response. Reload the current form and enter your answers again.",
+                    Some(&recovery_path),
+                    &correlation_id,
+                    None,
+                );
+            }
             return editor_payload_error_response(
                 &correlation_id,
                 "conflict/idempotency_payload_mismatch",
-            )
+            );
         }
-        Ok(SubmitPublicFormOutcome::RateLimited) => {
+        Ok(SubmitPublicFormOutcome::RateLimited { recovery_html }) => {
+            if prefers_html {
+                if let Some(html) = recovery_html {
+                    let html = bind_public_form_submission_identity(
+                        &html,
+                        &submission_identity.submission_key,
+                        &submission_identity.revision_id,
+                        submission_identity.submission_channel,
+                    );
+                    return form_submission_html_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        html,
+                        &correlation_id,
+                        Some("60"),
+                    );
+                }
+                return form_submission_html_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Please wait before trying again",
+                    "Your answers could not be accepted yet. Wait a moment, then retry the same form.",
+                    None,
+                    &correlation_id,
+                    Some("60"),
+                );
+            }
             let mut response =
                 editor_payload_error_response(&correlation_id, "rate_limit/exceeded");
             response
@@ -1569,20 +1652,117 @@ async fn public_form_submission_response(
             return response;
         }
         Err(SubmitPublicFormError::NotFound) => {
-            return funnel_slug_not_found_response(&correlation_id)
+            if prefers_html {
+                return form_submission_html_error(
+                    StatusCode::NOT_FOUND,
+                    "Form not found",
+                    "This form is no longer available.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return funnel_slug_not_found_response(&correlation_id);
         }
-        Err(SubmitPublicFormError::StaleRevision) => {
-            return form_submission_stale_revision_error(&correlation_id)
+        Err(SubmitPublicFormError::StaleRevision { current_page_slug }) => {
+            if prefers_html {
+                let recovery_path =
+                    public_form_recovery_path(route.funnel_slug, current_page_slug.as_deref());
+                return form_submission_html_error(
+                    StatusCode::CONFLICT,
+                    "This form has changed",
+                    "Reload the current page and review its information before sending your request again.",
+                    Some(&recovery_path),
+                    &correlation_id,
+                    None,
+                );
+            }
+            return form_submission_stale_revision_error(&correlation_id);
         }
-        Err(SubmitPublicFormError::InvalidPayload) => {
-            return form_submission_payload_error(&correlation_id)
+        Err(SubmitPublicFormError::InvalidPayload { recovery_html }) => {
+            if prefers_html {
+                if let Some(html) = recovery_html {
+                    let html = bind_public_form_submission_identity(
+                        &html,
+                        &submission_identity.submission_key,
+                        &submission_identity.revision_id,
+                        submission_identity.submission_channel,
+                    );
+                    return form_submission_html_response(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        html,
+                        &correlation_id,
+                        None,
+                    );
+                }
+                return form_submission_html_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Check your form",
+                    "Some fields need attention. Return to the form and review your answers.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return form_submission_payload_error(&correlation_id, false);
         }
-        Err(SubmitPublicFormError::SerializationFailure) => {
-            return form_submission_storage_error(&correlation_id)
+        Err(SubmitPublicFormError::SerializationFailure { recovery_html }) => {
+            if prefers_html {
+                if let Some(html) = recovery_html {
+                    let html = bind_public_form_submission_identity(
+                        &html,
+                        &submission_identity.submission_key,
+                        &submission_identity.revision_id,
+                        submission_identity.submission_channel,
+                    );
+                    return form_submission_html_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        html,
+                        &correlation_id,
+                        None,
+                    );
+                }
+                return form_submission_html_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Submission unavailable",
+                    "We could not confirm your request. You can safely try again using the same form.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
+            return form_submission_storage_error(&correlation_id);
         }
-        Err(SubmitPublicFormError::Storage { code }) => {
+        Err(SubmitPublicFormError::Storage {
+            code,
+            recovery_html,
+        }) => {
             let api_error = ApiError::from_code(code);
             log_api_error(&api_error, &correlation_id, api_error.code());
+            if prefers_html {
+                if let Some(html) = recovery_html {
+                    let html = bind_public_form_submission_identity(
+                        &html,
+                        &submission_identity.submission_key,
+                        &submission_identity.revision_id,
+                        submission_identity.submission_channel,
+                    );
+                    return form_submission_html_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        html,
+                        &correlation_id,
+                        None,
+                    );
+                }
+                return form_submission_html_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Submission unavailable",
+                    "We could not confirm your request. You can safely try again using the same form.",
+                    None,
+                    &correlation_id,
+                    None,
+                );
+            }
             return error_response(&api_error, correlation_id);
         }
     };
@@ -1791,6 +1971,98 @@ fn is_json_content_type(headers: &HeaderMap<HeaderValue>) -> bool {
         return false;
     }
     parts.all(|parameter| parameter.trim().eq_ignore_ascii_case("charset=utf-8"))
+}
+
+fn prefers_public_form_html(headers: &HeaderMap<HeaderValue>) -> bool {
+    prefers_public_form_html_accept_values(
+        headers
+            .get_all(axum::http::header::ACCEPT)
+            .iter()
+            .filter_map(|value| value.to_str().ok()),
+    )
+}
+
+fn prefers_public_form_html_accept_values<'a>(values: impl IntoIterator<Item = &'a str>) -> bool {
+    let mut html = None;
+    let mut json = None;
+    let mut application_wildcard = None;
+    let mut any_wildcard = None;
+
+    for value in values {
+        for range in value.split(',') {
+            let mut parts = range.split(';');
+            let media_type = parts.next().unwrap_or_default().trim();
+            let Some(quality) = accept_range_quality(parts) else {
+                continue;
+            };
+            let target = if media_type.eq_ignore_ascii_case("text/html") {
+                &mut html
+            } else if media_type.eq_ignore_ascii_case("application/json") {
+                &mut json
+            } else if media_type.eq_ignore_ascii_case("application/*") {
+                &mut application_wildcard
+            } else if media_type.eq_ignore_ascii_case("*/*") {
+                &mut any_wildcard
+            } else {
+                continue;
+            };
+            merge_accept_quality(target, quality);
+        }
+    }
+
+    let Some(html_quality) = html else {
+        return false;
+    };
+    let json_quality = json.or(application_wildcard).or(any_wildcard).unwrap_or(0);
+    html_quality > 0 && html_quality > json_quality
+}
+
+fn accept_range_quality<'a>(parameters: impl Iterator<Item = &'a str>) -> Option<u16> {
+    let mut quality = 1000;
+    let mut quality_seen = false;
+    for parameter in parameters {
+        let parameter = parameter.trim();
+        let Some((name, value)) = parameter.split_once('=') else {
+            if parameter.eq_ignore_ascii_case("q") {
+                return None;
+            }
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("q") {
+            if quality_seen {
+                return None;
+            }
+            quality = parse_accept_quality(value.trim())?;
+            quality_seen = true;
+        }
+    }
+    Some(quality)
+}
+
+fn parse_accept_quality(value: &str) -> Option<u16> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match whole {
+        "0" => {
+            let mut thousandths = if fraction.is_empty() {
+                0
+            } else {
+                fraction.parse::<u16>().ok()?
+            };
+            for _ in fraction.len()..3 {
+                thousandths *= 10;
+            }
+            Some(thousandths)
+        }
+        "1" if fraction.bytes().all(|byte| byte == b'0') => Some(1000),
+        _ => None,
+    }
+}
+
+fn merge_accept_quality(target: &mut Option<u16>, quality: u16) {
+    *target = Some(target.map_or(quality, |current| current.min(quality)));
 }
 
 fn form_completion_period(query: Option<&str>) -> Result<FormCompletionPeriod, ()> {
@@ -2081,7 +2353,20 @@ fn public_form_submission_limit(env: &Env) -> i32 {
         .unwrap_or(100)
 }
 
-fn form_submission_payload_error(correlation_id: &str) -> Response<axum::body::Body> {
+fn form_submission_payload_error(
+    correlation_id: &str,
+    prefers_html: bool,
+) -> Response<axum::body::Body> {
+    if prefers_html {
+        return form_submission_html_error(
+            StatusCode::BAD_REQUEST,
+            "We could not process this form",
+            "The request could not be processed. Return to the form and try again.",
+            None,
+            correlation_id,
+            None,
+        );
+    }
     let mut response = editor_payload_error_response(correlation_id, "validation/invalid_json");
     response
         .headers_mut()
@@ -2089,12 +2374,97 @@ fn form_submission_payload_error(correlation_id: &str) -> Response<axum::body::B
     response
 }
 
-fn form_submission_origin_error(correlation_id: &str) -> Response<axum::body::Body> {
+fn form_submission_origin_error(
+    correlation_id: &str,
+    prefers_html: bool,
+) -> Response<axum::body::Body> {
+    if prefers_html {
+        return form_submission_html_error(
+            StatusCode::FORBIDDEN,
+            "Form unavailable",
+            "This request could not be accepted. Return to the page and try again.",
+            None,
+            correlation_id,
+            None,
+        );
+    }
     let error = ApiError::from_code("request/invalid_origin");
     let mut response = error_response(&error, correlation_id.to_owned());
     response
         .headers_mut()
         .insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+
+fn public_form_recovery_path(funnel_slug: &str, page_slug: Option<&str>) -> String {
+    if !valid_public_slug(funnel_slug)
+        || page_slug.is_some_and(|slug| !eez_domain::document_v2::is_valid_page_slug(slug))
+    {
+        return "/".to_owned();
+    }
+    match page_slug {
+        Some(page_slug) => format!("/f/{funnel_slug}/{page_slug}"),
+        None => format!("/f/{funnel_slug}"),
+    }
+}
+
+fn form_submission_html_error(
+    status: StatusCode,
+    title: &str,
+    message: &str,
+    recovery_path: Option<&str>,
+    correlation_id: &str,
+    retry_after: Option<&str>,
+) -> Response<axum::body::Body> {
+    let mut html = String::from(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"robots\" content=\"noindex\"><title>",
+    );
+    html.push_str(title);
+    html.push_str("</title></head><body><main><h1>");
+    html.push_str(title);
+    html.push_str("</h1><p>");
+    html.push_str(message);
+    html.push_str("</p>");
+    if let Some(recovery_path) = recovery_path {
+        html.push_str("<p><a href=\"");
+        html.push_str(recovery_path);
+        html.push_str("\">Open the current form</a></p>");
+    }
+    html.push_str("</main></body></html>");
+    form_submission_html_response(status, html, correlation_id, retry_after)
+}
+
+fn form_submission_html_response(
+    status: StatusCode,
+    html: String,
+    correlation_id: &str,
+    retry_after: Option<&str>,
+) -> Response<axum::body::Body> {
+    let mut response = Response::new(axum::body::Body::from(html));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+        .headers_mut()
+        .insert(axum::http::header::VARY, HeaderValue::from_static("Accept"));
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(value) = HeaderValue::from_str(correlation_id) {
+        response.headers_mut().insert("x-correlation-id", value);
+    }
+    if let Some(retry_after) = retry_after {
+        if let Ok(value) = HeaderValue::from_str(retry_after) {
+            response.headers_mut().insert("retry-after", value);
+        }
+    }
     response
 }
 
@@ -3900,9 +4270,9 @@ mod tests {
         form_submission_status_command_parameters, form_submission_status_id_from_path,
         funnel_subroute, interaction_consent, interaction_origin_matches,
         interaction_report_period, is_json_content_type, normalize_correlation_id,
-        parse_public_form_body, public_form_submission_channel_from_page_query,
-        public_form_submission_identity, public_form_submission_query,
-        public_form_submission_route_from_path, public_html_etag,
+        parse_public_form_body, prefers_public_form_html_accept_values,
+        public_form_submission_channel_from_page_query, public_form_submission_identity,
+        public_form_submission_query, public_form_submission_route_from_path, public_html_etag,
         public_interaction_events_route_from_path, public_route_from_path,
         publication_command_parameters, published_document_references_asset, request_if_none_match,
         sitemap_revisions, stage_upload_token, v1_conversion_command_parameters,
@@ -5009,5 +5379,65 @@ mod tests {
         assert!(
             parse_public_form_body(b"email=ada&_request_consent=on&_request_consent=on").is_none()
         );
+    }
+
+    #[test]
+    fn public_form_html_negotiation_requires_an_explicit_preference() {
+        assert!(!prefers_public_form_html_accept_values(std::iter::empty::<
+            &str,
+        >()));
+        assert!(!prefers_public_form_html_accept_values(["*/*"]));
+        assert!(!prefers_public_form_html_accept_values(["text/*"]));
+        assert!(!prefers_public_form_html_accept_values([
+            "application/json"
+        ]));
+        assert!(!prefers_public_form_html_accept_values(["text/html;q=0"]));
+        assert!(!prefers_public_form_html_accept_values([
+            "text/html;q=0.8, application/json;q=0.9"
+        ]));
+        assert!(!prefers_public_form_html_accept_values([
+            "text/html;q=1, application/json;q=1"
+        ]));
+        assert!(!prefers_public_form_html_accept_values([
+            "text/html;q=0.9, */*;q=1"
+        ]));
+        assert!(prefers_public_form_html_accept_values(["text/html"]));
+        assert!(prefers_public_form_html_accept_values([
+            "text/html;q=0.9, application/json;q=0.8"
+        ]));
+        assert!(prefers_public_form_html_accept_values([
+            "text/html;q=0.5, application/json;q=0"
+        ]));
+        assert!(prefers_public_form_html_accept_values([
+            "text/html;q=0.8, application/json;q=0, */*;q=1"
+        ]));
+        assert!(prefers_public_form_html_accept_values([
+            "text/html, */*;q=0.5"
+        ]));
+        assert!(prefers_public_form_html_accept_values([
+            "text/html;q=0.6",
+            "application/json;q=0.4"
+        ]));
+    }
+
+    #[test]
+    fn public_form_accept_parser_fuzzes_malformed_inputs_without_panicking() {
+        let alphabet = b"text/htmlapplicationjsonq=;,* /0123456789\r\n\xff\x80";
+        let mut state = 0x41c6_4e6d_u64;
+        for _ in 0..10_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let length = (state as usize) % 160;
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                bytes.push(alphabet[(state as usize) % alphabet.len()]);
+            }
+            let value = String::from_utf8_lossy(&bytes);
+            let _ = prefers_public_form_html_accept_values([value.as_ref()]);
+        }
     }
 }

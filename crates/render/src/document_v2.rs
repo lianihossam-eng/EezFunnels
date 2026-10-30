@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
 use eez_domain::document_v2::{
-    ActionV2, BlockV2, DocumentV2, FormField, FormResult, FormV2, PageId, SectionKind,
+    ActionV2, BlockV2, DocumentV2, FormField, FormId, FormResult, FormSubmissionIssue,
+    FormSubmissionIssueCode, FormSubmissionIssueTarget, FormV2, PageId, SectionKind,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,15 @@ pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
 pub const THEME_PROFILE_VERSION_V2: &str = "theme-profile-v1";
 const THEME_DIGEST_DOMAIN: &[u8] = b"eezfunnel-theme-tokens-v2\0";
 const ASSETS_DIGEST_DOMAIN: &[u8] = b"eezfunnel-assets-manifest-v2\0";
+
+pub struct FormSubmissionFeedback<'a> {
+    pub form_id: &'a FormId,
+    pub issues: &'a [FormSubmissionIssue],
+    pub values: &'a BTreeMap<String, String>,
+    pub request_consent_accepted: bool,
+    pub marketing_opt_in: bool,
+    pub summary_message: Option<&'a str>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum V2RenderError {
@@ -173,7 +183,7 @@ pub fn render_owner_preview_with_assets(
     assets: &[AssetDigestRecord],
 ) -> Result<String, V2RenderError> {
     let assets = canonical_asset_records(document, assets)?;
-    render_page(document, page_id, LinkMode::Inert, &assets, true)
+    render_page(document, page_id, LinkMode::Inert, &assets, true, None)
 }
 
 pub fn render_published(
@@ -229,11 +239,43 @@ pub fn render_published_route_with_assets(
     render_published_route_with_slug(revision, Some(public_funnel_slug), page_slug, assets)
 }
 
+pub fn render_published_route_with_submission_feedback(
+    revision: PublishedRevisionInput<'_>,
+    public_funnel_slug: &str,
+    page_slug: Option<&str>,
+    assets: &[AssetDigestRecord],
+    feedback: &FormSubmissionFeedback<'_>,
+) -> Result<String, V2RenderError> {
+    render_published_route_with_optional_feedback(
+        revision,
+        Some(public_funnel_slug),
+        page_slug,
+        assets,
+        Some(feedback),
+    )
+}
+
 fn render_published_route_with_slug(
     revision: PublishedRevisionInput<'_>,
     public_funnel_slug: Option<&str>,
     page_slug: Option<&str>,
     assets: &[AssetDigestRecord],
+) -> Result<String, V2RenderError> {
+    render_published_route_with_optional_feedback(
+        revision,
+        public_funnel_slug,
+        page_slug,
+        assets,
+        None,
+    )
+}
+
+fn render_published_route_with_optional_feedback(
+    revision: PublishedRevisionInput<'_>,
+    public_funnel_slug: Option<&str>,
+    page_slug: Option<&str>,
+    assets: &[AssetDigestRecord],
+    feedback: Option<&FormSubmissionFeedback<'_>>,
 ) -> Result<String, V2RenderError> {
     let (document, manifest) = validate_revision_v2_with_manifest(
         revision.schema_version,
@@ -293,6 +335,7 @@ fn render_published_route_with_slug(
         link_mode,
         &assets,
         manifest.renderer_version() == RENDERER_VERSION_V2,
+        feedback,
     )
 }
 
@@ -495,6 +538,7 @@ fn render_page(
     link_mode: LinkMode<'_>,
     assets: &[AssetDigestRecord],
     metadata_enabled: bool,
+    feedback: Option<&FormSubmissionFeedback<'_>>,
 ) -> Result<String, V2RenderError> {
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
     let profile = document.resolved_theme_profile();
@@ -525,8 +569,14 @@ fn render_page(
             html.push_str("<meta name=\"robots\" content=\"noindex\">");
         }
     }
+    if feedback.is_some() {
+        html.push_str("<meta name=\"robots\" content=\"noindex\">");
+    }
     html.push_str("<style>");
     html.push_str("html{color-scheme:light}body{margin:0}#funnel{box-sizing:border-box;min-height:100vh;background:var(--color-background);color:var(--color-text);font-family:var(--font-family);font-size:calc(1rem * var(--font-scale));line-height:1.6}#funnel *{box-sizing:inherit}.v2-main{max-width:var(--content-width);margin:0 auto}.v2-section{margin:0 auto;padding:var(--spacing-section) 1.5rem}.v2-section--hero{text-align:center}.v2-section--cta{text-align:center;background:var(--color-surface);border-radius:var(--radius-card);box-shadow:var(--shadow-card)}.v2-section--footer{border-top:1px solid var(--color-border);color:var(--color-muted)}.v2-section h1,.v2-section h2,.v2-section p{margin-top:0}.v2-list{padding-inline-start:1.5rem}.v2-button{display:inline-block;padding:.75rem 1.25rem;background:var(--color-primary);color:var(--color-on-primary);border-radius:var(--radius-button);font-weight:700;text-decoration:none}.v2-text{white-space:pre-wrap;overflow-wrap:anywhere}.v2-form{display:grid;gap:1.25rem;max-width:40rem;margin:0 auto}.v2-form fieldset{min-width:0;margin:0;padding:0;border:0}.v2-form legend{margin-bottom:1rem;font-size:1.25rem;font-weight:700}.v2-form-field{display:grid;gap:.35rem;margin-block:1rem;text-align:left}.v2-form-field label,.v2-form-consent label{font-weight:600}.v2-form input:not([type=checkbox]),.v2-form select{width:100%;min-height:2.75rem;padding:.6rem .75rem;border:1px solid var(--color-border);border-radius:var(--radius-button);background:var(--color-background);color:var(--color-text);font:inherit}.v2-form input[type=checkbox]{width:1.25rem;height:1.25rem;min-width:1.25rem;min-height:1.25rem;margin:.15rem 0;accent-color:var(--color-primary)}.v2-form :focus-visible,.v2-form-result:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-help{margin:0;color:var(--color-muted);font-size:.95rem;overflow-wrap:anywhere}.v2-form-consent{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:.75rem;margin-block:.75rem;text-align:left}.v2-section .v2-form-result{display:none;max-width:40rem;margin:1.25rem auto 0;padding:1rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface);overflow-wrap:anywhere}.v2-form-result:target{display:block}");
+    if feedback.is_some() {
+        html.push_str(".v2-form-errors{max-width:40rem;margin:0 auto 1.25rem;padding:1rem;border:2px solid var(--color-primary);border-radius:var(--radius-card);background:var(--color-surface)}.v2-form-errors :focus-visible,.v2-form-errors a:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-error{margin:0;color:var(--color-text);font-weight:600}.v2-form [aria-invalid=\"true\"]{outline:2px solid var(--color-primary);outline-offset:2px}");
+    }
     html.push_str(".v2-image{display:block;max-width:100%;height:auto}");
     html.push_str("#funnel{--color-background:");
     html.push_str(&profile.desktop["color-background"]);
@@ -666,13 +716,17 @@ fn render_page(
                         let form = document
                             .form(form_id)
                             .ok_or(V2RenderError::IdentityMismatch)?;
-                        push_form(&mut html, form, page.id(), Some(funnel_slug));
+                        let form_feedback =
+                            feedback.filter(|feedback| feedback.form_id == form.id());
+                        push_form(&mut html, form, page.id(), Some(funnel_slug), form_feedback);
                     }
                     LinkMode::Inert | LinkMode::Published { funnel_slug: None } => {
                         let form = document
                             .form(form_id)
                             .ok_or(V2RenderError::IdentityMismatch)?;
-                        push_form(&mut html, form, page.id(), None);
+                        let form_feedback =
+                            feedback.filter(|feedback| feedback.form_id == form.id());
+                        push_form(&mut html, form, page.id(), None, form_feedback);
                     }
                     LinkMode::PublishedV3 => return Err(V2RenderError::FormsNotEnabled),
                 },
@@ -684,7 +738,13 @@ fn render_page(
     Ok(html)
 }
 
-fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: Option<&str>) {
+fn push_form(
+    html: &mut String,
+    form: &FormV2,
+    page_id: &PageId,
+    funnel_slug: Option<&str>,
+    feedback: Option<&FormSubmissionFeedback<'_>>,
+) {
     let form_id = form.id().as_str();
     let form_dom_id = format!("form-{form_id}");
     html.push_str("<form class=\"v2-form\"");
@@ -704,28 +764,73 @@ fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: Op
     } else {
         html.push_str(" data-preview=\"true\"");
     }
-    html.push_str("><fieldset><legend>");
+    html.push('>');
+    if let Some(feedback) = feedback {
+        push_form_submission_summary(html, form, feedback);
+    }
+    html.push_str("<fieldset><legend>");
     html.push_str(&crate::escape_html_text(form.purpose()));
     html.push_str("</legend>");
     for field in form.fields() {
-        push_form_field(html, field, &form_dom_id);
+        let field_issue = feedback.and_then(|feedback| {
+            feedback.issues.iter().find(|issue| {
+                issue.target == FormSubmissionIssueTarget::Field(field.id().as_str().to_owned())
+            })
+        });
+        let value = feedback.and_then(|feedback| feedback.values.get(field.submission_key()));
+        push_form_field(
+            html,
+            field,
+            &form_dom_id,
+            value.map(String::as_str),
+            field_issue,
+            feedback.is_some(),
+        );
     }
     html.push_str("</fieldset>");
 
     let request_id = format!("{form_dom_id}-request-consent");
     html.push_str("<div class=\"v2-form-consent\"><input type=\"checkbox\" id=\"");
     html.push_str(&crate::escape_html_attribute(&request_id));
-    html.push_str("\" name=\"_request_consent\" value=\"on\" required><label for=\"");
+    html.push_str("\" name=\"_request_consent\" value=\"on\" required");
+    if feedback.is_some_and(|feedback| feedback.request_consent_accepted) {
+        html.push_str(" checked");
+    }
+    let request_consent_issue = feedback.and_then(|feedback| {
+        feedback
+            .issues
+            .iter()
+            .find(|issue| issue.target == FormSubmissionIssueTarget::RequestConsent)
+    });
+    push_form_error_attributes(
+        html,
+        None,
+        "",
+        &format!("{request_id}-error"),
+        request_consent_issue,
+    );
+    html.push_str("><label for=\"");
     html.push_str(&crate::escape_html_attribute(&request_id));
     html.push_str("\">");
     html.push_str(&crate::escape_html_text(form.request_consent().copy()));
     html.push_str("</label></div>");
+    if let Some(issue) = request_consent_issue {
+        push_inline_form_error(
+            html,
+            &format!("{request_id}-error"),
+            form_submission_issue_message(issue.code),
+        );
+    }
 
     if let Some(consent) = form.marketing_opt_in() {
         let marketing_id = format!("{form_dom_id}-marketing-opt-in");
         html.push_str("<div class=\"v2-form-consent\"><input type=\"checkbox\" id=\"");
         html.push_str(&crate::escape_html_attribute(&marketing_id));
-        html.push_str("\" name=\"_marketing_opt_in\" value=\"on\"><label for=\"");
+        html.push_str("\" name=\"_marketing_opt_in\" value=\"on\"");
+        if feedback.is_some_and(|feedback| feedback.marketing_opt_in) {
+            html.push_str(" checked");
+        }
+        html.push_str("><label for=\"");
         html.push_str(&crate::escape_html_attribute(&marketing_id));
         html.push_str("\">");
         html.push_str(&crate::escape_html_text(consent.copy()));
@@ -746,7 +851,98 @@ fn push_form(html: &mut String, form: &FormV2, page_id: &PageId, funnel_slug: Op
     }
 }
 
-fn push_form_field(html: &mut String, field: &FormField, form_dom_id: &str) {
+fn push_form_submission_summary(
+    html: &mut String,
+    form: &FormV2,
+    feedback: &FormSubmissionFeedback<'_>,
+) {
+    if feedback.issues.is_empty() && feedback.summary_message.is_none() {
+        return;
+    }
+    let summary_id = format!("form-{}-errors", form.id().as_str());
+    html.push_str("<div class=\"v2-form-errors\" id=\"");
+    html.push_str(&crate::escape_html_attribute(&summary_id));
+    html.push_str("\" role=\"alert\" aria-labelledby=\"");
+    html.push_str(&crate::escape_html_attribute(&format!(
+        "{summary_id}-title"
+    )));
+    html.push_str("\" tabindex=\"-1\" autofocus><h2 id=\"");
+    html.push_str(&crate::escape_html_attribute(&format!(
+        "{summary_id}-title"
+    )));
+    html.push_str("\">");
+    html.push_str(if feedback.issues.is_empty() {
+        "Submission update"
+    } else {
+        "There is a problem with this form"
+    });
+    html.push_str("</h2>");
+    if let Some(message) = feedback.summary_message {
+        html.push_str("<p>");
+        html.push_str(&crate::escape_html_text(message));
+        html.push_str("</p>");
+    } else {
+        html.push_str("<p>Correct the fields below and submit again.</p>");
+    }
+    if !feedback.issues.is_empty() {
+        html.push_str("<ul>");
+        for issue in feedback.issues {
+            html.push_str("<li>");
+            if let FormSubmissionIssueTarget::Field(field_id) = &issue.target {
+                if let Some(field) = form
+                    .fields()
+                    .iter()
+                    .find(|field| field.id().as_str() == field_id)
+                {
+                    let input_id = format!("form-{}-field-{field_id}", form.id().as_str());
+                    html.push_str("<a href=\"#");
+                    html.push_str(&crate::escape_html_attribute(&input_id));
+                    html.push_str("\">");
+                    html.push_str(&crate::escape_html_text(field.label()));
+                    html.push_str(": ");
+                    html.push_str(form_submission_issue_message(issue.code));
+                    html.push_str("</a>");
+                } else {
+                    html.push_str(form_submission_issue_message(issue.code));
+                }
+            } else if issue.target == FormSubmissionIssueTarget::RequestConsent {
+                let consent_id = format!("form-{}-request-consent", form.id().as_str());
+                html.push_str("<a href=\"#");
+                html.push_str(&crate::escape_html_attribute(&consent_id));
+                html.push_str("\">");
+                html.push_str(form_submission_issue_message(issue.code));
+                html.push_str("</a>");
+            } else {
+                html.push_str(form_submission_issue_message(issue.code));
+            }
+            html.push_str("</li>");
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</div>");
+}
+
+fn form_submission_issue_message(code: FormSubmissionIssueCode) -> &'static str {
+    match code {
+        FormSubmissionIssueCode::Required => "This field is required.",
+        FormSubmissionIssueCode::InvalidValue => "Enter a valid value.",
+        FormSubmissionIssueCode::InvalidChoice => "Choose one of the available options.",
+        FormSubmissionIssueCode::RequestConsentRequired => {
+            "Confirm that you have read this information."
+        }
+        FormSubmissionIssueCode::MarketingConsentUnavailable => "Review the form and try again.",
+        FormSubmissionIssueCode::UnknownField => "Review the form and try again.",
+    }
+}
+
+fn push_form_field(
+    html: &mut String,
+    field: &FormField,
+    form_dom_id: &str,
+    value: Option<&str>,
+    issue: Option<&FormSubmissionIssue>,
+    is_recovery: bool,
+) {
     let (id, name, label, help, required) = match field {
         FormField::Text {
             id,
@@ -799,13 +995,23 @@ fn push_form_field(html: &mut String, field: &FormField, form_dom_id: &str) {
             html.push_str("\" name=\"");
             html.push_str(&crate::escape_html_attribute(name));
             html.push_str("\" value=\"on\"");
+            if value == Some("on") {
+                html.push_str(" checked");
+            }
             push_form_required(html, required);
-            push_form_description(html, help, &help_id);
+            push_form_error_attributes(html, help, &help_id, &format!("{input_id}-error"), issue);
             html.push_str("><label for=\"");
             html.push_str(&crate::escape_html_attribute(&input_id));
             html.push_str("\">");
             html.push_str(&crate::escape_html_text(label));
             html.push_str("</label></div>");
+            if let Some(issue) = issue {
+                push_inline_form_error(
+                    html,
+                    &format!("{input_id}-error"),
+                    form_submission_issue_message(issue.code),
+                );
+            }
         }
         FormField::Select { options, .. } => {
             push_form_label(html, label, &input_id);
@@ -815,16 +1021,31 @@ fn push_form_field(html: &mut String, field: &FormField, form_dom_id: &str) {
             html.push_str(&crate::escape_html_attribute(name));
             html.push('\"');
             push_form_required(html, required);
-            push_form_description(html, help, &help_id);
-            html.push_str("><option value=\"\">Choose an option</option>");
+            push_form_error_attributes(html, help, &help_id, &format!("{input_id}-error"), issue);
+            html.push_str("><option value=\"\"");
+            if is_recovery && value.is_none_or(str::is_empty) {
+                html.push_str(" selected");
+            }
+            html.push_str(">Choose an option</option>");
             for option in options {
                 html.push_str("<option value=\"");
                 html.push_str(&crate::escape_html_attribute(option));
-                html.push_str("\">");
+                html.push('"');
+                if value == Some(option.as_str()) {
+                    html.push_str(" selected");
+                }
+                html.push('>');
                 html.push_str(&crate::escape_html_text(option));
                 html.push_str("</option>");
             }
             html.push_str("</select>");
+            if let Some(issue) = issue {
+                push_inline_form_error(
+                    html,
+                    &format!("{input_id}-error"),
+                    form_submission_issue_message(issue.code),
+                );
+            }
         }
         FormField::Text { validation, .. }
         | FormField::Email { validation, .. }
@@ -864,9 +1085,21 @@ fn push_form_field(html: &mut String, field: &FormField, form_dom_id: &str) {
             } else if matches!(field, FormField::Phone { .. }) {
                 html.push_str(" autocomplete=\"tel\"");
             }
+            if let Some(value) = value {
+                html.push_str(" value=\"");
+                html.push_str(&crate::escape_html_attribute(value));
+                html.push('"');
+            }
             push_form_required(html, required);
-            push_form_description(html, help, &help_id);
+            push_form_error_attributes(html, help, &help_id, &format!("{input_id}-error"), issue);
             html.push('>');
+            if let Some(issue) = issue {
+                push_inline_form_error(
+                    html,
+                    &format!("{input_id}-error"),
+                    form_submission_issue_message(issue.code),
+                );
+            }
         }
     }
 
@@ -894,12 +1127,37 @@ fn push_form_required(html: &mut String, required: bool) {
     }
 }
 
-fn push_form_description(html: &mut String, help: Option<&str>, help_id: &str) {
-    if help.is_some() {
+fn push_form_error_attributes(
+    html: &mut String,
+    help: Option<&str>,
+    help_id: &str,
+    error_id: &str,
+    issue: Option<&FormSubmissionIssue>,
+) {
+    if issue.is_some() {
+        html.push_str(" aria-invalid=\"true\"");
+    }
+    if help.is_some() || issue.is_some() {
         html.push_str(" aria-describedby=\"");
-        html.push_str(&crate::escape_html_attribute(help_id));
+        if help.is_some() {
+            html.push_str(&crate::escape_html_attribute(help_id));
+        }
+        if issue.is_some() {
+            if help.is_some() {
+                html.push(' ');
+            }
+            html.push_str(&crate::escape_html_attribute(error_id));
+        }
         html.push('"');
     }
+}
+
+fn push_inline_form_error(html: &mut String, error_id: &str, message: &str) {
+    html.push_str("<p class=\"v2-form-error\" id=\"");
+    html.push_str(&crate::escape_html_attribute(error_id));
+    html.push_str("\">");
+    html.push_str(&crate::escape_html_text(message));
+    html.push_str("</p>");
 }
 
 fn push_profile_variables(html: &mut String, values: &std::collections::BTreeMap<String, String>) {

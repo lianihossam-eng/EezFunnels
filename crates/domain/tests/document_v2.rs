@@ -1,7 +1,7 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
-    FontFamily, FormId, FormSubmissionValue, IdKind, IdSource, ThemeColors, ThemeOverrides,
-    TypeScale,
+    FontFamily, FormId, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
+    IdKind, IdSource, ThemeColors, ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -21,6 +21,10 @@ fn decode(source: &str) -> DocumentV2 {
 }
 
 fn document_with_lead_form() -> DocumentV2 {
+    document_with_lead_form_with_name_limit(40)
+}
+
+fn document_with_lead_form_with_name_limit(max_length: u32) -> DocumentV2 {
     let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("minimal document");
     value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
         {"id":"block-form", "kind":"form", "form_id":"form-lead"}
@@ -28,7 +32,7 @@ fn document_with_lead_form() -> DocumentV2 {
     value["forms"] = serde_json::json!([{
         "id":"form-lead",
         "fields":[
-            {"id":"field-name", "kind":"text", "name":"name", "label":"Name", "required":true, "validation":{"min_length":2,"max_length":40}},
+            {"id":"field-name", "kind":"text", "name":"name", "label":"Name", "required":true, "validation":{"min_length":2,"max_length":max_length}},
             {"id":"field-email", "kind":"email", "name":"email", "label":"Email", "required":true},
             {"id":"field-secondary-email", "kind":"email", "name":"secondary_email", "label":"Secondary email", "required":false},
             {"id":"field-phone", "kind":"phone", "name":"phone", "label":"Phone", "required":false},
@@ -201,6 +205,74 @@ fn public_form_submission_validation_rejects_bad_consent_fields_and_values() {
     let mut short_name = valid_fields;
     short_name.insert("name".to_owned(), "A".to_owned());
     assert!(validate_form_submission(form, &short_name, true, false).is_err());
+}
+
+#[test]
+fn public_form_submission_errors_are_typed_and_recovery_values_exclude_unknown_choices() {
+    let document = document_with_lead_form();
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+    let submitted = std::collections::BTreeMap::from([
+        ("email".to_owned(), "not an email".to_owned()),
+        ("name".to_owned(), "A".to_owned()),
+        ("topic".to_owned(), "Unexpected topic".to_owned()),
+        ("unknown".to_owned(), "private value".to_owned()),
+    ]);
+
+    let error = validate_form_submission(form, &submitted, false, false)
+        .expect_err("invalid fields return typed errors");
+
+    assert!(error.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::RequestConsent
+            && issue.code == FormSubmissionIssueCode::RequestConsentRequired
+    }));
+    assert!(error.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::Field("field-email".to_owned())
+            && issue.code == FormSubmissionIssueCode::InvalidValue
+    }));
+    assert!(error.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::Field("field-name".to_owned())
+            && issue.code == FormSubmissionIssueCode::InvalidValue
+    }));
+    assert!(error.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::Field("field-topic".to_owned())
+            && issue.code == FormSubmissionIssueCode::InvalidChoice
+    }));
+    assert!(error
+        .issues
+        .iter()
+        .any(|issue| issue.code == FormSubmissionIssueCode::UnknownField));
+    assert_eq!(
+        error.recoverable_values.get("email"),
+        Some(&"not an email".to_owned())
+    );
+    assert_eq!(error.recoverable_values.get("name"), Some(&"A".to_owned()));
+    assert!(!error.recoverable_values.contains_key("topic"));
+    assert!(!error.recoverable_values.contains_key("unknown"));
+    assert!(!error.request_consent_accepted);
+    assert!(!error.marketing_opt_in);
+}
+
+#[test]
+fn public_form_submission_recovery_keeps_valid_multibyte_text_when_another_value_fails() {
+    let document = document_with_lead_form_with_name_limit(8192);
+    let form = document
+        .form(&FormId::parse("form-lead").expect("form id"))
+        .expect("lead form");
+    let name = "漢".repeat(3000);
+    assert_eq!(name.chars().count(), 3000);
+    assert!(name.len() > 8192);
+    let submitted = std::collections::BTreeMap::from([
+        ("name".to_owned(), name.clone()),
+        ("email".to_owned(), "ada@example.test".to_owned()),
+        ("topic".to_owned(), "Demo".to_owned()),
+    ]);
+
+    let error = validate_form_submission(form, &submitted, false, false)
+        .expect_err("missing consent requires recovery");
+
+    assert_eq!(error.recoverable_values.get("name"), Some(&name));
 }
 
 #[test]

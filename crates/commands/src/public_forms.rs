@@ -1,15 +1,18 @@
 use std::collections::BTreeMap;
 
 use eez_domain::document_v2::{
-    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormV2, PageId, PageV2,
+    validate_form_submission, BlockV2, DocumentV2, FormId, FormResult, FormSubmissionIssue, FormV2,
+    PageId, PageV2,
 };
 use eez_domain::FormSubmissionChannel;
 use eez_render::document_v2::{
-    referenced_asset_ids, validate_revision_v2_with_assets, AssetDigestRecord,
+    referenced_asset_ids, render_published_route_with_submission_feedback,
+    validate_revision_v2_with_assets, AssetDigestRecord, FormSubmissionFeedback,
+    PublishedRevisionInput,
 };
 use eez_storage::media::MediaAssetRepository;
 use eez_storage::repository::{
-    NewPublicFormSubmission, PublicFormSubmissionResult, Repository, RepositoryError,
+    NewPublicFormSubmission, PublicFormSubmissionResult, Repository, RevisionRecord,
 };
 
 pub struct SubmitPublicFormInput<'a> {
@@ -29,17 +32,26 @@ pub struct SubmitPublicFormInput<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmitPublicFormOutcome {
     Accepted { success_location: String },
-    KeyReuseMismatch,
-    RateLimited,
+    KeyReuseMismatch { current_page_slug: Option<String> },
+    RateLimited { recovery_html: Option<String> },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmitPublicFormError {
     NotFound,
-    StaleRevision,
-    InvalidPayload,
-    SerializationFailure,
-    Storage { code: &'static str },
+    StaleRevision {
+        current_page_slug: Option<String>,
+    },
+    InvalidPayload {
+        recovery_html: Option<String>,
+    },
+    SerializationFailure {
+        recovery_html: Option<String>,
+    },
+    Storage {
+        code: &'static str,
+        recovery_html: Option<String>,
+    },
 }
 
 pub async fn submit_public_form(
@@ -54,13 +66,16 @@ pub async fn submit_public_form(
         Ok(Some(revision)) if revision.schema_version == 2 => revision,
         _ => return Err(SubmitPublicFormError::NotFound),
     };
-    if revision.id != input.revision_id {
-        return Err(SubmitPublicFormError::StaleRevision);
-    }
-
     let unvalidated_document =
         DocumentV2::decode(revision.data_json.as_bytes(), &revision.funnel_id)
             .map_err(|_| SubmitPublicFormError::NotFound)?;
+    let current_page_slug = unvalidated_document.page(&input.page_id).and_then(|page| {
+        (page.id() != unvalidated_document.entry_page_id()).then(|| page.slug().to_owned())
+    });
+    if revision.id != input.revision_id {
+        return Err(SubmitPublicFormError::StaleRevision { current_page_slug });
+    }
+
     let asset_ids = referenced_asset_ids(&unvalidated_document);
     let media_records = match media_assets.get_many_ready(&asset_ids).await {
         Ok(records) if records.len() == asset_ids.len() => records,
@@ -96,20 +111,50 @@ pub async fn submit_public_form(
     if !form_is_placed_on_page {
         return Err(SubmitPublicFormError::NotFound);
     }
+    let recovery_context = FormRecoveryContext {
+        revision: &revision,
+        funnel_slug: input.funnel_slug,
+        document: &document,
+        page,
+        form,
+        assets: &assets,
+    };
 
-    let submission = validate_form_submission(
+    let submission = match validate_form_submission(
         form,
         input.fields,
         input.request_consent_accepted,
         input.marketing_opt_in,
-    )
-    .map_err(|_| SubmitPublicFormError::InvalidPayload)?;
-    let field_values_json = serde_json::to_string(submission.values())
-        .map_err(|_| SubmitPublicFormError::SerializationFailure)?;
+    ) {
+        Ok(submission) => submission,
+        Err(validation) => {
+            let recovery_html = recovery_context.render(FormRecoveryState {
+                issues: &validation.issues,
+                values: &validation.recoverable_values,
+                request_consent_accepted: validation.request_consent_accepted,
+                marketing_opt_in: validation.marketing_opt_in,
+                summary_message: None,
+            });
+            return Err(SubmitPublicFormError::InvalidPayload { recovery_html });
+        }
+    };
+    let field_values_json = match serde_json::to_string(submission.values()) {
+        Ok(value) => value,
+        Err(_) => {
+            let recovery_html = recovery_context.render(FormRecoveryState {
+                issues: &[],
+                values: input.fields,
+                request_consent_accepted: input.request_consent_accepted,
+                marketing_opt_in: input.marketing_opt_in,
+                summary_message: Some("We could not confirm your submission. If you retry, keep the same answers; this form reuses the same submission key."),
+            });
+            return Err(SubmitPublicFormError::SerializationFailure { recovery_html });
+        }
+    };
     let submission_id = uuid::Uuid::new_v4().to_string();
     let request_consent = form.request_consent();
     let marketing_consent = form.marketing_opt_in();
-    let storage_result = repository
+    let storage_result = match repository
         .store_public_form_submission(NewPublicFormSubmission {
             submission_id: &submission_id,
             funnel_id: &revision.funnel_id,
@@ -130,20 +175,92 @@ pub async fn submit_public_form(
             limit_per_minute: input.limit_per_minute,
         })
         .await
-        .map_err(|error: RepositoryError| SubmitPublicFormError::Storage { code: error.code() })?;
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let recovery_html = recovery_context.render(FormRecoveryState {
+                issues: &[],
+                values: input.fields,
+                request_consent_accepted: input.request_consent_accepted,
+                marketing_opt_in: input.marketing_opt_in,
+                summary_message: Some("We could not confirm your submission. If you retry, keep the same answers; this form reuses the same submission key."),
+            });
+            return Err(SubmitPublicFormError::Storage {
+                code: error.code(),
+                recovery_html,
+            });
+        }
+    };
 
     match storage_result {
         PublicFormSubmissionResult::Stored | PublicFormSubmissionResult::Duplicate => {}
         PublicFormSubmissionResult::KeyReuseMismatch => {
-            return Ok(SubmitPublicFormOutcome::KeyReuseMismatch)
+            return Ok(SubmitPublicFormOutcome::KeyReuseMismatch { current_page_slug })
         }
-        PublicFormSubmissionResult::RateLimited => return Ok(SubmitPublicFormOutcome::RateLimited),
-        PublicFormSubmissionResult::NotCurrent => return Err(SubmitPublicFormError::StaleRevision),
+        PublicFormSubmissionResult::RateLimited => {
+            let recovery_html = recovery_context.render(FormRecoveryState {
+                issues: &[],
+                values: input.fields,
+                request_consent_accepted: input.request_consent_accepted,
+                marketing_opt_in: input.marketing_opt_in,
+                summary_message: Some("Please wait before trying again. Your answers are kept here and this form will reuse the same submission key."),
+            });
+            return Ok(SubmitPublicFormOutcome::RateLimited { recovery_html });
+        }
+        PublicFormSubmissionResult::NotCurrent => {
+            return Err(SubmitPublicFormError::StaleRevision { current_page_slug })
+        }
     }
 
     let success_location = public_form_success_location(&document, page, form, input.funnel_slug)
         .ok_or(SubmitPublicFormError::NotFound)?;
     Ok(SubmitPublicFormOutcome::Accepted { success_location })
+}
+
+struct FormRecoveryContext<'a> {
+    revision: &'a RevisionRecord,
+    funnel_slug: &'a str,
+    document: &'a DocumentV2,
+    page: &'a PageV2,
+    form: &'a FormV2,
+    assets: &'a [AssetDigestRecord],
+}
+
+struct FormRecoveryState<'a> {
+    issues: &'a [FormSubmissionIssue],
+    values: &'a BTreeMap<String, String>,
+    request_consent_accepted: bool,
+    marketing_opt_in: bool,
+    summary_message: Option<&'a str>,
+}
+
+impl FormRecoveryContext<'_> {
+    fn render(&self, state: FormRecoveryState<'_>) -> Option<String> {
+        let page_slug =
+            (self.page.id() != self.document.entry_page_id()).then_some(self.page.slug());
+        let feedback = FormSubmissionFeedback {
+            form_id: self.form.id(),
+            issues: state.issues,
+            values: state.values,
+            request_consent_accepted: state.request_consent_accepted,
+            marketing_opt_in: state.marketing_opt_in,
+            summary_message: state.summary_message,
+        };
+        render_published_route_with_submission_feedback(
+            PublishedRevisionInput {
+                schema_version: self.revision.schema_version,
+                funnel_id: &self.revision.funnel_id,
+                revision_id: &self.revision.id,
+                data_json: &self.revision.data_json,
+                render_manifest_json: &self.revision.render_manifest_json,
+            },
+            self.funnel_slug,
+            page_slug,
+            self.assets,
+            &feedback,
+        )
+        .ok()
+    }
 }
 
 fn public_form_success_location(
