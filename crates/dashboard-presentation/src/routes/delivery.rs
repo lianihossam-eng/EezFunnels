@@ -36,7 +36,7 @@ use super::idempotency::{
 
 #[cfg(feature = "browser")]
 #[component]
-pub(super) fn WebhookDeliveryPanel() -> Element {
+fn WebhookDeliverySettings() -> Element {
     let mut destination = use_signal(|| None::<WebhookDestinationResponse>);
     let mut destination_url = use_signal(String::new);
     let mut destination_enabled = use_signal(|| false);
@@ -283,14 +283,53 @@ pub(super) fn WebhookDeliveryPanel() -> Element {
     }
 }
 
-#[cfg(not(feature = "browser"))]
 #[component]
-pub(super) fn WebhookDeliveryPanel() -> Element {
+fn WebhookDeliveryPanelShell() -> Element {
     rsx! {
-        section { class: "webhook-delivery-panel", "aria-label": "Webhook delivery settings",
-            p { "Open this page in the dashboard to configure signed webhook delivery." }
+        section { class: "webhook-delivery-panel", "aria-labelledby": "webhook-delivery-heading",
+            div { class: "webhook-delivery-heading",
+                div {
+                    p { class: "eyebrow", "Optional integration" }
+                    h2 { id: "webhook-delivery-heading", "Signed webhook delivery" }
+                    p { class: "webhook-delivery-description",
+                        "Keep every response in the inbox. Selected forms can also send a signed event to your HTTPS receiver."
+                    }
+                }
+                span { class: "webhook-delivery-badge", "Off by default" }
+            }
+            p { role: "status", "Loading delivery settings…" }
+            p { class: "webhook-delivery-help",
+                "Inbox-only submissions remain available even when delivery is off, the receiver fails, or a form mapping needs revalidation."
+            }
         }
     }
+}
+
+#[component]
+pub(super) fn WebhookDeliveryPanel() -> Element {
+    #[cfg(feature = "browser")]
+    let mut settings_ready = use_signal(|| false);
+    #[cfg(not(feature = "browser"))]
+    let settings_ready = use_signal(|| false);
+
+    #[cfg(feature = "browser")]
+    use_effect(move || settings_ready.set(true));
+
+    if settings_ready() {
+        webhook_delivery_settings()
+    } else {
+        rsx! { WebhookDeliveryPanelShell {} }
+    }
+}
+
+#[cfg(feature = "browser")]
+fn webhook_delivery_settings() -> Element {
+    rsx! { WebhookDeliverySettings {} }
+}
+
+#[cfg(not(feature = "browser"))]
+fn webhook_delivery_settings() -> Element {
+    rsx! { WebhookDeliveryPanelShell {} }
 }
 
 #[cfg(feature = "browser")]

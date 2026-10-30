@@ -18,8 +18,13 @@ const executablePath = await access("/usr/bin/chromium").then(
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(pageUrl, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Submissions", level: 1 }).waitFor({ state: "visible" });
+  await page.getByLabel("Receiver HTTPS URL").waitFor({ state: "visible" });
+  await page.locator("#webhook-funnel-select").waitFor({ state: "visible" });
+  assert.deepEqual(pageErrors, []);
   const entries = page.locator("details.submission-entry");
   await entries.first().waitFor({ state: "visible" });
   assert.equal(await entries.count(), 25);
