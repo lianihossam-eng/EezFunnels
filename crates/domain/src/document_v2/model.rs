@@ -642,6 +642,8 @@ pub(crate) struct DocumentData {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) language: Option<PublicLanguage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) generated_placeholders: Vec<super::GeneratedPlaceholderMarker>,
 }
 
 #[derive(Clone, Debug)]
@@ -741,6 +743,8 @@ impl DocumentV2 {
             forms,
         );
         data.language = language;
+        data.generated_placeholders =
+            super::starter::generated_placeholders(blueprint_id, effective_language)?;
         Self::from_validated(data)
     }
 
@@ -883,5 +887,6 @@ pub(crate) fn build_data_from_parts(
         pages,
         forms,
         language: None,
+        generated_placeholders: Vec::new(),
     }
 }

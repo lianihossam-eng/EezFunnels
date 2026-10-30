@@ -27,6 +27,7 @@ pub(super) struct V2EditorState {
     pub(super) funnel: Option<EditorFunnel>,
     pub(super) base_revision_id: String,
     pub(super) published_revision_id: Option<String>,
+    pub(super) publication_readiness: Option<PublicationReadiness>,
     pub(super) document: Option<DocumentV2>,
     pub(super) saved_document_json: String,
     pub(super) preview_html: String,
@@ -109,6 +110,7 @@ impl Default for V2EditorState {
             funnel: None,
             base_revision_id: String::new(),
             published_revision_id: None,
+            publication_readiness: None,
             document: None,
             saved_document_json: String::new(),
             preview_html: String::new(),
@@ -325,6 +327,7 @@ impl V2EditorState {
                 self.funnel = Some(loaded.metadata.funnel);
                 self.base_revision_id = loaded.metadata.base_revision_id;
                 self.published_revision_id = loaded.metadata.published_revision_id;
+                self.publication_readiness = loaded.metadata.publication_readiness;
                 self.saved_document_json = loaded.saved_document_json.clone();
                 self.document = Some(loaded.document.clone());
                 self.preview_html = loaded.preview_html;
@@ -347,6 +350,33 @@ impl V2EditorState {
                 self.load_error = false;
             }
             _ => self.load_error = true,
+        }
+    }
+
+    pub(super) fn finish_readiness_refresh(
+        &mut self,
+        route_epoch: u64,
+        funnel_id: &str,
+        revision_id: &str,
+        metadata: Result<V2EditorMetadata, ()>,
+    ) {
+        if self.route_epoch != route_epoch
+            || self.funnel_id != funnel_id
+            || self.base_revision_id != revision_id
+        {
+            return;
+        }
+        if let Ok(metadata) = metadata {
+            if metadata.schema_version == 2
+                && metadata.funnel.id == funnel_id
+                && metadata.base_revision_id == revision_id
+                && metadata
+                    .publication_readiness
+                    .as_ref()
+                    .is_some_and(|readiness| readiness.revision_id == revision_id)
+            {
+                self.publication_readiness = metadata.publication_readiness;
+            }
         }
     }
 
@@ -640,6 +670,10 @@ impl V2EditorState {
             && !self.has_uncommitted_editor_inputs()
             && (retrying_publish || !self.has_unsaved_changes())
             && self.document.is_some()
+            && (retrying_publish
+                || self.publication_readiness.as_ref().is_none_or(|readiness| {
+                    readiness.revision_id == self.base_revision_id && !readiness.has_blockers()
+                }))
             && self.published_revision_id.as_deref() != Some(&self.base_revision_id)
             && self.can_retry_publication_as(true)
     }
@@ -701,6 +735,16 @@ impl V2EditorState {
         }
         let document = self.document.as_ref()?.clone();
         let base_document_json = document.canonical_json();
+        let persisted_base =
+            match DocumentV2::decode(self.saved_document_json.as_bytes(), &self.funnel_id) {
+                Ok(document) => document,
+                Err(_) => {
+                    self.error =
+                        Some("The saved revision could not be read for this edit.".to_owned());
+                    self.status = None;
+                    return None;
+                }
+            };
         let mut ids = DeterministicIds {
             operation_id: operation_id.clone(),
             next: 0,
@@ -716,14 +760,27 @@ impl V2EditorState {
                 return None;
             }
         };
-        let document_json = outcome.document.canonical_json();
+        let edited_document = match outcome
+            .document
+            .reconcile_generated_placeholders_from(&persisted_base)
+            .and_then(|candidate| candidate.reconcile_generated_placeholders_from(&document))
+        {
+            Ok(document) => document,
+            Err(_) => {
+                self.error =
+                    Some("This change could not preserve generated-content checks.".to_owned());
+                self.status = None;
+                return None;
+            }
+        };
+        let document_json = edited_document.canonical_json();
         if document_json == document.canonical_json() {
             return None;
         }
-        self.prune_form_ui_state(&outcome.document);
-        self.prune_page_inputs(&outcome.document);
+        self.prune_form_ui_state(&edited_document);
+        self.prune_page_inputs(&edited_document);
         self.select_focus(&outcome.focus);
-        self.document = Some(outcome.document);
+        self.document = Some(edited_document);
         self.push_history(document_json.clone());
         self.generation = self.generation.wrapping_add(1);
         self.save_retryable = false;
@@ -1097,13 +1154,32 @@ impl V2EditorState {
         if !self.can_save() {
             return None;
         }
+        let resume_finalization = self.save_retryable && self.save_phase == V2SavePhase::Finalizing;
+        let document_json = if resume_finalization {
+            self.document.as_ref()?.canonical_json()
+        } else {
+            let mut document = self.document.as_ref()?.clone();
+            let provenance = std::iter::once(&self.saved_document_json).chain(self.history.iter());
+            for source_json in provenance {
+                let source = DocumentV2::decode(source_json.as_bytes(), &self.funnel_id).ok()?;
+                document = document
+                    .reconcile_generated_placeholders_from(&source)
+                    .ok()?;
+            }
+            let document_json = document.canonical_json();
+            self.document = Some(document);
+            if let Some(snapshot) = self.history.get_mut(self.history_cursor) {
+                *snapshot = document_json.clone();
+            }
+            document_json
+        };
         let capture = V2SaveCapture {
             route_epoch: self.route_epoch,
             generation: self.generation,
             funnel_id: self.funnel_id.clone(),
             base_revision_id: self.base_revision_id.clone(),
-            document_json: self.document.as_ref()?.canonical_json(),
-            resume_finalization: self.save_retryable && self.save_phase == V2SavePhase::Finalizing,
+            document_json,
+            resume_finalization,
         };
         self.saving = true;
         self.save_retryable = false;
@@ -1130,6 +1206,7 @@ impl V2EditorState {
                     && !response.revision_id.is_empty() =>
             {
                 self.base_revision_id = response.revision_id;
+                self.publication_readiness = None;
                 self.saved_document_json = capture.document_json.clone();
                 self.history = vec![self.saved_document_json.clone()];
                 self.history_cursor = 0;
@@ -1333,6 +1410,10 @@ mod tests {
                 },
                 base_revision_id: "revision-a".to_owned(),
                 published_revision_id: None,
+                publication_readiness: Some(PublicationReadiness {
+                    revision_id: "revision-a".to_owned(),
+                    findings: Vec::new(),
+                }),
             },
             document,
             saved_document_json,
@@ -1452,6 +1533,49 @@ mod tests {
         assert_eq!(state.page_input_page.as_deref(), Some("page-thanks"));
         assert_eq!(state.page_title_input, "Confirmation in progress");
         assert!(state.has_uncommitted_editor_inputs());
+    }
+
+    #[test]
+    fn publication_readiness_blocks_findings_but_allows_warnings_and_receipt_retries() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document(), Some(stage_capacity()))),
+        );
+        state.publication_readiness = Some(PublicationReadiness {
+            revision_id: "revision-a".to_owned(),
+            findings: vec![PublicationReadinessFinding {
+                code: "editorial/search_description_missing".to_owned(),
+                severity: PublicationReadinessSeverity::Warning,
+                target: PublicationReadinessTarget::V2PageField {
+                    page_id: "page-home".to_owned(),
+                    field: "seo_description".to_owned(),
+                },
+            }],
+        });
+        assert!(state.can_publish());
+
+        state.publication_readiness = Some(PublicationReadiness {
+            revision_id: "revision-a".to_owned(),
+            findings: vec![PublicationReadinessFinding {
+                code: "publication/generated_placeholder_unresolved".to_owned(),
+                severity: PublicationReadinessSeverity::Blocking,
+                target: PublicationReadinessTarget::V2Block {
+                    page_id: "page-home".to_owned(),
+                    section_id: "section-hero".to_owned(),
+                    block_id: "block-hero-copy".to_owned(),
+                },
+            }],
+        });
+        assert!(!state.can_publish());
+
+        state.publication_retryable = true;
+        state.publication_attempt = Some(PublicationAction::Publish {
+            revision_id: "revision-a".to_owned(),
+            expected_published_revision_id: None,
+        });
+        assert!(state.can_publish());
     }
 
     #[test]
@@ -2041,6 +2165,120 @@ mod tests {
             capture.document_json
         );
         assert_ne!(capture.base_document_json, capture.document_json);
+    }
+
+    #[test]
+    fn unsaved_placeholder_retyping_keeps_the_persisted_blocker_and_saves_validly() {
+        let original = document();
+        let expected_text = original.generated_placeholders()[0].expected_text.clone();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(original.clone(), Some(stage_capacity()))),
+        );
+
+        state
+            .apply_local_edit(
+                Edit::SetBlock {
+                    block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                        .expect("placeholder block"),
+                    value: NewBlock::Text {
+                        text: "A defined service offer".to_owned(),
+                    },
+                },
+                "resolve-placeholder".to_owned(),
+            )
+            .expect("placeholder can be resolved locally");
+        state.pending = false;
+
+        let capture = state
+            .apply_local_edit(
+                Edit::SetBlock {
+                    block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                        .expect("placeholder block"),
+                    value: NewBlock::Text {
+                        text: expected_text,
+                    },
+                },
+                "restore-placeholder".to_owned(),
+            )
+            .expect("editing back to the starter text is locally accepted");
+        let transient = DocumentV2::decode(capture.base_document_json.as_bytes(), "funnel-a")
+            .expect("typed edit starts from the current local draft");
+        let persisted_base = DocumentV2::decode(state.saved_document_json.as_bytes(), "funnel-a")
+            .expect("saved base remains available");
+        let mut ids = DeterministicIds {
+            operation_id: capture.operation_id.clone(),
+            next: 0,
+        };
+        let worker_document = transient
+            .apply(capture.edit.clone(), &mut ids)
+            .expect("worker applies the typed operation")
+            .document
+            .reconcile_generated_placeholders_from(&persisted_base)
+            .and_then(|candidate| candidate.reconcile_generated_placeholders_from(&transient))
+            .expect("worker retains the saved marker provenance");
+
+        assert_eq!(worker_document.canonical_json(), capture.document_json);
+        state.pending = false;
+        state
+            .apply_local_edit(
+                Edit::SetThemePreset {
+                    preset: ThemePreset::Bold,
+                },
+                "change-theme-with-unresolved-placeholder".to_owned(),
+            )
+            .expect("other draft changes remain editable");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .expect("draft remains loaded")
+                .generated_placeholders()
+                .len(),
+            1
+        );
+        state.pending = false;
+        let save = state.begin_save().expect("the draft can be saved");
+        let saved_candidate = DocumentV2::decode(save.document_json.as_bytes(), "funnel-a")
+            .expect("save capture is a valid document");
+        assert!(original.has_valid_generated_placeholder_transition(&saved_candidate));
+    }
+
+    #[test]
+    fn restoring_a_historical_placeholder_keeps_its_blocker_in_the_save_capture() {
+        let original = document();
+        let mut ids = TestIds(0);
+        let resolved = original
+            .apply(
+                Edit::SetBlock {
+                    block: eez_domain::document_v2::BlockId::parse("block-hero-copy")
+                        .expect("placeholder block"),
+                    value: NewBlock::Text {
+                        text: "A defined service offer".to_owned(),
+                    },
+                },
+                &mut ids,
+            )
+            .expect("resolve generated offer copy")
+            .document;
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(resolved.clone(), Some(stage_capacity()))),
+        );
+
+        state
+            .restore_document(original.clone())
+            .expect("a prior revision can be restored as a draft");
+        let capture = state.begin_save().expect("the restored draft can be saved");
+        let restored = DocumentV2::decode(capture.document_json.as_bytes(), "funnel-a")
+            .expect("restored save capture is a valid document");
+
+        assert_eq!(restored.generated_placeholders().len(), 1);
+        assert!(resolved.has_valid_generated_placeholder_transition(&restored));
     }
 
     #[test]

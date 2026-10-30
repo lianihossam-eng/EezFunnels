@@ -1,5 +1,6 @@
 mod edit;
 mod model;
+mod placeholders;
 mod starter;
 mod theme;
 mod validate;
@@ -12,6 +13,10 @@ pub use model::{
     FormV2, ImageAlt, PageId, PageV2, PublicLanguage, RevisionIdV2, SectionId, SectionKind,
     SectionV2, StableDocumentId, TextPresentation, V2FunnelId, ValidatedFormSubmission,
     ValidationRange,
+};
+pub use placeholders::{
+    GeneratedPlaceholderCode, GeneratedPlaceholderMarker, GeneratedPlaceholderPageField,
+    GeneratedPlaceholderTarget,
 };
 pub use theme::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,

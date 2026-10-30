@@ -810,6 +810,52 @@ h1 {
   font-size: 13px;
 }
 
+.editor-readiness-findings {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.editor-readiness-findings li {
+  padding: 11px 13px;
+  border: 1px solid #e3e7ef;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #f7f8fc;
+}
+
+.editor-readiness-findings .editor-readiness-blocker {
+  border-left-color: #b42318;
+  background: #fff6f5;
+}
+
+.editor-readiness-findings .editor-readiness-warning {
+  border-left-color: #a15c00;
+  background: #fffaf0;
+}
+
+.editor-readiness-findings strong {
+  color: #27344f;
+  font-size: 12px;
+}
+
+.editor-readiness-findings p {
+  margin: 4px 0 0;
+  color: #37445e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.editor-readiness-findings code {
+  display: block;
+  margin-top: 4px;
+  color: #56627a;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .editor-publication-actions {
   display: flex;
   flex-wrap: wrap;

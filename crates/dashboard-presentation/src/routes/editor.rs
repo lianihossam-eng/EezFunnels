@@ -43,10 +43,167 @@ struct EditorReadResponse {
     funnel: EditorFunnel,
     base_revision_id: String,
     published_revision_id: Option<String>,
+    #[serde(default)]
+    publication_readiness: Option<PublicationReadiness>,
     sections: Vec<EditorSection>,
     settings_schema: EditorSettingsSchema,
     settings_values: BTreeMap<String, EditorSettingValue>,
     preview_html: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct PublicationReadiness {
+    revision_id: String,
+    findings: Vec<PublicationReadinessFinding>,
+}
+
+impl PublicationReadiness {
+    fn has_blockers(&self) -> bool {
+        self.findings
+            .iter()
+            .any(|finding| finding.severity == PublicationReadinessSeverity::Blocking)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct PublicationReadinessFinding {
+    code: String,
+    severity: PublicationReadinessSeverity,
+    target: PublicationReadinessTarget,
+}
+
+impl PublicationReadinessFinding {
+    fn message(&self) -> &'static str {
+        match self.code.as_str() {
+            "publication/generated_placeholder_unresolved" => {
+                "Replace or remove this generated text before publishing."
+            }
+            "editorial/search_description_missing" => {
+                "Add a search description when it is useful for this page."
+            }
+            _ => "Review this item before publishing.",
+        }
+    }
+
+    fn target_label(&self) -> String {
+        match &self.target {
+            PublicationReadinessTarget::V1SectionField { section_id, field } => {
+                format!(
+                    "{} · {}",
+                    readiness_section_label(section_id),
+                    readiness_field_label(field)
+                )
+            }
+            PublicationReadinessTarget::V2Block {
+                page_id,
+                section_id,
+                block_id,
+            } => format!(
+                "{} · {} · {}",
+                readiness_page_label(page_id),
+                readiness_section_label(section_id),
+                readiness_block_label(block_id)
+            ),
+            PublicationReadinessTarget::V2PageField { page_id, field } => format!(
+                "{} · {}",
+                readiness_page_label(page_id),
+                readiness_field_label(field)
+            ),
+        }
+    }
+}
+
+fn readiness_page_label(page_id: &str) -> String {
+    match page_id {
+        "page-home" => "Home page".to_owned(),
+        "page-request-received" => "Request confirmation page".to_owned(),
+        _ => page_id
+            .strip_prefix("page-")
+            .unwrap_or(page_id)
+            .replace('-', " "),
+    }
+}
+
+fn readiness_section_label(section_id: &str) -> String {
+    match section_id {
+        "hero" | "section-hero" => "Offer section".to_owned(),
+        "testimonials" | "section-testimonials" => "Testimonials section".to_owned(),
+        "features" | "section-features" => "Features section".to_owned(),
+        "cta" | "section-cta" => "Call to action section".to_owned(),
+        "footer" | "section-footer" => "Footer".to_owned(),
+        _ => section_id
+            .strip_prefix("section-")
+            .unwrap_or(section_id)
+            .replace('-', " "),
+    }
+}
+
+fn readiness_block_label(block_id: &str) -> String {
+    match block_id {
+        "block-hero-copy" => "Offer text".to_owned(),
+        "block-testimonials-copy" => "Customer story prompt".to_owned(),
+        _ => block_id
+            .strip_prefix("block-")
+            .unwrap_or(block_id)
+            .replace('-', " "),
+    }
+}
+
+fn readiness_field_label(field: &str) -> String {
+    match field {
+        "testimonial_quote" => "Customer quote".to_owned(),
+        "testimonial_author" => "Customer name".to_owned(),
+        "testimonial_attribution" => "Customer attribution".to_owned(),
+        "title" => "Page title".to_owned(),
+        "seo_title" => "Search title".to_owned(),
+        "seo_description" => "Search description".to_owned(),
+        _ => {
+            if let Some((index, item_field)) = field
+                .strip_prefix("items.")
+                .and_then(|path| path.split_once('.'))
+                .and_then(|(index, item_field)| {
+                    index.parse::<usize>().ok().map(|index| (index, item_field))
+                })
+            {
+                let label = match item_field {
+                    "quote" => "Customer quote",
+                    "author" => "Customer name",
+                    "attribution" => "Customer attribution",
+                    "title" => "Item title",
+                    "description" => "Item description",
+                    "label" => "Link label",
+                    _ => item_field,
+                };
+                return format!("{label} · item {}", index + 1);
+            }
+            field.replace(['.', '_'], " ")
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PublicationReadinessSeverity {
+    Blocking,
+    Warning,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PublicationReadinessTarget {
+    V1SectionField {
+        section_id: String,
+        field: String,
+    },
+    V2Block {
+        page_id: String,
+        section_id: String,
+        block_id: String,
+    },
+    V2PageField {
+        page_id: String,
+        field: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -173,6 +330,7 @@ struct PublicationCapture {
 struct EditorDocument {
     funnel: EditorFunnel,
     base_revision_id: String,
+    publication_readiness: Option<PublicationReadiness>,
     sections: Vec<EditorSection>,
     saved_order: Vec<String>,
     order: Vec<String>,
@@ -417,6 +575,7 @@ impl EditorState {
                 self.document = Some(EditorDocument {
                     funnel: response.funnel,
                     base_revision_id: response.base_revision_id,
+                    publication_readiness: response.publication_readiness,
                     sections: response.sections,
                     saved_order: order.clone(),
                     order,
@@ -477,6 +636,15 @@ impl EditorState {
         let Some(document) = self.document.as_ref() else {
             return false;
         };
+        if document
+            .publication_readiness
+            .as_ref()
+            .is_some_and(|readiness| {
+                readiness.revision_id != document.base_revision_id || readiness.has_blockers()
+            })
+        {
+            return false;
+        }
         self.publication.live_revision_id.as_deref() != Some(&document.base_revision_id)
     }
 
@@ -633,6 +801,11 @@ impl EditorState {
         self.publication.conflict = conflict;
         match response {
             Ok(response) if response.funnel.id == funnel_id => {
+                if let Some(document) = self.document.as_mut() {
+                    document.publication_readiness = response
+                        .publication_readiness
+                        .filter(|readiness| readiness.revision_id == document.base_revision_id);
+                }
                 self.publication.known = true;
                 self.publication.live_revision_id = response.published_revision_id;
                 self.publication.error = conflict.then(|| {
@@ -654,6 +827,36 @@ impl EditorState {
                         .to_owned(),
                 );
                 self.publication.status = None;
+            }
+        }
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_readiness_refresh(
+        &mut self,
+        route_epoch: u64,
+        funnel_id: &str,
+        revision_id: &str,
+        response: Result<EditorReadResponse, ()>,
+    ) {
+        if self.route_epoch != route_epoch || self.funnel_id != funnel_id {
+            return;
+        }
+        let Some(document) = self.document.as_mut() else {
+            return;
+        };
+        if document.base_revision_id != revision_id {
+            return;
+        }
+        if let Ok(response) = response {
+            if response.funnel.id == funnel_id
+                && response.base_revision_id == revision_id
+                && response
+                    .publication_readiness
+                    .as_ref()
+                    .is_some_and(|readiness| readiness.revision_id == revision_id)
+            {
+                document.publication_readiness = response.publication_readiness;
             }
         }
     }
@@ -890,6 +1093,7 @@ impl EditorState {
         }
         let document = self.document.as_mut()?;
         document.base_revision_id = revision_id;
+        document.publication_readiness = None;
         document.saved_order = document.order.clone();
         document.saved_settings_values = settings_values.clone();
         document.settings_values = settings_values;
@@ -1323,6 +1527,21 @@ async fn refresh_publication_status_from(
 }
 
 #[cfg(feature = "browser")]
+async fn refresh_publication_readiness(
+    mut state: Signal<EditorState>,
+    route_epoch: u64,
+    funnel_id: String,
+    revision_id: String,
+) {
+    let response = load_editor(&funnel_id).await;
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            state.finish_readiness_refresh(route_epoch, &funnel_id, &revision_id, response)
+        });
+    }
+}
+
+#[cfg(feature = "browser")]
 fn clear_publication_attempt_if_current(
     state: Signal<EditorState>,
     publication_key: &mut Signal<Option<PreparedIdempotencyKey>>,
@@ -1426,6 +1645,7 @@ async fn change_publication(
                 .map(|error| error.code)
                 .unwrap_or_default();
             let conflict = error_code == "conflict/publish_stale_revision";
+            let readiness_blocked = error_code == "conflict/publication_readiness_blocked";
             let retryable = response.status == 0 || response.status >= 500;
             if !retryable {
                 clear_publication_attempt_if_current(
@@ -1448,6 +1668,16 @@ async fn change_publication(
             state.with_mut(|state| state.fail_publication(&capture, message, retryable, conflict));
             if conflict {
                 refresh_publication_status(state).await;
+            } else if readiness_blocked {
+                if let Some(revision_id) = capture.action.resulting_revision_id() {
+                    refresh_publication_readiness(
+                        state,
+                        capture.route_epoch,
+                        capture.funnel_id,
+                        revision_id.to_owned(),
+                    )
+                    .await;
+                }
             }
         }
         Err(()) => {
@@ -2115,6 +2345,24 @@ fn FunnelDetailV1(id: String) -> Element {
                         }
                     }
                 }
+                if view.has_unsaved_changes() {
+                    p { class: "editor-publication-help", "Save the draft to check its publication readiness." }
+                } else if let Some(readiness) = document.publication_readiness.as_ref().filter(|readiness| readiness.revision_id == document.base_revision_id) {
+                    if !readiness.findings.is_empty() {
+                        ul { class: "editor-readiness-findings", "aria-label": "Publication readiness findings",
+                            for finding in &readiness.findings {
+                                li {
+                                    class: if finding.severity == PublicationReadinessSeverity::Blocking { "editor-readiness-blocker" } else { "editor-readiness-warning" },
+                                    strong { if finding.severity == PublicationReadinessSeverity::Blocking { "Must fix" } else { "Suggestion" } }
+                                    p { "{finding.message()}" }
+                                    code { "{finding.target_label()}" }
+                                }
+                            }
+                        }
+                    }
+                } else if document.publication_readiness.is_some() {
+                    p { class: "editor-publication-help", role: "status", "Checking publication readiness for this saved revision…" }
+                }
                 if let Some(status) = view.publication.status.as_ref() {
                     p {
                         class: "editor-publication-status",
@@ -2127,9 +2375,7 @@ fn FunnelDetailV1(id: String) -> Element {
                 if let Some(error) = view.publication.error.as_ref() {
                     p { class: "error-message editor-publication-error", role: "alert", "{error}" }
                 }
-                if view.has_unsaved_changes() {
-                    p { class: "editor-publication-help", "Save draft changes before publishing." }
-                } else if !view.publication.known {
+                if !view.publication.known {
                     p { class: "editor-publication-help", "Refresh live status before changing publication." }
                 } else if view.publication.live_revision_id.as_deref() == Some(&document.base_revision_id) {
                     p { class: "editor-publication-help", "The saved draft is already live." }
@@ -2556,6 +2802,7 @@ async fn save_editor_revision(
         Ok(response) if response.status == 200 => {
             let saved = serde_json::from_str::<EditorSaveResponse>(&response.body);
             if let Ok(saved) = saved {
+                let saved_revision_id = saved.revision_id.clone();
                 clear_save_attempt_if_current(
                     state,
                     &mut save_key,
@@ -2567,6 +2814,13 @@ async fn save_editor_revision(
                     state.finish_save(&capture, saved.revision_id, saved.settings_values)
                 });
                 schedule_editor_preview(state, preview);
+                refresh_publication_readiness(
+                    state,
+                    capture.route_epoch,
+                    capture.funnel_id.clone(),
+                    saved_revision_id,
+                )
+                .await;
             } else {
                 state.with_mut(|state| {
                     state.fail_save(
@@ -2760,6 +3014,7 @@ mod tests {
                 },
                 base_revision_id: "revision-1".to_owned(),
                 published_revision_id: None,
+                publication_readiness: None,
                 sections: vec![
                     EditorSection {
                         id: "hero".to_owned(),
@@ -2852,6 +3107,7 @@ mod tests {
             },
             base_revision_id: base_revision_id.to_owned(),
             published_revision_id: published_revision_id.map(str::to_owned),
+            publication_readiness: None,
             sections: vec![
                 EditorSection {
                     id: "hero".to_owned(),
@@ -2904,6 +3160,103 @@ mod tests {
             capture.action.body(),
             r#"{"expected_published_revision_id":"revision-live","revision_id":"revision-1"}"#
         );
+    }
+
+    #[test]
+    fn publication_readiness_blocks_only_current_saved_revision_blockers() {
+        let mut state = loaded_editor_state();
+        let document = state.document.as_mut().expect("loaded editor");
+        document.publication_readiness = Some(PublicationReadiness {
+            revision_id: document.base_revision_id.clone(),
+            findings: vec![PublicationReadinessFinding {
+                code: "editorial/search_description_missing".to_owned(),
+                severity: PublicationReadinessSeverity::Warning,
+                target: PublicationReadinessTarget::V2PageField {
+                    page_id: "page-home".to_owned(),
+                    field: "seo_description".to_owned(),
+                },
+            }],
+        });
+        state.publication.known = true;
+        state.publication.live_revision_id = Some("revision-live".to_owned());
+        assert!(state.can_publish());
+
+        {
+            let document = state.document.as_mut().expect("loaded editor");
+            document.publication_readiness = Some(PublicationReadiness {
+                revision_id: document.base_revision_id.clone(),
+                findings: vec![PublicationReadinessFinding {
+                    code: "publication/generated_placeholder_unresolved".to_owned(),
+                    severity: PublicationReadinessSeverity::Blocking,
+                    target: PublicationReadinessTarget::V1SectionField {
+                        section_id: "testimonials".to_owned(),
+                        field: "testimonial_quote".to_owned(),
+                    },
+                }],
+            });
+        }
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .unwrap()
+                .publication_readiness
+                .as_ref()
+                .unwrap()
+                .findings[0]
+                .target_label(),
+            "Testimonials section · Customer quote"
+        );
+        assert!(!state.can_publish());
+
+        state
+            .document
+            .as_mut()
+            .expect("loaded editor")
+            .publication_readiness
+            .as_mut()
+            .expect("readiness report")
+            .revision_id = "revision-old".to_owned();
+        assert!(!state.can_publish());
+    }
+
+    #[test]
+    fn successful_save_discards_old_readiness_when_a_refresh_is_unavailable() {
+        let mut state = loaded_editor_state();
+        state.publication.known = true;
+        state.publication.live_revision_id = Some("revision-live".to_owned());
+        state
+            .document
+            .as_mut()
+            .expect("loaded editor")
+            .publication_readiness = Some(PublicationReadiness {
+            revision_id: "revision-1".to_owned(),
+            findings: Vec::new(),
+        });
+        state
+            .set_setting(
+                "section.hero.title",
+                EditorSettingValue {
+                    kind: "text".to_owned(),
+                    value: serde_json::json!("Saved headline"),
+                    effective_value: None,
+                },
+            )
+            .expect("editor accepts a local change");
+        let capture = state.begin_save().expect("dirty draft can be saved");
+        let (_, values) = fixture_settings();
+
+        state
+            .finish_save(&capture, "revision-2".to_owned(), values)
+            .expect("successful save advances the editor revision");
+
+        assert!(state
+            .document
+            .as_ref()
+            .expect("document remains loaded")
+            .publication_readiness
+            .is_none());
+        assert!(state.can_publish());
     }
 
     #[test]
@@ -3865,6 +4218,7 @@ mod tests {
                 },
                 base_revision_id: "revision-20".to_owned(),
                 published_revision_id: Some("revision-19".to_owned()),
+                publication_readiness: None,
                 sections: vec![EditorSection {
                     id: "hero-2".to_owned(),
                     section_type: "hero".to_owned(),

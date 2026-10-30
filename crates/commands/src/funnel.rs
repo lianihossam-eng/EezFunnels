@@ -4,7 +4,9 @@ use std::fmt::{Display, Formatter};
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
     document_v2::{
-        BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId, PublicLanguage,
+        BlueprintId, DocumentV2, Edit, FormId, GeneratedPlaceholderCode,
+        GeneratedPlaceholderMarker, GeneratedPlaceholderTarget, IdKind, IdSource, PageId,
+        PublicLanguage,
     },
     DomainError, FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, Funnel,
     FunnelBlueprint, FunnelId, InteractionReportPeriod, RenderManifest, Revision, RevisionId,
@@ -29,6 +31,9 @@ use serde_json::Value;
 #[path = "funnel/editor_settings.rs"]
 pub(super) mod inspector;
 
+#[path = "funnel/publication_readiness.rs"]
+mod publication_readiness;
+
 #[cfg(test)]
 #[path = "funnel/v2_save_tests.rs"]
 mod v2_save_tests;
@@ -52,6 +57,10 @@ mod interaction_report_tests;
 #[cfg(test)]
 #[path = "funnel/form_submission_status_tests.rs"]
 mod form_submission_status_tests;
+
+#[cfg(test)]
+#[path = "funnel/publication_readiness_tests.rs"]
+mod publication_readiness_tests;
 
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
@@ -124,7 +133,9 @@ impl FunnelCreateCommand {
         )?;
         Renderer::new().render(&revision, &theme, &contents)?;
 
-        let snapshot = FunnelSnapshotV1::new(self.blueprint, &sections, contents);
+        let generated_placeholders = v1_generated_placeholders(&sections, &contents);
+        let snapshot =
+            FunnelSnapshotV1::new(self.blueprint, &sections, contents, generated_placeholders);
         let data_json =
             serde_json::to_string(&snapshot).map_err(|_| FunnelCommandError::Internal)?;
         if data_json.len() > MAX_SNAPSHOT_BYTES {
@@ -376,6 +387,7 @@ fn convert_v1_to_v2(
             message: "The typed document could not be initialized from this funnel.",
         }]
     })?;
+    document_json["generated_placeholders"] = serde_json::json!([]);
 
     if let Some(pages) = document_json.get_mut("pages").and_then(Value::as_array_mut) {
         pages.truncate(1);
@@ -450,8 +462,9 @@ fn convert_v1_to_v2(
                         text.push('\n');
                         text.push_str(attribution);
                     }
+                    let id = block_id();
                     blocks.push(serde_json::json!({
-                        "id": block_id(), "kind": "text", "text": text,
+                        "id": id, "kind": "text", "text": text,
                     }));
                 }
             }
@@ -499,7 +512,97 @@ fn convert_v1_to_v2(
             "blocks": blocks,
         }));
     }
+    let page_id = PageId::parse("page-home").map_err(|_| {
+        vec![V1ConversionNote {
+            code: "conversion/typed_document_invalid",
+            path: "document.pages".to_owned(),
+            message: "The converted page identity is invalid.",
+        }]
+    })?;
+    let mut generated_placeholders = Vec::new();
+    for marker in &source.snapshot.generated_placeholders {
+        let code = match marker.code {
+            V1GeneratedPlaceholderCode::Quote => GeneratedPlaceholderCode::LegacyTestimonialQuote,
+            V1GeneratedPlaceholderCode::Author => GeneratedPlaceholderCode::LegacyTestimonialAuthor,
+            V1GeneratedPlaceholderCode::Attribution => {
+                GeneratedPlaceholderCode::LegacyTestimonialAttribution
+            }
+        };
+        let mut matches = 0usize;
+        for section in &converted_sections {
+            let section_id = section["id"].as_str().ok_or_else(|| {
+                vec![V1ConversionNote {
+                    code: "conversion/typed_document_invalid",
+                    path: "document.pages.sections".to_owned(),
+                    message: "A converted section has no valid identity.",
+                }]
+            })?;
+            let parsed_section_id =
+                eez_domain::document_v2::SectionId::parse(section_id).map_err(|_| {
+                    vec![V1ConversionNote {
+                        code: "conversion/unsupported_section_id",
+                        path: format!("contents.{section_id}.section_id"),
+                        message:
+                            "This section ID cannot be represented by the typed document format.",
+                    }]
+                })?;
+            let blocks = section["blocks"].as_array().ok_or_else(|| {
+                vec![V1ConversionNote {
+                    code: "conversion/typed_document_invalid",
+                    path: format!("contents.{section_id}.blocks"),
+                    message: "Converted section blocks could not be read.",
+                }]
+            })?;
+            for block in blocks {
+                if !converted_block_contains_text(block, &marker.expected_text) {
+                    continue;
+                }
+                let block_id = block["id"].as_str().ok_or_else(|| {
+                    vec![V1ConversionNote {
+                        code: "conversion/typed_document_invalid",
+                        path: format!("contents.{section_id}.blocks"),
+                        message: "A converted block has no valid identity.",
+                    }]
+                })?;
+                generated_placeholders.push(GeneratedPlaceholderMarker {
+                    target: GeneratedPlaceholderTarget::Block {
+                        page_id: page_id.clone(),
+                        section_id: parsed_section_id.clone(),
+                        block_id: eez_domain::document_v2::BlockId::parse(block_id).map_err(
+                            |_| {
+                                vec![V1ConversionNote {
+                                    code: "conversion/typed_document_invalid",
+                                    path: format!("contents.{section_id}.blocks"),
+                                    message: "A converted block identity is invalid.",
+                                }]
+                            },
+                        )?,
+                    },
+                    code,
+                    expected_text: marker.expected_text.clone(),
+                });
+                matches += 1;
+            }
+        }
+        if matches == 0 {
+            return Err(vec![V1ConversionNote {
+                code: "conversion/placeholder_target_missing",
+                path: format!("contents.{}.{}", marker.section_id, marker.field),
+                message: "A generated placeholder could not be matched to converted content.",
+            }]);
+        }
+    }
+    generated_placeholders.sort();
+    generated_placeholders.dedup();
     document_json["pages"][0]["sections"] = serde_json::Value::Array(converted_sections);
+    document_json["generated_placeholders"] = serde_json::to_value(generated_placeholders)
+        .map_err(|_| {
+            vec![V1ConversionNote {
+                code: "conversion/typed_document_invalid",
+                path: "document.generated_placeholders".to_owned(),
+                message: "Generated placeholders could not be represented in the typed document.",
+            }]
+        })?;
     let raw = serde_json::to_vec(&document_json).map_err(|_| {
         vec![V1ConversionNote {
             code: "conversion/typed_document_invalid",
@@ -515,6 +618,27 @@ fn convert_v1_to_v2(
         }]
     })?;
     Ok(ConvertedV1Document { document, warnings })
+}
+
+fn converted_block_contains_text(block: &Value, expected_text: &str) -> bool {
+    ["text", "label"]
+        .iter()
+        .filter_map(|field| block.get(field).and_then(Value::as_str))
+        .any(|text| text.contains(expected_text))
+        || block
+            .get("items")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.as_str()
+                        .is_some_and(|text| text.contains(expected_text))
+                })
+            })
+        || block
+            .get("alt")
+            .and_then(|alt| alt.get("value"))
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains(expected_text))
 }
 
 fn is_https_conversion_url(value: &str) -> bool {
@@ -1612,6 +1736,10 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .get_owned_revision(&command.funnel_id, &command.revision_id)
             .await?
             .ok_or(FunnelCommandError::RevisionNotFound)?;
+        let readiness = publication_readiness::for_revision(&record, &command.funnel_id)?;
+        if !readiness.can_publish() {
+            return Err(FunnelCommandError::PublicationReadinessBlocked);
+        }
         self.render_published_revision(&record, &command.funnel_id, &funnel.slug, None)
             .await?;
         let result_json = serde_json::to_string(&serde_json::json!({
@@ -1742,6 +1870,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 &assets,
             )
             .map_err(|_| FunnelCommandError::Internal)?;
+            let readiness = publication_readiness::for_v2(&record.revision.id, &document);
             return Ok(serde_json::json!({
                 "command_id": FunnelEditorReadCommand::ID,
                 "schema_version": 2,
@@ -1753,6 +1882,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
                 },
                 "base_revision_id": record.head_revision_id,
                 "published_revision_id": record.published_revision_id,
+                "publication_readiness": readiness,
                 "entry_page_id": document.entry_page_id().as_str(),
                 "pages": v2_page_projection(&document),
             }));
@@ -1761,6 +1891,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             return Err(FunnelCommandError::Internal);
         }
         let validated = decode_snapshot(&record.revision, &record.funnel_id)?;
+        let readiness = publication_readiness::for_v1(&record.revision.id, &validated.snapshot);
         let preview_html = Renderer::new().render_preview(
             &validated.revision,
             &validated.theme,
@@ -1788,6 +1919,7 @@ impl<'repo, 'database> Session<'repo, 'database> {
             },
             "base_revision_id": record.head_revision_id,
             "published_revision_id": record.published_revision_id,
+            "publication_readiness": readiness,
             "sections": sections,
             "settings_schema": settings_schema,
             "settings_values": settings_values,
@@ -2035,6 +2167,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
         .map_err(|_| FunnelCommandError::Internal)?;
         let document = DocumentV2::decode(command.document_json.as_bytes(), &command.funnel_id)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let persisted_base =
+            DocumentV2::decode(record.revision.data_json.as_bytes(), &command.funnel_id)
+                .map_err(|_| FunnelCommandError::Internal)?;
         let page_id = eez_domain::document_v2::PageId::parse(command.page_id)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let mut ids = DeterministicEditIds {
@@ -2044,11 +2179,16 @@ impl<'repo, 'database> Session<'repo, 'database> {
         let outcome = document
             .apply(command.edit, &mut ids)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
-        let assets = self.image_asset_digests(&outcome.document).await?;
+        let edited_document = outcome
+            .document
+            .reconcile_generated_placeholders_from(&persisted_base)
+            .and_then(|candidate| candidate.reconcile_generated_placeholders_from(&document))
+            .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let assets = self.image_asset_digests(&edited_document).await?;
         let preview_html =
-            render_v2::render_owner_preview_with_assets(&outcome.document, &page_id, &assets)
+            render_v2::render_owner_preview_with_assets(&edited_document, &page_id, &assets)
                 .map_err(|_| FunnelCommandError::InvalidParameters)?;
-        let document_json = std::str::from_utf8(outcome.document.canonical_bytes())
+        let document_json = std::str::from_utf8(edited_document.canonical_bytes())
             .map_err(|_| FunnelCommandError::Internal)?;
         Ok(serde_json::json!({
             "command_id": command_ids::FUNNEL_DOCUMENT_EDIT_V2,
@@ -2220,6 +2360,17 @@ impl<'repo, 'database> Session<'repo, 'database> {
             .await?;
         let document = DocumentV2::decode(&document_bytes, &command.funnel_id)
             .map_err(|_| FunnelCommandError::InvalidParameters)?;
+        let base_revision = self
+            .repository
+            .get_owned_revision(&command.funnel_id, &command.base_revision_id)
+            .await?
+            .ok_or(FunnelCommandError::FunnelNotFound)?;
+        let base_document =
+            DocumentV2::decode(base_revision.data_json.as_bytes(), &command.funnel_id)
+                .map_err(|_| FunnelCommandError::Internal)?;
+        if !base_document.has_valid_generated_placeholder_transition(&document) {
+            return Err(FunnelCommandError::InvalidGeneratedPlaceholderMarkers);
+        }
         let assets = self.image_asset_digests(&document).await?;
         let revision_id = uuid::Uuid::new_v4().to_string();
         let prepared = render_v2::prepare_revision_with_assets(&document, &revision_id, &assets)
@@ -2683,6 +2834,25 @@ pub(super) struct FunnelSnapshotV1 {
     theme_id: ThemePreset,
     sections: Vec<SectionSnapshotV1>,
     contents: BTreeMap<String, SectionContent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    generated_placeholders: Vec<V1GeneratedPlaceholderMarker>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum V1GeneratedPlaceholderCode {
+    Quote,
+    Author,
+    Attribution,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct V1GeneratedPlaceholderMarker {
+    section_id: String,
+    field: String,
+    code: V1GeneratedPlaceholderCode,
+    expected_text: String,
 }
 
 impl FunnelSnapshotV1 {
@@ -2690,6 +2860,7 @@ impl FunnelSnapshotV1 {
         blueprint: FunnelBlueprint,
         sections: &[Section],
         contents: BTreeMap<String, SectionContent>,
+        generated_placeholders: Vec<V1GeneratedPlaceholderMarker>,
     ) -> Self {
         Self {
             format_version: 1,
@@ -2698,6 +2869,7 @@ impl FunnelSnapshotV1 {
             theme_id: ThemePreset::Minimal,
             sections: sections.iter().map(SectionSnapshotV1::from).collect(),
             contents,
+            generated_placeholders,
         }
     }
 }
@@ -2712,6 +2884,8 @@ pub(super) struct FunnelSnapshotV2 {
     sections: Vec<SectionSnapshotV1>,
     contents: BTreeMap<String, SectionContent>,
     theme_overrides: ThemeOverrides,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    generated_placeholders: Vec<V1GeneratedPlaceholderMarker>,
 }
 
 #[derive(Deserialize)]
@@ -2741,6 +2915,7 @@ pub(super) struct SnapshotData {
     pub(super) sections: Vec<SectionSnapshotV1>,
     pub(super) contents: BTreeMap<String, SectionContent>,
     pub(super) theme_overrides: ThemeOverrides,
+    pub(super) generated_placeholders: Vec<V1GeneratedPlaceholderMarker>,
 }
 
 impl From<FunnelSnapshotV1> for SnapshotData {
@@ -2753,6 +2928,7 @@ impl From<FunnelSnapshotV1> for SnapshotData {
             sections: snapshot.sections,
             contents: snapshot.contents,
             theme_overrides: ThemeOverrides::default(),
+            generated_placeholders: snapshot.generated_placeholders,
         }
     }
 }
@@ -2767,6 +2943,7 @@ impl From<FunnelSnapshotV2> for SnapshotData {
             sections: snapshot.sections,
             contents: snapshot.contents,
             theme_overrides: snapshot.theme_overrides,
+            generated_placeholders: snapshot.generated_placeholders,
         }
     }
 }
@@ -2854,6 +3031,7 @@ pub(super) fn decode_snapshot(
     {
         return Err(FunnelCommandError::Internal);
     }
+    validate_v1_generated_placeholders(&snapshot)?;
     let manifest: RenderManifestV1 = serde_json::from_str(&record.render_manifest_json)
         .map_err(|_| FunnelCommandError::Internal)?;
     if manifest.revision_id != record.id || manifest.assets_manifest_hash != EMPTY_ASSETS_HASH {
@@ -2911,6 +3089,114 @@ pub(super) fn decode_snapshot(
         theme,
         contents,
     })
+}
+
+fn v1_placeholder_value<'a>(
+    snapshot: &'a SnapshotData,
+    marker: &V1GeneratedPlaceholderMarker,
+) -> Option<&'a str> {
+    v1_text_values(&snapshot.contents)
+        .into_iter()
+        .find(|(section_id, field, _)| section_id == &marker.section_id && field == &marker.field)
+        .map(|(_, _, value)| value)
+}
+
+fn v1_text_values(contents: &BTreeMap<String, SectionContent>) -> Vec<(String, String, &str)> {
+    let mut values = Vec::new();
+    for (section_id, content) in contents {
+        macro_rules! push_text {
+            ($field:expr, $value:expr) => {
+                values.push((section_id.clone(), $field.to_owned(), $value.as_str()))
+            };
+        }
+        match content {
+            SectionContent::Hero {
+                title,
+                subtitle,
+                cta_label,
+                image,
+                ..
+            } => {
+                push_text!("title", title);
+                push_text!("subtitle", subtitle);
+                push_text!("cta_label", cta_label);
+                if let Some(image) = image {
+                    push_text!("image.alt", image.alt);
+                }
+            }
+            SectionContent::Features { items } => {
+                for (index, item) in items.iter().enumerate() {
+                    push_text!(format!("items.{index}.title"), item.title);
+                    push_text!(format!("items.{index}.description"), item.description);
+                }
+            }
+            SectionContent::Testimonials { items } => {
+                for (index, item) in items.iter().enumerate() {
+                    push_text!(format!("items.{index}.quote"), item.quote);
+                    push_text!(format!("items.{index}.author"), item.author);
+                    if let Some(attribution) = item.attribution.as_deref() {
+                        values.push((
+                            section_id.clone(),
+                            format!("items.{index}.attribution"),
+                            attribution,
+                        ));
+                    }
+                }
+            }
+            SectionContent::Cta {
+                title,
+                body,
+                cta_label,
+                ..
+            } => {
+                push_text!("title", title);
+                push_text!("body", body);
+                push_text!("cta_label", cta_label);
+            }
+            SectionContent::Footer { links, copyright } => {
+                for (index, link) in links.iter().enumerate() {
+                    push_text!(format!("links.{index}.label"), link.label);
+                }
+                push_text!("copyright", copyright);
+            }
+        }
+    }
+    values
+}
+
+fn validate_v1_generated_placeholders(snapshot: &SnapshotData) -> Result<(), FunnelCommandError> {
+    for (index, marker) in snapshot.generated_placeholders.iter().enumerate() {
+        if marker.expected_text.is_empty()
+            || marker.expected_text.len() > 8192
+            || !v1_placeholder_value(snapshot, marker)
+                .is_some_and(|value| value.contains(&marker.expected_text))
+            || snapshot.generated_placeholders[..index].contains(marker)
+        {
+            return Err(FunnelCommandError::Internal);
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_v1_generated_placeholders(
+    source: &SnapshotData,
+    candidate: &SnapshotData,
+) -> Vec<V1GeneratedPlaceholderMarker> {
+    let candidate_text = v1_text_values(&candidate.contents);
+    let mut markers = Vec::new();
+    for marker in &source.generated_placeholders {
+        for (section_id, field, value) in &candidate_text {
+            if value.contains(&marker.expected_text) {
+                let mut relocated = marker.clone();
+                relocated.section_id = section_id.clone();
+                relocated.field = field.clone();
+                markers.push(relocated);
+            }
+        }
+    }
+    markers.sort();
+    markers.dedup();
+    markers
 }
 
 pub(crate) fn v2_page_projection(document: &DocumentV2) -> Vec<Value> {
@@ -3294,6 +3580,8 @@ pub enum FunnelCommandError {
     StaleEditorRevision,
     V2ConversionBlocked,
     V2PublicationBlocked,
+    InvalidGeneratedPlaceholderMarkers,
+    PublicationReadinessBlocked,
     V2TypedCommandRequired,
     StalePublishedRevision,
     EditorRevisionLimitReached,
@@ -3320,6 +3608,10 @@ impl FunnelCommandError {
             Self::StaleEditorRevision => "conflict/edit_stale_revision",
             Self::V2ConversionBlocked => "conflict/v2_conversion_blocked",
             Self::V2PublicationBlocked => "conflict/v2_publication_blocked",
+            Self::InvalidGeneratedPlaceholderMarkers => {
+                "validation/generated_placeholder_marker_invalid"
+            }
+            Self::PublicationReadinessBlocked => "conflict/publication_readiness_blocked",
             Self::V2TypedCommandRequired => "conflict/v2_typed_command_required",
             Self::StalePublishedRevision => "conflict/publish_stale_revision",
             Self::EditorRevisionLimitReached => "conflict/revision_limit_reached",
@@ -3521,4 +3813,53 @@ fn blueprint_content(
     }
 
     Ok((sections, contents))
+}
+
+fn v1_generated_placeholders(
+    sections: &[Section],
+    contents: &BTreeMap<String, SectionContent>,
+) -> Vec<V1GeneratedPlaceholderMarker> {
+    let Some(section) = sections
+        .iter()
+        .find(|section| section.section_type().as_str() == "testimonials")
+    else {
+        return Vec::new();
+    };
+    let Some(SectionContent::Testimonials { items }) = contents.get(section.id().as_str()) else {
+        return Vec::new();
+    };
+    let Some(item) = items.first() else {
+        return Vec::new();
+    };
+    let mut markers = Vec::new();
+    for (code, field, value, generated_value) in [
+        (
+            V1GeneratedPlaceholderCode::Quote,
+            "items.0.quote",
+            item.quote.as_str(),
+            "Replace this sample with a real customer quote.",
+        ),
+        (
+            V1GeneratedPlaceholderCode::Author,
+            "items.0.author",
+            item.author.as_str(),
+            "Customer name",
+        ),
+        (
+            V1GeneratedPlaceholderCode::Attribution,
+            "items.0.attribution",
+            item.attribution.as_deref().unwrap_or_default(),
+            "Sample content — replace before publishing",
+        ),
+    ] {
+        if value == generated_value {
+            markers.push(V1GeneratedPlaceholderMarker {
+                section_id: section.id().as_str().to_owned(),
+                field: field.to_owned(),
+                code,
+                expected_text: value.to_owned(),
+            });
+        }
+    }
+    markers
 }

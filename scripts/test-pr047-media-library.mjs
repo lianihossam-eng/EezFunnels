@@ -163,7 +163,21 @@ try {
   });
   assert.deepEqual(critical, [], `Media editor critical accessibility findings: ${JSON.stringify(critical)}`);
 
+  const offerCopy = page.getByRole("textbox", { name: "Text content for block-hero-copy" });
+  const offerEditResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${funnelId}/edit-v2`),
+  );
+  await offerCopy.fill("A service offer illustrated by the selected media.");
+  await offerCopy.press("Tab");
+  assert.equal((await offerEditResponse).status(), 200);
+  const saveResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && response.url().endsWith(`/api/funnels/${funnelId}/revisions-v2`),
+  );
   await page.getByRole("button", { name: "Save revision" }).click();
+  const saved = await saveResponse;
+  assert.equal(saved.status(), 201, await saved.text());
   await page.getByText("Revision saved. The previous revisions remain available in history.").waitFor();
   await page.getByRole("button", { name: "Publish saved revision" }).click();
   await page.getByText(/Revision published/).waitFor();

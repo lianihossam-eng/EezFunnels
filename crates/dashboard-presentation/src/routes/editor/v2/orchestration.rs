@@ -559,6 +559,8 @@ async fn finalize_v2_save(
                 state.save_stage_id = None;
             });
         }
+        let revision_id = state.with(|state| state.base_revision_id.clone());
+        refresh_v2_readiness(state, capture, revision_id).await;
     }
 }
 
@@ -703,6 +705,17 @@ pub(super) async fn publish_v2_revision(mut state: Signal<V2EditorState>, publis
                 });
                 if !failure.retryable {
                     let _ = clear_idempotency_storage(&key);
+                    if failure.code.as_deref() == Some("conflict/publication_readiness_blocked") {
+                        if let Some(revision_id) = capture.action.resulting_revision_id() {
+                            refresh_v2_readiness_for_revision(
+                                state,
+                                capture.route_epoch,
+                                capture.funnel_id.clone(),
+                                revision_id.to_owned(),
+                            )
+                            .await;
+                        }
+                    }
                 }
             }
         }
@@ -723,6 +736,42 @@ pub(super) async fn publish_v2_revision(mut state: Signal<V2EditorState>, publis
 
 #[cfg(feature = "browser")]
 async fn refresh_v2_publication_state(funnel_id: &str) -> Result<Option<String>, ()> {
+    let metadata = fetch_v2_editor_metadata(funnel_id).await?;
+    Ok(metadata.published_revision_id)
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_v2_readiness(
+    state: Signal<V2EditorState>,
+    capture: &V2SaveCapture,
+    revision_id: String,
+) {
+    refresh_v2_readiness_for_revision(
+        state,
+        capture.route_epoch,
+        capture.funnel_id.clone(),
+        revision_id,
+    )
+    .await;
+}
+
+#[cfg(feature = "browser")]
+async fn refresh_v2_readiness_for_revision(
+    mut state: Signal<V2EditorState>,
+    route_epoch: u64,
+    funnel_id: String,
+    revision_id: String,
+) {
+    let metadata = fetch_v2_editor_metadata(&funnel_id).await;
+    if state.try_peek().is_ok() {
+        state.with_mut(|state| {
+            state.finish_readiness_refresh(route_epoch, &funnel_id, &revision_id, metadata)
+        });
+    }
+}
+
+#[cfg(feature = "browser")]
+async fn fetch_v2_editor_metadata(funnel_id: &str) -> Result<V2EditorMetadata, ()> {
     let response = api_request("GET", &format!("/api/funnels/{funnel_id}"), None, None)
         .await
         .map_err(|_| ())?;
@@ -733,5 +782,5 @@ async fn refresh_v2_publication_state(funnel_id: &str) -> Result<Option<String>,
     if metadata.schema_version != 2 || metadata.funnel.id != funnel_id {
         return Err(());
     }
-    Ok(metadata.published_revision_id)
+    Ok(metadata)
 }

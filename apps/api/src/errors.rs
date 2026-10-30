@@ -45,6 +45,7 @@ impl ApiError {
             | "validation/schema_version_unsupported"
             | "validation/section_type_unknown"
             | "validation/section_missing_id"
+            | "validation/generated_placeholder_marker_invalid"
             | "validation/media_asset_invalid"
             | "validation/service_brief_invalid"
             | "validation/service_brief_format_unsupported" => (
@@ -118,6 +119,7 @@ impl ApiError {
             | "conflict/revision_limit_reached"
             | "conflict/v2_conversion_blocked"
             | "conflict/v2_publication_blocked"
+            | "conflict/publication_readiness_blocked"
             | "conflict/v2_typed_command_required"
             | "conflict/v2_stage_active"
             | "conflict/media_asset_conflict"
@@ -257,6 +259,11 @@ mod tests {
             400,
         ),
         (
+            "validation/generated_placeholder_marker_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
             "validation/operation_not_supported",
             ErrorCategory::Validation,
             405,
@@ -310,6 +317,11 @@ mod tests {
         ),
         (
             "conflict/v2_publication_blocked",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/publication_readiness_blocked",
             ErrorCategory::Conflict,
             409,
         ),

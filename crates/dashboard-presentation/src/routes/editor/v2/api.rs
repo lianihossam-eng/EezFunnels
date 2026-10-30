@@ -7,6 +7,8 @@ pub(super) struct V2EditorMetadata {
     pub(super) funnel: EditorFunnel,
     pub(super) base_revision_id: String,
     pub(super) published_revision_id: Option<String>,
+    #[serde(default)]
+    pub(super) publication_readiness: Option<PublicationReadiness>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
