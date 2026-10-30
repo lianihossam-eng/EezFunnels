@@ -1610,9 +1610,145 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert cleanup_result["submissions"] == 0, cleanup_result
         assert cleanup_result["interaction_events"] == 0, cleanup_result
 
+        starter_create_status, starter_create_body, _ = post_json(
+            "/api/funnels/v2",
+            {"name": "PUB-004 service starter journey", "blueprint": "lead_gen"},
+            "pub004-service-starter-create",
+        )
+        assert starter_create_status == 201, starter_create_body
+        starter_created = json.loads(starter_create_body)
+        starter_funnel_id = starter_created["funnel"]["id"]
+        starter_slug = starter_created["funnel"]["slug"]
+        starter_initial_revision_id = starter_created["initial_revision"]["id"]
+
+        starter_document_status, starter_document_body, starter_document_headers = request(
+            "GET", f"/api/funnels/{starter_funnel_id}/document"
+        )
+        assert starter_document_status == 200, starter_document_body
+        assert starter_document_headers.get("x-funnel-revision-id") == starter_initial_revision_id
+        starter_document = json.loads(starter_document_body)
+        starter_form = starter_document["forms"][0]
+        starter_form_id = starter_form["id"]
+        assert len(starter_document["pages"]) == 2, starter_document
+        assert len(starter_form["fields"]) == 3, starter_form
+        assert starter_form["fields"][0]["required"] is False, starter_form
+        assert starter_form["fields"][1]["required"] is True, starter_form
+        assert starter_form["fields"][2]["required"] is True, starter_form
+        assert starter_form.get("marketing_opt_in") is None, starter_form
+
+        starter_edit_status, starter_edit_body, _ = request(
+            "POST",
+            f"/api/funnels/{starter_funnel_id}/edit-v2",
+            json.dumps(
+                {
+                    "base_revision_id": starter_initial_revision_id,
+                    "page_id": "page-home",
+                    "document_json": starter_document_body.decode(),
+                    "operation_id": "00000000000000000000000000000004",
+                    "edit": {
+                        "operation": "set_form_purpose",
+                        "form": starter_form_id,
+                        "purpose": "Tell us what support your project needs",
+                    },
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json"},
+        )
+        assert starter_edit_status == 200, starter_edit_body
+        customized_starter_document = json.loads(starter_edit_body)["document_json"]
+        customized_starter_data = customized_starter_document.encode()
+        starter_stage_id = mint_stage(
+            starter_funnel_id,
+            starter_initial_revision_id,
+            customized_starter_data,
+            "pub004-service-starter-stage",
+        )
+        assert upload(starter_funnel_id, starter_stage_id, customized_starter_data)[0] == 204
+        starter_save_status, starter_save_body, _ = post_json(
+            f"/api/funnels/{starter_funnel_id}/revisions-v2",
+            {
+                "base_revision_id": starter_initial_revision_id,
+                "stage_id": starter_stage_id,
+                "expected_length": len(customized_starter_data),
+                "expected_sha256": hashlib.sha256(customized_starter_data).hexdigest(),
+            },
+            "pub004-service-starter-save",
+        )
+        assert starter_save_status == 201, starter_save_body
+        starter_saved_revision_id = json.loads(starter_save_body)["revision_id"]
+        starter_publish_status, starter_publish_body, _ = request(
+            "POST",
+            f"/api/funnels/{starter_funnel_id}/publish",
+            json.dumps(
+                {
+                    "revision_id": starter_saved_revision_id,
+                    "expected_published_revision_id": None,
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json", "Idempotency-Key": "pub004-service-starter-publish"},
+        )
+        assert starter_publish_status == 200, starter_publish_body
+
+        starter_page_status, starter_html, _ = request("GET", f"/f/{starter_slug}")
+        assert starter_page_status == 200, starter_html
+        assert b"Tell us what support your project needs" in starter_html
+        assert b"example.com" not in starter_html
+        starter_action = re.search(
+            rb'action="(/api/public/funnels/[^"]+/pages/page-home/forms/'
+            + re.escape(starter_form_id.encode())
+            + rb'/submissions\?key=([0-9a-f-]{36})&revision_id=([A-Za-z0-9_-]{1,64})&channel=(unattributed|search|social|email|paid|partner|other))"',
+            starter_html,
+        )
+        assert starter_action is not None, starter_html
+        assert starter_action.group(3).decode() == starter_saved_revision_id, starter_action.group(3)
+        starter_submission_status, starter_submission_body, starter_submission_headers = (
+            request_form_with_transport_retry(
+                starter_action.group(1).decode(),
+                urlencode(
+                    {
+                        "email": "starter-visitor@example.test",
+                        "project_details": "I need help planning a move for my small shop.",
+                        "_request_consent": "on",
+                    }
+                ).encode(),
+                {"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        )
+        assert starter_submission_status == 303, starter_submission_body
+        confirmation_location = starter_submission_headers.get("location")
+        assert confirmation_location is not None, starter_submission_headers
+        confirmation_path = confirmation_location.split("#", 1)[0]
+        confirmation_status, confirmation_html, _ = request("GET", confirmation_path)
+        assert confirmation_status == 200, confirmation_html
+        assert b'<meta name="robots" content="noindex">' in confirmation_html
+        assert b"Your request has been received." in confirmation_html
+        assert b"This confirms receipt only; it is not a reservation" in confirmation_html
+
+        starter_inbox_status, starter_inbox_body, starter_inbox_headers = request(
+            "GET", f"/api/submissions?funnel_id={starter_funnel_id}"
+        )
+        assert starter_inbox_status == 200, starter_inbox_body
+        assert starter_inbox_headers.get("cache-control") == "private, no-store"
+        starter_inbox = json.loads(starter_inbox_body)
+        assert len(starter_inbox["items"]) == 1, starter_inbox
+        starter_item = starter_inbox["items"][0]
+        assert starter_item["status"] == "new", starter_item
+        assert starter_item["form_purpose"] == "Tell us what support your project needs"
+        assert starter_item["request_consent_acknowledged"] is True
+        assert starter_item["marketing_opt_in"] is False
+        starter_fields = {field["label"]: field["value"] for field in starter_item["fields"]}
+        assert starter_fields == {
+            "Email address": "starter-visitor@example.test",
+            "Describe your project": "I need help planning a move for my small shop.",
+        }, starter_item
+
         log.close()
-        assert "ada@example.test" not in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8")
-        print("PR-067/PR-033 local Worker/D1 interaction and public form flows passed")
+        worker_log = log_path.read_text(encoding="utf-8")
+        assert "ada@example.test" not in worker_log, worker_log
+        assert "starter-visitor@example.test" not in worker_log, worker_log
+        print("PR-067/PR-033 local Worker/D1 flows and PUB-004 service starter journey passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

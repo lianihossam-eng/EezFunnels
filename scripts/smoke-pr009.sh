@@ -1038,8 +1038,10 @@ with open(sys.argv[3], encoding="utf-8") as headers_file:
     headers = headers_file.read().lower()
 assert response["published_revision_id"] == sys.argv[4], response
 assert "<h1>" in html, html
-assert "etag: \"" in headers, headers
-assert "cache-control: public" in headers, headers
+assert 'name="project_details"' in html, html
+assert 'action="/api/public/funnels/' in html, html
+assert "cache-control: no-store" in headers, headers
+assert "etag:" not in headers, headers
 PY
 ./node_modules/.bin/wrangler d1 execute DB --local --env dev --persist-to "$state_dir" --json \
   --command "SELECT published_revision_id FROM funnels WHERE id = '$v2_funnel_id';" > "$state_dir/v2-publish-pointer.json"

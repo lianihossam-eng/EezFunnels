@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::starter::starter_section;
+use super::starter::{service_request_confirmation, service_request_form, starter_section};
 use super::theme::{ResolvedThemeProfile, ThemeV2};
 use super::validate::{build_index, canonicalize, validate_data, DocumentIndex};
 use super::{
@@ -675,7 +675,6 @@ impl DocumentV2 {
         language: Option<PublicLanguage>,
     ) -> Result<Self, DocumentError> {
         let funnel_id = V2FunnelId::parse(funnel_id.to_owned())?;
-        let page_id = PageId::parse("page-home")?;
         let effective_language = language.unwrap_or(PublicLanguage::English);
         let section_types = match blueprint_id {
             BlueprintId::Tripwire => {
@@ -709,8 +708,27 @@ impl DocumentV2 {
         let sections = section_types
             .iter()
             .copied()
-            .map(|section_type| starter_section(section_type, effective_language))
+            .map(|section_type| starter_section(section_type, blueprint_id, effective_language))
             .collect::<Result<Vec<_>, _>>()?;
+        let page_id = PageId::parse("page-home")?;
+        let mut pages = vec![PageV2 {
+            id: page_id.clone(),
+            slug: String::new(),
+            title: match effective_language {
+                PublicLanguage::English => "Home",
+                PublicLanguage::French => "Accueil",
+            }
+            .to_owned(),
+            seo_title: None,
+            seo_description: None,
+            noindex: false,
+            sections,
+        }];
+        let mut forms = Vec::new();
+        if blueprint_id == BlueprintId::LeadGen {
+            forms.push(service_request_form(effective_language)?);
+            pages.push(service_request_confirmation(effective_language)?);
+        }
         let mut data = build_data_from_parts(
             funnel_id,
             blueprint_id,
@@ -718,21 +736,9 @@ impl DocumentV2 {
                 preset_id: preset,
                 overrides: super::theme::ThemeOverrides::default(),
             },
-            page_id.clone(),
-            vec![PageV2 {
-                id: page_id,
-                slug: String::new(),
-                title: match effective_language {
-                    PublicLanguage::English => "Home",
-                    PublicLanguage::French => "Accueil",
-                }
-                .to_owned(),
-                seo_title: None,
-                seo_description: None,
-                noindex: false,
-                sections,
-            }],
-            Vec::new(),
+            page_id,
+            pages,
+            forms,
         );
         data.language = language;
         Self::from_validated(data)

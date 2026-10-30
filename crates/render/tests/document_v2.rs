@@ -13,7 +13,7 @@ use eez_render::document_v2::{
 fn document() -> DocumentV2 {
     DocumentV2::starter(
         "funnel-01",
-        BlueprintId::LeadGen,
+        BlueprintId::Tripwire,
         eez_domain::ThemePreset::Minimal,
     )
     .expect("valid V2 starter")
@@ -68,16 +68,15 @@ fn exact_renderer_v8_manifest_binds_row_document_theme_and_assets() {
     assert!(html.contains(
         "<ul class=\"v2-list\"><li>A clear outcome for your customers</li><li>A simple next step to take action</li></ul>"
     ));
-    assert!(html.contains(
-        "<a class=\"v2-button\" href=\"https://example.com/\" target=\"_blank\" rel=\"noopener noreferrer\">Get started</a>"
-    ));
+    assert!(html.contains("Choose a real destination before adding a call to action."));
+    assert!(!html.contains("example.com"));
 }
 
 #[test]
 fn page_theme_background_spans_full_width_with_bounded_inner_content() {
     let document = DocumentV2::starter(
         "funnel-01",
-        BlueprintId::LeadGen,
+        BlueprintId::Tripwire,
         eez_domain::ThemePreset::Bold,
     )
     .expect("valid V2 starter");
@@ -182,9 +181,31 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
 #[test]
 fn owner_preview_escapes_text_and_never_follows_external_links() {
-    let document = document();
+    let document = DocumentV2::starter(
+        "funnel-01",
+        BlueprintId::Tripwire,
+        eez_domain::ThemePreset::Minimal,
+    )
+    .expect("page-base starter");
     let page_id = document.pages()[0].id().clone();
-    let edited = document
+    let section_id = document.pages()[0].sections()[2].id().clone();
+    let with_external_button = document
+        .apply(
+            eez_domain::document_v2::Edit::AddBlock {
+                section: section_id,
+                after: None,
+                block: eez_domain::document_v2::NewBlock::Button {
+                    label: "Open destination".to_owned(),
+                    action: eez_domain::document_v2::ActionV2::ExternalHttps {
+                        url: "https://example.test".to_owned(),
+                    },
+                },
+            },
+            &mut TestIds(0),
+        )
+        .expect("external action can be added to a page base");
+    let edited = with_external_button
+        .document
         .apply(
             eez_domain::document_v2::Edit::SetBlock {
                 block: document.pages()[0].sections()[0].blocks()[0].id().clone(),
@@ -199,7 +220,9 @@ fn owner_preview_escapes_text_and_never_follows_external_links() {
     let html = render_owner_preview(&edited.document, &page_id).expect("owner preview");
     assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
     assert!(!html.contains("<img src=x"));
-    assert!(html.contains("<span class=\"v2-button\" aria-disabled=\"true\">Get started</span>"));
+    assert!(
+        html.contains("<span class=\"v2-button\" aria-disabled=\"true\">Open destination</span>")
+    );
     assert!(!html.contains("<a class=\"v2-button\""));
 }
 

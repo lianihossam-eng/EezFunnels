@@ -1147,7 +1147,7 @@ mod tests {
     fn starter() -> DocumentV2 {
         DocumentV2::starter(
             "funnel-edit-test",
-            BlueprintId::LeadGen,
+            BlueprintId::Tripwire,
             ThemePreset::Minimal,
         )
         .expect("valid starter document")

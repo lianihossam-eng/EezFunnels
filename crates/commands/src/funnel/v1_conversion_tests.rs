@@ -75,6 +75,8 @@ fn conversion_preserves_content_order_and_supported_theme_overrides() {
         .expect("lossless lead generation content converts");
     let value: serde_json::Value =
         serde_json::from_slice(converted.document.canonical_bytes()).expect("canonical JSON");
+    assert_eq!(value["pages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(value["forms"].as_array().map(Vec::len), Some(0));
     let section_ids = converted.document.pages()[0]
         .sections()
         .iter()
