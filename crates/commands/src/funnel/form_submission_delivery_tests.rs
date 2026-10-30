@@ -36,6 +36,7 @@ fn record(
         expires_at_label: "2027-01-13 00:00 UTC".to_owned(),
         delivery_state: delivery_state.map(str::to_owned),
         delivery_retry_scheduled: retry_scheduled,
+        delivery_retry_window_open: 1,
         delivery_attempt_count: attempts,
         delivery_last_attempt_at_label: attempts.map(|_| "2026-12-15 00:01 UTC".to_owned()),
         delivery_next_attempt_at_label: (retry_scheduled == 1)
@@ -43,6 +44,21 @@ fn record(
         delivery_last_http_status: (outcome == Some("transport_retryable")).then_some(503),
         delivery_last_outcome_code: outcome.map(str::to_owned),
     }
+}
+
+#[test]
+fn expired_delivery_window_hides_retry_for_pending_and_failed_tasks() {
+    let mut pending = record(Some("pending"), Some(1), 1, Some("transport_retryable"));
+    pending.delivery_retry_window_open = 0;
+    let pending = form_submission_delivery(&pending).expect("valid pending delivery");
+    let pending = serde_json::to_value(pending).expect("delivery state serializes");
+    assert_eq!(pending["can_retry"], false);
+
+    let mut failed = record(Some("failed"), Some(1), 0, Some("receiver_rejected"));
+    failed.delivery_retry_window_open = 0;
+    let failed = form_submission_delivery(&failed).expect("valid failed delivery");
+    let failed = serde_json::to_value(failed).expect("delivery state serializes");
+    assert_eq!(failed["can_retry"], false);
 }
 
 #[test]

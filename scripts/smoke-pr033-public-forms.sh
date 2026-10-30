@@ -186,17 +186,24 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         return result
 
     def run_d1(sql):
-        subprocess.run(
+        result = subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--command", sql,
             ],
             cwd=root,
-            check=True,
             capture_output=True,
             text=True,
             timeout=30,
         )
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
 
     def expect_d1_failure(sql):
         result = subprocess.run(
@@ -3163,6 +3170,16 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "last_outcome_code = 'receiver_server_error', completed_at = NULL "
             f"WHERE task_id = {sql_quote(concurrent_submission)}"
         )
+        retryable_inbox_status, retryable_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert retryable_inbox_status == 200, retryable_inbox_body
+        retryable_inbox_item = next(
+            item
+            for item in json.loads(retryable_inbox_body)["items"]
+            if item["submission_id"] == concurrent_submission
+        )
+        assert retryable_inbox_item["delivery"]["can_retry"] is True, retryable_inbox_item
         colliding_retry_status, _, _ = request(
             "POST",
             f"/api/submissions/{concurrent_submission}/delivery/retry",
@@ -3278,6 +3295,63 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "destination_version_id": replacement_destination_key,
             "mapping_version_id": concurrent_form_mapping_key,
         }, api_mapping_task
+
+        expired_delivery_submission = str(uuid.uuid4())
+        expired_delivery_key = str(uuid.uuid4())
+        expired_delivery_fingerprint = hashlib.sha256(
+            expired_delivery_submission.encode()
+        ).hexdigest()
+        run_d1(
+            "INSERT INTO public_form_submissions ("
+            "submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, "
+            "submission_key, request_fingerprint, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, "
+            "marketing_opt_in_copy, marketing_opt_in_recorded_at, triage_status, submitted_at, "
+            "expires_at) SELECT "
+            f"{sql_quote(expired_delivery_submission)}, funnel_id, revision_id, page_id, form_id, "
+            f"submission_channel, {sql_quote(expired_delivery_key)}, "
+            f"{sql_quote(expired_delivery_fingerprint)}, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "unixepoch() - 90000, marketing_opt_in, marketing_opt_in_copy_version, "
+            "marketing_opt_in_copy, marketing_opt_in_recorded_at, 'new', "
+            "unixepoch() - 90000, unixepoch() + 86400 "
+            "FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(api_mapping_submission_id)}; "
+            "INSERT INTO public_submission_delivery_outbox ("
+            "task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, "
+            "destination_version_id, mapping_version_id, state, created_at) SELECT "
+            "submission_id, submission_id, funnel_id, revision_id, page_id, form_id, "
+            f"{sql_quote(replacement_destination_key)}, "
+            f"{sql_quote(concurrent_form_mapping_key)}, 'pending', unixepoch() - 90000 "
+            "FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(expired_delivery_submission)}; "
+            "UPDATE public_submission_delivery_state SET status = 'failed', attempt_count = 1, "
+            "next_attempt_at = unixepoch(), last_attempt_at = unixepoch() - 90000, "
+            "last_outcome_code = 'receiver_rejected', completed_at = unixepoch(), "
+            "updated_at = unixepoch() "
+            f"WHERE task_id = {sql_quote(expired_delivery_submission)}"
+        )
+        expired_inbox_status, expired_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert expired_inbox_status == 200, expired_inbox_body
+        expired_inbox_item = next(
+            item
+            for item in json.loads(expired_inbox_body)["items"]
+            if item["submission_id"] == expired_delivery_submission
+        )
+        assert expired_inbox_item["delivery"]["can_retry"] is False, expired_inbox_item
+        expired_retry_status, _, _ = request(
+            "POST",
+            f"/api/submissions/{expired_delivery_submission}/delivery/retry",
+            headers={"Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert expired_retry_status == 409, expired_retry_status
+        run_d1(
+            "DELETE FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(expired_delivery_submission)}"
+        )
 
         changed_contract_edit_status, changed_contract_edit_body, _ = request(
             "POST",

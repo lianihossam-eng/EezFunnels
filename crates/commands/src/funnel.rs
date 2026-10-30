@@ -3410,6 +3410,7 @@ fn form_submission_delivery(
     record: &PublicFormSubmissionRecord,
 ) -> Result<FormSubmissionDelivery, FunnelCommandError> {
     if !matches!(record.delivery_retry_scheduled, 0 | 1)
+        || !matches!(record.delivery_retry_window_open, 0 | 1)
         || record.delivery_state.is_some() != record.delivery_attempt_count.is_some()
     {
         return Err(FunnelCommandError::Internal);
@@ -3459,6 +3460,7 @@ fn form_submission_delivery(
         can_retry: (status == WebhookDeliveryStatus::RetryScheduled
             || status == WebhookDeliveryStatus::Failed)
             && attempt_count < 5
+            && record.delivery_retry_window_open == 1
             && !terminal_outcome,
         can_cancel: matches!(
             status,
