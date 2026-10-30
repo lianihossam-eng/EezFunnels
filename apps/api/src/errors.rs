@@ -104,6 +104,13 @@ impl ApiError {
                 "The requested resource was not found.",
                 false,
             ),
+            "not_found/submission" => (
+                code.to_owned(),
+                ErrorCategory::NotFound,
+                404,
+                "The requested submission was not found.",
+                false,
+            ),
             "not_found/route" => (
                 code.to_owned(),
                 ErrorCategory::NotFound,
@@ -134,6 +141,13 @@ impl ApiError {
                 } else {
                     "The request conflicts with the current state."
                 },
+                false,
+            ),
+            "conflict/webhook_delivery_stale" => (
+                code.to_owned(),
+                ErrorCategory::Conflict,
+                409,
+                "Webhook delivery settings changed. Reload the current settings and try again.",
                 false,
             ),
             "rate_limit/exceeded" => (
@@ -288,6 +302,7 @@ mod tests {
         ("not_found/slug", ErrorCategory::NotFound, 404),
         ("not_found/revision", ErrorCategory::NotFound, 404),
         ("not_found/asset", ErrorCategory::NotFound, 404),
+        ("not_found/submission", ErrorCategory::NotFound, 404),
         ("not_found/route", ErrorCategory::NotFound, 404),
         (
             "conflict/publish_stale_revision",

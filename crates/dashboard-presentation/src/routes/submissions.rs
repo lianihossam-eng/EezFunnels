@@ -2,14 +2,21 @@ use dioxus::prelude::*;
 use eez_domain::FormSubmissionStatus;
 use serde_json::Value;
 
+use super::api::SubmissionDeliveryAction;
 #[cfg(feature = "browser")]
 use super::api::{
     delete_public_form_submission, load_submission_page, update_public_form_submission_status,
 };
+#[cfg(feature = "browser")]
+use super::api::{update_submission_delivery, DeliveryControlFailure};
 use super::api::{FormSubmissionListItem, FormSubmissionListResponse};
+use super::delivery::{webhook_status_copy, WebhookDeliveryPanel};
 #[cfg(feature = "browser")]
 use super::funnels::refresh_funnel_list;
 use super::funnels::FunnelListLoad;
+use super::idempotency::IdempotencyKeyState;
+#[cfg(feature = "browser")]
+use super::idempotency::{clear_idempotency_storage, prepare_idempotency_key};
 use super::RouteView;
 
 #[cfg(any(feature = "browser", test))]
@@ -238,6 +245,7 @@ pub(super) fn Submissions() -> Element {
             h1 { "Submissions" }
             p { class: "page-description", "Review form responses alongside the consent and retention record captured at submission time." }
         }
+        WebhookDeliveryPanel {}
         div { class: "submission-toolbar",
             div { class: "submission-filter-group",
                 label { r#for: "submission-status-filter", "Filter submissions by status" }
@@ -423,9 +431,14 @@ fn SubmissionEntry(
     let mut current_status = use_signal(|| item.status);
     let mut status_pending = use_signal(|| false);
     let mut status_error = use_signal(|| false);
+    let delivery_action_pending = use_signal(|| false);
+    let delivery_action_error = use_signal(|| None::<String>);
+    let delivery_action_key = use_signal(|| None::<IdempotencyKeyState>);
     let status_control_id = format!("submission-status-{}", item.submission_id);
     let submission_id = item.submission_id.clone();
     let delete_submission_id = submission_id.clone();
+    let retry_submission_id = submission_id.clone();
+    let cancel_submission_id = submission_id.clone();
     let status_accessible_name = format!(
         "Follow-up status for {} submitted {}",
         item.form_purpose, item.submitted_at_label
@@ -506,6 +519,68 @@ fn SubmissionEntry(
                         span { class: "submission-status-error", role: "alert", "Status could not be saved. Choose a status to retry." }
                     }
                 }
+                section { class: "submission-webhook-delivery", "aria-label": "Webhook delivery status",
+                    h2 { class: "submission-section-title", "Webhook delivery" }
+                    p { class: "submission-delivery-status", "{webhook_status_copy(&item.delivery.status).label}" }
+                    p { class: "submission-delivery-description", "{webhook_status_copy(&item.delivery.status).description}" }
+                    if item.delivery.attempt_count > 0 {
+                        dl { class: "submission-delivery-details",
+                            div { dt { "Attempts" } dd { "{item.delivery.attempt_count} of 5" } }
+                            if let Some(last_attempt) = item.delivery.last_attempt_at_label.as_ref() {
+                                div { dt { "Last attempt" } dd { "{last_attempt}" } }
+                            }
+                            if let Some(next_attempt) = item.delivery.next_attempt_at_label.as_ref() {
+                                div { dt { "Next attempt" } dd { "{next_attempt}" } }
+                            }
+                            if let Some(status) = item.delivery.last_http_status {
+                                div { dt { "Receiver response" } dd { "HTTP {status}" } }
+                            }
+                            if let Some(outcome) = item.delivery.last_outcome_code.as_deref() {
+                                div { dt { "Latest result" } dd { "{delivery_outcome_label(outcome)}" } }
+                            }
+                        }
+                    }
+                    if let Some(message) = delivery_action_error() {
+                        p { class: "submission-delivery-error", role: "alert", "{message}" }
+                    }
+                    if delivery_action_pending() {
+                        p { class: "submission-delivery-feedback", role: "status", "Updating delivery…" }
+                    }
+                    div { class: "submission-delivery-actions",
+                        if item.delivery.can_retry {
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: !cfg!(feature = "browser") || delivery_action_pending(),
+                                onclick: move |_| start_delivery_action(
+                                    retry_submission_id.clone(),
+                                    SubmissionDeliveryAction::Retry,
+                                    delivery_action_pending,
+                                    delivery_action_error,
+                                    delivery_action_key,
+                                    load_state,
+                                ),
+                                "Retry delivery"
+                            }
+                        }
+                        if item.delivery.can_cancel {
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: !cfg!(feature = "browser") || delivery_action_pending(),
+                                onclick: move |_| start_delivery_action(
+                                    cancel_submission_id.clone(),
+                                    SubmissionDeliveryAction::Cancel,
+                                    delivery_action_pending,
+                                    delivery_action_error,
+                                    delivery_action_key,
+                                    load_state,
+                                ),
+                                "Cancel future attempts"
+                            }
+                        }
+                    }
+                }
                 dl { class: "submission-context-list",
                     div { dt { "Page" } dd { "{item.page_title}" } }
                     div { dt { "Form" } dd { "{item.form_purpose}" } }
@@ -552,6 +627,26 @@ fn submission_value_text(value: &Value) -> String {
     }
 }
 
+fn delivery_outcome_label(code: &str) -> &'static str {
+    match code {
+        "receiver_accepted" => "Receiver accepted the event",
+        "transport_retryable" => {
+            "Temporary receiver or network issue; another attempt is scheduled"
+        }
+        "redirect_refused" => "Receiver redirects are not followed",
+        "receiver_rejected" => "Receiver rejected the event",
+        "invalid_response" => "Receiver returned an invalid response",
+        "invalid_destination" => "Destination is no longer valid",
+        "incompatible_mapping" => "Form fields need revalidation",
+        "invalid_submission" => "Submission did not match its saved revision",
+        "signing_failed" => "Worker signing configuration is unavailable",
+        "retry_exhausted" => "Delivery attempt limit reached",
+        "delivery_window_elapsed" => "Delivery time window elapsed",
+        "cancelled_by_owner" => "Cancelled by the owner",
+        _ => "Delivery result recorded",
+    }
+}
+
 #[cfg(feature = "browser")]
 async fn refresh_submission_list(mut load_state: Signal<SubmissionInboxState>) {
     let (request_version, status, funnel_id) = load_state.with_mut(|state| {
@@ -579,9 +674,99 @@ async fn load_more_submissions(mut load_state: Signal<SubmissionInboxState>) {
     load_state.with_mut(|state| state.complete_more(request_version, result));
 }
 
+#[cfg(feature = "browser")]
+fn start_delivery_action(
+    submission_id: String,
+    action: SubmissionDeliveryAction,
+    mut pending: Signal<bool>,
+    mut error: Signal<Option<String>>,
+    mut idempotency_key: Signal<Option<IdempotencyKeyState>>,
+    load_state: Signal<SubmissionInboxState>,
+) {
+    if pending() {
+        return;
+    }
+    let action_path = match action {
+        SubmissionDeliveryAction::Retry => "retry",
+        SubmissionDeliveryAction::Cancel => "cancel",
+    };
+    let path = format!("/api/submissions/{submission_id}/delivery/{action_path}");
+    let key = match prepare_idempotency_key("POST", &path, None, idempotency_key()) {
+        Ok(key) => key,
+        Err(()) => {
+            error.set(Some(
+                "This browser could not prepare a retry-safe request.".to_owned(),
+            ));
+            return;
+        }
+    };
+    idempotency_key.set(Some(key.clone()));
+    pending.set(true);
+    error.set(None);
+    spawn(async move {
+        match update_submission_delivery(&submission_id, action, key.clone()).await {
+            Ok(()) => {
+                let _ = clear_idempotency_storage(&key);
+                idempotency_key.set(None);
+                refresh_submission_list(load_state).await;
+            }
+            Err(DeliveryControlFailure::Conflict) => {
+                error.set(Some("Delivery state changed before this action completed. The inbox has been refreshed.".to_owned()));
+                refresh_submission_list(load_state).await;
+            }
+            Err(DeliveryControlFailure::Uncertain) => {
+                error.set(Some(
+                    "The server may have applied this action. Retry it to safely confirm."
+                        .to_owned(),
+                ));
+            }
+            Err(DeliveryControlFailure::Rejected) => {
+                error.set(Some(
+                    "This delivery action is no longer available. The inbox has been refreshed."
+                        .to_owned(),
+                ));
+                refresh_submission_list(load_state).await;
+            }
+        }
+        pending.set(false);
+    });
+}
+
+#[cfg(not(feature = "browser"))]
+fn start_delivery_action(
+    _submission_id: String,
+    _action: SubmissionDeliveryAction,
+    _pending: Signal<bool>,
+    _error: Signal<Option<String>>,
+    _idempotency_key: Signal<Option<IdempotencyKeyState>>,
+    _load_state: Signal<SubmissionInboxState>,
+) {
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_outcome_labels_match_persisted_worker_codes() {
+        assert_eq!(
+            delivery_outcome_label("redirect_refused"),
+            "Receiver redirects are not followed"
+        );
+        assert_eq!(
+            delivery_outcome_label("transport_retryable"),
+            "Temporary receiver or network issue; another attempt is scheduled"
+        );
+        assert_eq!(
+            delivery_outcome_label("receiver_rejected"),
+            "Receiver rejected the event"
+        );
+        assert_eq!(
+            delivery_outcome_label("invalid_response"),
+            "Receiver returned an invalid response"
+        );
+    }
+
     fn submission_item(submission_id: &str) -> FormSubmissionListItem {
         FormSubmissionListItem {
             submission_id: submission_id.to_owned(),
@@ -601,6 +786,16 @@ mod tests {
             submitted_at_label: "2026-10-17 12:00 UTC".to_owned(),
             submitted_at_datetime: "2026-10-17T12:00:00Z".to_owned(),
             expires_at_label: "2027-01-15 12:00 UTC".to_owned(),
+            delivery: super::super::api::FormSubmissionDelivery {
+                status: "inbox_only".to_owned(),
+                attempt_count: 0,
+                last_attempt_at_label: None,
+                next_attempt_at_label: None,
+                last_http_status: None,
+                last_outcome_code: None,
+                can_retry: false,
+                can_cancel: false,
+            },
         }
     }
 

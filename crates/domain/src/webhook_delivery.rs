@@ -101,6 +101,43 @@ impl SelectedWebhookFields {
         }
         Ok(Self(fields))
     }
+
+    pub fn field_ids(&self) -> &[FieldId] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookDeliveryStatus {
+    InboxOnly,
+    Pending,
+    RetryScheduled,
+    Sending,
+    Accepted,
+    Failed,
+    Cancelled,
+}
+
+impl WebhookDeliveryStatus {
+    pub fn from_storage(
+        status: Option<&str>,
+        last_outcome_code: Option<&str>,
+        retry_scheduled: bool,
+    ) -> Option<Self> {
+        match status {
+            None => Some(Self::InboxOnly),
+            Some("pending") if retry_scheduled => Some(Self::RetryScheduled),
+            Some("pending") => Some(Self::Pending),
+            Some("leased") => Some(Self::Sending),
+            Some("accepted") => Some(Self::Accepted),
+            Some("failed") if last_outcome_code == Some("cancelled_by_owner") => {
+                Some(Self::Cancelled)
+            }
+            Some("failed") => Some(Self::Failed),
+            Some(_) => None,
+        }
+    }
 }
 
 pub struct WebhookSubmissionSnapshot<'a> {

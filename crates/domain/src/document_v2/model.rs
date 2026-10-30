@@ -421,6 +421,10 @@ impl FormV2 {
 }
 
 impl FormField {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, DocumentError> {
+        super::validate::canonicalize(self)
+    }
+
     pub fn submission_key(&self) -> &str {
         match self {
             Self::Text { name, .. }

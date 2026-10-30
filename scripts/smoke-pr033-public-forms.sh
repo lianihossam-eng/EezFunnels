@@ -14,6 +14,7 @@ python3 "$repo_root/scripts/test-pr069-interaction-report-query.py"
 python3 "$repo_root/scripts/test-pub007-migration.py"
 python3 "$repo_root/scripts/test-pub008-migration.py"
 python3 "$repo_root/scripts/test-pub009-migration.py"
+python3 "$repo_root/scripts/test-pub010-migration.py"
 
 python3 - "$repo_root" <<'PY'
 import concurrent.futures
@@ -185,17 +186,24 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         return result
 
     def run_d1(sql):
-        subprocess.run(
+        result = subprocess.run(
             [
                 str(wrangler), "d1", "execute", "DB", "--local", "--env", "dev",
                 "--persist-to", str(persist), "--command", sql,
             ],
             cwd=root,
-            check=True,
             capture_output=True,
             text=True,
             timeout=30,
         )
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
 
     def expect_d1_failure(sql):
         result = subprocess.run(
@@ -1300,6 +1308,21 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         def sql_quote(value):
             return "'" + value.replace("'", "''") + "'"
 
+        def mapping_field_contract_sql(revision_id, funnel_id, form_id, selected_fields_sql):
+            return (
+                "(SELECT json_group_array(json(contract_field.value)) FROM ("
+                "SELECT saved_field.value AS value FROM revisions AS source_revision, "
+                "json_each(source_revision.data_json, '$.forms') AS saved_form, "
+                "json_each(saved_form.value, '$.fields') AS saved_field "
+                f"WHERE source_revision.id = {sql_quote(revision_id)} "
+                f"AND source_revision.funnel_id = {sql_quote(funnel_id)} "
+                f"AND json_extract(saved_form.value, '$.id') = {sql_quote(form_id)} "
+                f"AND json_extract(saved_field.value, '$.id') IN "
+                f"(SELECT value FROM json_each({selected_fields_sql})) "
+                "ORDER BY json_extract(saved_field.value, '$.id')"
+                ") AS contract_field)"
+            )
+
         fixture_sql = f"""
             WITH RECURSIVE fixtures(n) AS (
                 SELECT 1 UNION ALL SELECT n + 1 FROM fixtures WHERE n < 26
@@ -1726,6 +1749,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         mapping_a = str(uuid.uuid4())
         mapping_b = str(uuid.uuid4())
         selected_fields = sql_quote(json.dumps([name_field["id"], email_field["id"]]))
+        mapping_a_field_contract = mapping_field_contract_sql(
+            updated_revision_id, funnel_id, form_id, selected_fields
+        )
         run_d1(
             "INSERT INTO webhook_destination_versions "
             "(destination_version_id, destination_url, created_at) VALUES "
@@ -1734,9 +1760,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"destination_version_id = {sql_quote(destination_a)} WHERE installation_id = 1; "
             "INSERT INTO public_form_delivery_mapping_versions "
             "(mapping_version_id, funnel_id, form_id, destination_version_id, "
-            "selected_fields_json, created_at) VALUES "
+            "selected_fields_json, selected_field_contract_json, created_at) VALUES "
             f"({sql_quote(mapping_a)}, {sql_quote(funnel_id)}, {sql_quote(form_id)}, "
-            f"{sql_quote(destination_a)}, {selected_fields}, unixepoch()); "
+            f"{sql_quote(destination_a)}, {selected_fields}, {mapping_a_field_contract}, unixepoch()); "
             "INSERT INTO public_form_delivery_settings "
             "(funnel_id, form_id, enabled, expected_destination_version_id, mapping_version_id) "
             "VALUES "
@@ -1752,6 +1778,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"WHERE source_submission_id = {sql_quote(historical_submission_id)}",
             "tasks",
         )["tasks"] == 0
+        mapping_b_field_contract = mapping_field_contract_sql(
+            updated_revision_id, funnel_id, form_id, selected_fields
+        )
         run_d1(
             "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300 "
             f"WHERE submission_id = {sql_quote(historical_submission_id)}"
@@ -1829,9 +1858,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"{sql_quote(destination_b)} WHERE installation_id = 1; "
             "INSERT INTO public_form_delivery_mapping_versions "
             "(mapping_version_id, funnel_id, form_id, destination_version_id, "
-            "selected_fields_json, created_at) VALUES "
+            "selected_fields_json, selected_field_contract_json, created_at) VALUES "
             f"({sql_quote(mapping_b)}, {sql_quote(funnel_id)}, {sql_quote(form_id)}, "
-            f"{sql_quote(destination_b)}, {selected_fields}, unixepoch())"
+            f"{sql_quote(destination_b)}, {selected_fields}, {mapping_b_field_contract}, unixepoch())"
         )
         changed_destination_retry_status, changed_destination_retry_body, _ = (
             request_form_with_transport_retry(
@@ -1868,6 +1897,56 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "UPDATE public_form_delivery_settings SET expected_destination_version_id = "
             f"{sql_quote(destination_b)}, mapping_version_id = {sql_quote(mapping_b)} "
             f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}"
+        )
+
+        incompatible_mapping = str(uuid.uuid4())
+        run_d1(
+            "INSERT INTO public_form_delivery_mapping_versions "
+            "(mapping_version_id, funnel_id, form_id, destination_version_id, "
+            "selected_fields_json, created_at) VALUES "
+            f"({sql_quote(incompatible_mapping)}, {sql_quote(funnel_id)}, {sql_quote(form_id)}, "
+            f"{sql_quote(destination_b)}, {sql_quote(json.dumps(['removed-field']))}, unixepoch()); "
+            "UPDATE public_form_delivery_settings SET mapping_version_id = "
+            f"{sql_quote(incompatible_mapping)} WHERE funnel_id = {sql_quote(funnel_id)} "
+            f"AND form_id = {sql_quote(form_id)}"
+        )
+        incompatible_key = str(uuid.uuid4())
+        incompatible_status, incompatible_body, _ = request_form_with_transport_retry(
+            outbox_action_for_key(incompatible_key), outbox_payload, form_headers
+        )
+        assert incompatible_status == 303, incompatible_body
+        incompatible_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(incompatible_key)}",
+            "submission_id",
+        )["submission_id"]
+        assert d1_query(
+            "SELECT COUNT(*) AS submissions FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(incompatible_submission_id)}",
+            "submissions",
+        )["submissions"] == 1
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(incompatible_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+        inbox_status, inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert inbox_status == 200, inbox_body
+        inbox_item = next(
+            item
+            for item in json.loads(inbox_body)["items"]
+            if item["submission_id"] == incompatible_submission_id
+        )
+        assert inbox_item["delivery"]["status"] == "inbox_only", inbox_item
+        run_d1(
+            "UPDATE public_form_submissions SET submitted_at = unixepoch() - 300 "
+            f"WHERE submission_id = {sql_quote(incompatible_submission_id)}; "
+            "UPDATE public_form_delivery_settings SET mapping_version_id = "
+            f"{sql_quote(mapping_b)} WHERE funnel_id = {sql_quote(funnel_id)} "
+            f"AND form_id = {sql_quote(form_id)}"
         )
 
         failed_key = str(uuid.uuid4())
@@ -2068,13 +2147,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         starter_selected_fields = sql_quote(
             json.dumps([field["id"] for field in starter_form["fields"]])
         )
+        starter_field_contract = mapping_field_contract_sql(
+            starter_saved_revision_id,
+            starter_funnel_id,
+            starter_form_id,
+            starter_selected_fields,
+        )
         run_d1(
             "INSERT INTO public_form_delivery_mapping_versions "
             "(mapping_version_id, funnel_id, form_id, destination_version_id, "
-            "selected_fields_json, created_at) VALUES "
+            "selected_fields_json, selected_field_contract_json, created_at) VALUES "
             f"({sql_quote(starter_mapping)}, {sql_quote(starter_funnel_id)}, "
             f"{sql_quote(starter_form_id)}, {sql_quote(destination_b)}, "
-            f"{starter_selected_fields}, unixepoch()); "
+            f"{starter_selected_fields}, {starter_field_contract}, unixepoch()); "
             "INSERT INTO public_form_delivery_settings "
             "(funnel_id, form_id, enabled, expected_destination_version_id, mapping_version_id) "
             "VALUES "
@@ -2148,6 +2233,52 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "destination_version_id": destination_b,
             "mapping_version_id": starter_mapping,
         }, erasure_task
+        run_d1(
+            "UPDATE public_form_delivery_settings SET enabled = 0, "
+            "expected_destination_version_id = NULL, mapping_version_id = NULL "
+            f"WHERE funnel_id = {sql_quote(starter_funnel_id)} "
+            f"AND form_id = {sql_quote(starter_form_id)}"
+        )
+        null_mapping_read_status, null_mapping_read_body, _ = request(
+            "GET", f"/api/funnels/{starter_funnel_id}/webhook-delivery"
+        )
+        assert null_mapping_read_status == 200, null_mapping_read_body
+        null_mapping_form = next(
+            option
+            for option in json.loads(null_mapping_read_body)["forms"]
+            if option["form_id"] == starter_form_id
+        )
+        assert null_mapping_form["mapping_version_id"] is None, null_mapping_form
+        null_mapping_key = str(uuid.uuid4())
+        null_mapping_body = json.dumps(
+            {
+                "form_id": starter_form_id,
+                "expected_published_revision_id": starter_saved_revision_id,
+                "destination_version_id": destination_b,
+                "expected_mapping_version_id": None,
+                "enabled": False,
+                "selected_field_ids": [field["id"] for field in starter_form["fields"]],
+            },
+            separators=(",", ":"),
+        ).encode()
+        null_mapping_save_status, null_mapping_save_body, _ = request(
+            "PUT",
+            f"/api/funnels/{starter_funnel_id}/webhook-delivery",
+            null_mapping_body,
+            {
+                "Content-Type": "application/json",
+                "Idempotency-Key": null_mapping_key,
+            },
+        )
+        assert null_mapping_save_status == 200, null_mapping_save_body
+        saved_null_mapping_form = next(
+            option
+            for option in json.loads(null_mapping_save_body)["forms"]
+            if option["form_id"] == starter_form_id
+        )
+        assert saved_null_mapping_form["mapping_version_id"] == null_mapping_key
+        assert saved_null_mapping_form["mapping_compatible"] is True
+        assert saved_null_mapping_form["enabled"] is False
         export_status, export_body, export_headers = request(
             "GET", f"/api/submissions/{erasure_id}/export"
         )
@@ -2536,6 +2667,22 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             )
             assert closed_status == 503, (method, path, closed_status)
             assert closed_headers.get("cache-control") == "private, no-store", closed_headers
+        for action in ("retry", "cancel"):
+            closed_delivery_status, _, closed_delivery_headers = request(
+                "POST",
+                f"/api/submissions/{interrupted_source['submission_id']}/delivery/{action}",
+                headers={
+                    "Origin": f"http://localhost:{port}",
+                    "Idempotency-Key": str(uuid.uuid4()),
+                },
+            )
+            assert closed_delivery_status == 503, (action, closed_delivery_status)
+            assert closed_delivery_headers.get("cache-control") == "private, no-store", closed_delivery_headers
+        assert d1_query(
+            "SELECT status, attempt_count FROM public_submission_delivery_state "
+            f"WHERE task_id = '{interrupted_source['submission_id']}'",
+            "status",
+        ) == {"status": "pending", "attempt_count": 0}
         closed_public_status, _, _ = request_form_with_transport_retry(
             starter_action.group(1).decode(),
             urlencode(
@@ -2797,12 +2944,535 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "outcome": "invalid_destination",
         }, invalid_destination_result
 
+        destination_read_status, destination_read_body, destination_read_headers = request(
+            "GET", "/api/webhook-delivery"
+        )
+        assert destination_read_status == 200, destination_read_body
+        assert destination_read_headers.get("cache-control") == "private, no-store"
+        saved_destination_before = json.loads(destination_read_body)
+        assert saved_destination_before["enabled"] is True, saved_destination_before
+        assert "signing_secret" not in saved_destination_before
+
+        replacement_destination_key = str(uuid.uuid4())
+        replacement_destination_body = json.dumps(
+            {
+                "expected_version_id": destination_b,
+                "expected_enabled": True,
+                "destination_url": "https://hooks.github.com/eezfunnel-pub010-test",
+                "enabled": False,
+            },
+            separators=(",", ":"),
+        ).encode()
+        replacement_destination_headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": replacement_destination_key,
+        }
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            destination_save_results = list(
+                pool.map(
+                    lambda _: request(
+                        "PUT",
+                        "/api/webhook-delivery",
+                        replacement_destination_body,
+                        replacement_destination_headers,
+                    ),
+                    range(2),
+                )
+            )
+        assert [result[0] for result in destination_save_results] == [200, 200], destination_save_results
+        destination_save_status, destination_save_body, _ = destination_save_results[0]
+        saved_destination = json.loads(destination_save_body)
+        assert saved_destination["enabled"] is False, saved_destination
+        assert saved_destination["destination_version_id"] == replacement_destination_key
+        assert saved_destination["destination_url"] == "https://hooks.github.com/eezfunnel-pub010-test"
+        destination_save_replay_status, destination_save_replay_body, _ = request(
+            "PUT",
+            "/api/webhook-delivery",
+            replacement_destination_body,
+            replacement_destination_headers,
+        )
+        assert destination_save_replay_status == 200, destination_save_replay_body
+        mismatched_destination_body = replacement_destination_body.replace(
+            b"eezfunnel-pub010-test", b"eezfunnel-pub010-other"
+        )
+        mismatched_destination_status, _, _ = request(
+            "PUT",
+            "/api/webhook-delivery",
+            mismatched_destination_body,
+            replacement_destination_headers,
+        )
+        assert mismatched_destination_status == 409, mismatched_destination_status
+
+        current_form_delivery_status, current_form_delivery_body, _ = request(
+            "GET", f"/api/funnels/{funnel_id}/webhook-delivery"
+        )
+        assert current_form_delivery_status == 200, current_form_delivery_body
+        form_delivery = json.loads(current_form_delivery_body)
+        assert form_delivery["destination_version_id"] == replacement_destination_key
+        current_form = next(
+            option for option in form_delivery["forms"] if option["form_id"] == form_id
+        )
+        assert current_form["needs_revalidation"] is True, current_form
+        assert "signing_secret" not in form_delivery
+        form_mapping_key = str(uuid.uuid4())
+        form_mapping_revision_id = form_delivery["published_revision_id"]
+        run_d1(
+            "UPDATE funnels SET published_revision_id = "
+            f"{sql_quote(saved_revision_id)} WHERE id = {sql_quote(funnel_id)}"
+        )
+        stale_form_mapping_body = json.dumps(
+            {
+                "form_id": form_id,
+                "expected_published_revision_id": form_mapping_revision_id,
+                "destination_version_id": replacement_destination_key,
+                "expected_mapping_version_id": mapping_b,
+                "enabled": False,
+                "selected_field_ids": sorted([name_field["id"], email_field["id"]]),
+            },
+            separators=(",", ":"),
+        ).encode()
+        stale_form_mapping_status, _, _ = request(
+            "PUT",
+            f"/api/funnels/{funnel_id}/webhook-delivery",
+            stale_form_mapping_body,
+            {"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert stale_form_mapping_status == 409, stale_form_mapping_status
+        run_d1(
+            "UPDATE funnels SET published_revision_id = "
+            f"{sql_quote(form_mapping_revision_id)} WHERE id = {sql_quote(funnel_id)}"
+        )
+        form_mapping_body = json.dumps(
+            {
+                "form_id": form_id,
+                "expected_published_revision_id": form_mapping_revision_id,
+                "destination_version_id": replacement_destination_key,
+                "expected_mapping_version_id": mapping_b,
+                "enabled": False,
+                "selected_field_ids": sorted([name_field["id"], email_field["id"]]),
+            },
+            separators=(",", ":"),
+        ).encode()
+        form_mapping_status, form_mapping_response, form_mapping_headers = request(
+            "PUT",
+            f"/api/funnels/{funnel_id}/webhook-delivery",
+            form_mapping_body,
+            {"Content-Type": "application/json", "Idempotency-Key": form_mapping_key},
+        )
+        assert form_mapping_status == 200, form_mapping_response
+        assert form_mapping_headers.get("cache-control") == "private, no-store"
+        mapped_form = next(
+            option
+            for option in json.loads(form_mapping_response)["forms"]
+            if option["form_id"] == form_id
+        )
+        assert mapped_form["enabled"] is False, mapped_form
+        assert mapped_form["mapping_compatible"] is True, mapped_form
+        assert mapped_form["needs_revalidation"] is False, mapped_form
+        form_mapping_replay_status, form_mapping_replay_body, _ = request(
+            "PUT",
+            f"/api/funnels/{funnel_id}/webhook-delivery",
+            form_mapping_body,
+            {"Content-Type": "application/json", "Idempotency-Key": form_mapping_key},
+        )
+        assert form_mapping_replay_status == 200, form_mapping_replay_body
+        changed_form_mapping_body = form_mapping_body.replace(b'"enabled":false', b'"enabled":true')
+        changed_form_mapping_status, _, _ = request(
+            "PUT",
+            f"/api/funnels/{funnel_id}/webhook-delivery",
+            changed_form_mapping_body,
+            {"Content-Type": "application/json", "Idempotency-Key": form_mapping_key},
+        )
+        assert changed_form_mapping_status == 409, changed_form_mapping_status
+        assert d1_query(
+            "SELECT enabled, mapping_version_id FROM public_form_delivery_settings "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}",
+            "enabled",
+        ) == {"enabled": 0, "mapping_version_id": form_mapping_key}
+
+        concurrent_mapping_key = str(uuid.uuid4())
+        concurrent_mapping_body = json.dumps(
+            {
+                "form_id": form_id,
+                "expected_published_revision_id": form_mapping_revision_id,
+                "destination_version_id": replacement_destination_key,
+                "expected_mapping_version_id": form_mapping_key,
+                "enabled": True,
+                "selected_field_ids": sorted([name_field["id"], email_field["id"]]),
+            },
+            separators=(",", ":"),
+        ).encode()
+        concurrent_mapping_headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": concurrent_mapping_key,
+        }
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            concurrent_mapping_results = list(
+                pool.map(
+                    lambda _: request(
+                        "PUT",
+                        f"/api/funnels/{funnel_id}/webhook-delivery",
+                        concurrent_mapping_body,
+                        concurrent_mapping_headers,
+                    ),
+                    range(2),
+                )
+            )
+        assert [result[0] for result in concurrent_mapping_results] == [200, 200], concurrent_mapping_results
+        concurrent_form_mapping_key = str(uuid.uuid4())
+        race_mapping_headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": concurrent_form_mapping_key,
+        }
+        race_mapping_base = {
+            "form_id": form_id,
+            "expected_published_revision_id": form_mapping_revision_id,
+            "destination_version_id": replacement_destination_key,
+            "expected_mapping_version_id": concurrent_mapping_key,
+            "selected_field_ids": sorted([name_field["id"], email_field["id"]]),
+        }
+        race_mapping_bodies = [
+            json.dumps({**race_mapping_base, "enabled": enabled}, separators=(",", ":")).encode()
+            for enabled in (True, False)
+        ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            conflicting_mapping_results = list(
+                pool.map(
+                    lambda body: request(
+                        "PUT",
+                        f"/api/funnels/{funnel_id}/webhook-delivery",
+                        body,
+                        race_mapping_headers,
+                    ),
+                    race_mapping_bodies,
+                )
+            )
+        assert sorted(result[0] for result in conflicting_mapping_results) == [200, 409], conflicting_mapping_results
+        raced_mapping = d1_query(
+            "SELECT enabled, mapping_version_id FROM public_form_delivery_settings "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}",
+            "enabled",
+        )
+        assert raced_mapping["mapping_version_id"] == concurrent_form_mapping_key, raced_mapping
+
+        missing_delivery_status, missing_delivery_body, _ = request(
+            "POST",
+            "/api/submissions/11111111-1111-4111-8111-111111111111/delivery/retry",
+            headers={"Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert missing_delivery_status == 404, missing_delivery_body
+        assert json.loads(missing_delivery_body)["code"] == "not_found/submission"
+
+        run_d1(
+            "UPDATE public_submission_delivery_state SET status = 'pending', attempt_count = 1, "
+            "next_attempt_at = unixepoch() + 3600, lease_token = NULL, lease_expires_at = NULL, "
+            "last_attempt_at = unixepoch() - 1, last_http_status = 503, "
+            "last_outcome_code = 'receiver_server_error', completed_at = NULL "
+            f"WHERE task_id = {sql_quote(concurrent_submission)}"
+        )
+        retryable_inbox_status, retryable_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert retryable_inbox_status == 200, retryable_inbox_body
+        retryable_inbox_item = next(
+            item
+            for item in json.loads(retryable_inbox_body)["items"]
+            if item["submission_id"] == concurrent_submission
+        )
+        assert retryable_inbox_item["delivery"]["can_retry"] is True, retryable_inbox_item
+        colliding_retry_status, _, _ = request(
+            "POST",
+            f"/api/submissions/{concurrent_submission}/delivery/retry",
+            headers={"Idempotency-Key": form_mapping_key},
+        )
+        assert colliding_retry_status == 409, colliding_retry_status
+        assert d1_query(
+            "SELECT status, attempt_count FROM public_submission_delivery_state "
+            f"WHERE task_id = {sql_quote(concurrent_submission)}",
+            "status",
+        ) == {"status": "pending", "attempt_count": 1}
+        retry_request_key = str(uuid.uuid4())
+        retry_headers = {"Idempotency-Key": retry_request_key}
+        retry_path = f"/api/submissions/{concurrent_submission}/delivery/retry"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            retry_results = list(
+                pool.map(
+                    lambda _: request("POST", retry_path, headers=retry_headers),
+                    range(2),
+                )
+            )
+        assert [result[0] for result in retry_results] == [200, 200], retry_results
+        assert all(
+            result[2].get("cache-control") == "private, no-store"
+            for result in retry_results
+        ), retry_results
+        retry_replay_status, retry_replay_body, _ = request(
+            "POST", retry_path, headers=retry_headers
+        )
+        assert retry_replay_status == 200, retry_replay_body
+        assert d1_query(
+            "SELECT status, attempt_count FROM public_submission_delivery_state "
+            f"WHERE task_id = {sql_quote(concurrent_submission)}",
+            "status",
+        ) == {"status": "pending", "attempt_count": 1}
+
+        cancel_request_key = str(uuid.uuid4())
+        cancel_headers = {"Idempotency-Key": cancel_request_key}
+        cancel_path = f"/api/submissions/{concurrent_submission}/delivery/cancel"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            cancel_results = list(
+                pool.map(
+                    lambda _: request("POST", cancel_path, headers=cancel_headers),
+                    range(2),
+                )
+            )
+        assert [result[0] for result in cancel_results] == [200, 200], cancel_results
+        cancel_replay_status, cancel_replay_body, _ = request(
+            "POST", cancel_path, headers=cancel_headers
+        )
+        assert cancel_replay_status == 200, cancel_replay_body
+        assert d1_query(
+            "SELECT status, last_outcome_code FROM public_submission_delivery_state "
+            f"WHERE task_id = {sql_quote(concurrent_submission)}",
+            "status",
+        ) == {"status": "failed", "last_outcome_code": "cancelled_by_owner"}
+        final_inbox_status, final_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert final_inbox_status == 200, final_inbox_body
+        final_inbox_item = next(
+            item
+            for item in json.loads(final_inbox_body)["items"]
+            if item["submission_id"] == concurrent_submission
+        )
+        assert final_inbox_item["delivery"]["status"] == "cancelled", final_inbox_item
+        assert final_inbox_item["delivery"]["can_cancel"] is False, final_inbox_item
+
+        run_d1(
+            "UPDATE webhook_installation_delivery SET enabled = 1 WHERE installation_id = 1; "
+            "UPDATE public_form_delivery_settings SET enabled = 1 "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}"
+        )
+        configured_form_status, configured_form_body, _ = request(
+            "GET", f"/api/funnels/{funnel_id}/webhook-delivery"
+        )
+        assert configured_form_status == 200, configured_form_body
+        configured_form = next(
+            option
+            for option in json.loads(configured_form_body)["forms"]
+            if option["form_id"] == form_id
+        )
+        assert configured_form["enabled"] is True, configured_form
+        assert configured_form["mapping_compatible"] is True, configured_form
+        api_mapping_submission_key = str(uuid.uuid4())
+        api_mapping_submission_status, api_mapping_submission_body, _ = (
+            request_form_with_transport_retry(
+                outbox_action_for_key(api_mapping_submission_key),
+                urlencode(
+                    {
+                        "name": "API mapped owner",
+                        "email": "api-mapped@example.test",
+                        "_request_consent": "on",
+                    }
+                ).encode(),
+                form_headers,
+            )
+        )
+        assert api_mapping_submission_status == 303, api_mapping_submission_body
+        api_mapping_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(api_mapping_submission_key)}",
+            "submission_id",
+        )["submission_id"]
+        api_mapping_task = d1_query(
+            "SELECT destination_version_id, mapping_version_id "
+            "FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(api_mapping_submission_id)}",
+            "mapping_version_id",
+        )
+        assert api_mapping_task == {
+            "destination_version_id": replacement_destination_key,
+            "mapping_version_id": concurrent_form_mapping_key,
+        }, api_mapping_task
+
+        expired_delivery_submission = str(uuid.uuid4())
+        expired_delivery_key = str(uuid.uuid4())
+        expired_delivery_fingerprint = hashlib.sha256(
+            expired_delivery_submission.encode()
+        ).hexdigest()
+        run_d1(
+            "INSERT INTO public_form_submissions ("
+            "submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, "
+            "submission_key, request_fingerprint, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, "
+            "marketing_opt_in_copy, marketing_opt_in_recorded_at, triage_status, submitted_at, "
+            "expires_at) SELECT "
+            f"{sql_quote(expired_delivery_submission)}, funnel_id, revision_id, page_id, form_id, "
+            f"submission_channel, {sql_quote(expired_delivery_key)}, "
+            f"{sql_quote(expired_delivery_fingerprint)}, field_values_json, "
+            "request_consent_acknowledged, request_consent_copy_version, request_consent_copy, "
+            "unixepoch() - 90000, marketing_opt_in, marketing_opt_in_copy_version, "
+            "marketing_opt_in_copy, marketing_opt_in_recorded_at, 'new', "
+            "unixepoch() - 90000, unixepoch() + 86400 "
+            "FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(api_mapping_submission_id)}; "
+            "INSERT INTO public_submission_delivery_outbox ("
+            "task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, "
+            "destination_version_id, mapping_version_id, state, created_at) SELECT "
+            "submission_id, submission_id, funnel_id, revision_id, page_id, form_id, "
+            f"{sql_quote(replacement_destination_key)}, "
+            f"{sql_quote(concurrent_form_mapping_key)}, 'pending', unixepoch() - 90000 "
+            "FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(expired_delivery_submission)}; "
+            "UPDATE public_submission_delivery_state SET status = 'failed', attempt_count = 1, "
+            "next_attempt_at = unixepoch(), last_attempt_at = unixepoch() - 90000, "
+            "last_outcome_code = 'receiver_rejected', completed_at = unixepoch(), "
+            "updated_at = unixepoch() "
+            f"WHERE task_id = {sql_quote(expired_delivery_submission)}"
+        )
+        expired_inbox_status, expired_inbox_body, _ = request(
+            "GET", f"/api/submissions?funnel_id={funnel_id}"
+        )
+        assert expired_inbox_status == 200, expired_inbox_body
+        expired_inbox_item = next(
+            item
+            for item in json.loads(expired_inbox_body)["items"]
+            if item["submission_id"] == expired_delivery_submission
+        )
+        assert expired_inbox_item["delivery"]["can_retry"] is False, expired_inbox_item
+        expired_retry_status, _, _ = request(
+            "POST",
+            f"/api/submissions/{expired_delivery_submission}/delivery/retry",
+            headers={"Idempotency-Key": str(uuid.uuid4())},
+        )
+        assert expired_retry_status == 409, expired_retry_status
+        run_d1(
+            "DELETE FROM public_form_submissions "
+            f"WHERE submission_id = {sql_quote(expired_delivery_submission)}"
+        )
+
+        changed_contract_edit_status, changed_contract_edit_body, _ = request(
+            "POST",
+            f"/api/funnels/{funnel_id}/edit-v2",
+            json.dumps(
+                {
+                    "base_revision_id": updated_revision_id,
+                    "page_id": "page-home",
+                    "document_json": updated_data.decode(),
+                    "operation_id": "99999999999999999999999999999999",
+                    "edit": {
+                        "operation": "set_form_field",
+                        "form": form_id,
+                        "field": name_field["id"],
+                        "value": {
+                            "kind": "text",
+                            "name": "tax_identifier",
+                            "label": "Tax identifier",
+                            "required": True,
+                            "presentation": "multiline",
+                            "validation": {"min_length": 2, "max_length": 40},
+                        },
+                    },
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {"Content-Type": "application/json"},
+        )
+        assert changed_contract_edit_status == 200, changed_contract_edit_body
+        changed_contract_document_json = json.loads(changed_contract_edit_body)[
+            "document_json"
+        ].encode()
+        changed_contract_stage_id = mint_stage(
+            funnel_id,
+            updated_revision_id,
+            changed_contract_document_json,
+            "pub010-changed-contract-stage",
+        )
+        assert upload(
+            funnel_id, changed_contract_stage_id, changed_contract_document_json
+        )[0] == 204
+        changed_contract_save_status, changed_contract_save_body, _ = post_json(
+            f"/api/funnels/{funnel_id}/revisions-v2",
+            {
+                "base_revision_id": updated_revision_id,
+                "stage_id": changed_contract_stage_id,
+                "expected_length": len(changed_contract_document_json),
+                "expected_sha256": hashlib.sha256(changed_contract_document_json).hexdigest(),
+            },
+            "pub010-changed-contract-save",
+        )
+        assert changed_contract_save_status == 201, changed_contract_save_body
+        changed_contract_revision_id = json.loads(changed_contract_save_body)["revision_id"]
+        changed_contract_publish_status, changed_contract_publish_body, _ = request(
+            "POST",
+            f"/api/funnels/{funnel_id}/publish",
+            json.dumps(
+                {
+                    "revision_id": changed_contract_revision_id,
+                    "expected_published_revision_id": updated_revision_id,
+                },
+                separators=(",", ":"),
+            ).encode(),
+            {
+                "Content-Type": "application/json",
+                "Idempotency-Key": "pub010-changed-contract-publish",
+            },
+        )
+        assert changed_contract_publish_status == 200, changed_contract_publish_body
+        run_d1(
+            "UPDATE webhook_installation_delivery SET enabled = 1 "
+            "WHERE installation_id = 1; "
+            "UPDATE public_form_delivery_settings SET enabled = 1 "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)}"
+        )
+        changed_contract_settings_status, changed_contract_settings_body, _ = request(
+            "GET", f"/api/funnels/{funnel_id}/webhook-delivery"
+        )
+        assert changed_contract_settings_status == 200, changed_contract_settings_body
+        changed_contract_form = next(
+            option
+            for option in json.loads(changed_contract_settings_body)["forms"]
+            if option["form_id"] == form_id
+        )
+        assert changed_contract_form["needs_revalidation"] is True, changed_contract_form
+        changed_contract_submission_key = str(uuid.uuid4())
+        changed_contract_action = outbox_action_for_key(changed_contract_submission_key).replace(
+            updated_revision_id, changed_contract_revision_id, 1
+        )
+        changed_contract_submission_status, changed_contract_submission_body, _ = (
+            request_form_with_transport_retry(
+                changed_contract_action,
+                urlencode(
+                    {
+                        "tax_identifier": "example-tax-id",
+                        "email": "changed-contract@example.test",
+                        "_request_consent": "on",
+                    }
+                ).encode(),
+                form_headers,
+            )
+        )
+        assert changed_contract_submission_status == 303, changed_contract_submission_body
+        changed_contract_submission_id = d1_query(
+            "SELECT submission_id FROM public_form_submissions "
+            f"WHERE funnel_id = {sql_quote(funnel_id)} AND form_id = {sql_quote(form_id)} "
+            f"AND submission_key = {sql_quote(changed_contract_submission_key)}",
+            "submission_id",
+        )["submission_id"]
+        assert d1_query(
+            "SELECT COUNT(*) AS tasks FROM public_submission_delivery_outbox "
+            f"WHERE source_submission_id = {sql_quote(changed_contract_submission_id)}",
+            "tasks",
+        )["tasks"] == 0
+
         log.close()
         worker_log = log_path.read_text(encoding="utf-8")
         assert "ada@example.test" not in worker_log, worker_log
         assert "outbox-visitor@example.test" not in worker_log, worker_log
         assert "starter-visitor@example.test" not in worker_log, worker_log
-        print("PR-067/PR-033 local Worker/D1 flows, PUB-004 starter, and PUB-007 export/delete/recovery passed")
+        print("PR-067/PR-033 local Worker/D1 flows, PUB-004 starter, PUB-007 lifecycle, and PUB-010 delivery controls passed")
     except Exception:
         if log_path.exists():
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)

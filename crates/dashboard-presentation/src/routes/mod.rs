@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 mod api;
 mod browser;
+mod delivery;
 mod editor;
 mod funnels;
 mod idempotency;
