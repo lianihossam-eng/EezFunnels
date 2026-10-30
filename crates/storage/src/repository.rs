@@ -259,10 +259,10 @@ pub struct NewPublicFormSubmission<'a> {
     pub limit_per_minute: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PublicFormSubmissionResult {
-    Stored,
-    Duplicate,
+    Stored { submission_id: String },
+    Duplicate { submission_id: String },
     KeyReuseMismatch,
     ErasedReplay,
     RateLimited,
@@ -294,11 +294,22 @@ pub enum PublicInteractionEventResult {
 
 #[derive(Deserialize)]
 struct PublicFormSubmissionState {
+    canonical_submission_id: Option<String>,
     is_current: i64,
     is_duplicate: i64,
     is_key_reuse: i64,
     is_rate_limited: i64,
     is_erased_replay: i64,
+}
+
+#[derive(Deserialize)]
+struct PublicFormSubmissionCanonicalState {
+    canonical_submission_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PublicFormSubmissionId {
+    submission_id: String,
 }
 
 #[derive(Deserialize)]
@@ -1438,7 +1449,13 @@ impl<'a> Repository<'a> {
         let retention_seconds = D1Type::Integer(input.retention_seconds);
         let limit_per_minute = D1Type::Integer(input.limit_per_minute);
 
-        let inserted = self
+        let canonical_lookup = self
+            .database
+            .prepare(
+                "SELECT (SELECT submission_id FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS canonical_submission_id",
+            )
+            .bind_refs([&funnel_id, &form_id, &submission_key])?;
+        let insert_submission = self
             .database
             .prepare(
                 "INSERT INTO public_form_submissions (submission_id, funnel_id, revision_id, page_id, form_id, submission_channel, submission_key, request_fingerprint, field_values_json, request_consent_acknowledged, request_consent_copy_version, request_consent_copy, request_consent_recorded_at, marketing_opt_in, marketing_opt_in_copy_version, marketing_opt_in_copy, marketing_opt_in_recorded_at, submitted_at, expires_at) SELECT ?, funnels.id, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), ?, ?, ?, CASE WHEN ? IS NOT NULL THEN unixepoch() ELSE NULL END, unixepoch(), unixepoch() + ? FROM funnels JOIN revisions ON revisions.id = funnels.published_revision_id AND revisions.funnel_id = funnels.id WHERE funnels.id = ? AND funnels.slug = ? AND revisions.id = ? AND revisions.schema_version = 2 AND (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = funnels.id AND submitted_at >= unixepoch() - 60) < ? AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_markers WHERE replay_digest = ? AND expires_at > unixepoch()) ON CONFLICT(funnel_id, form_id, submission_key) DO NOTHING RETURNING submission_id",
@@ -1464,19 +1481,45 @@ impl<'a> Repository<'a> {
                 &revision_id,
                 &limit_per_minute,
                 &erased_replay_digest,
-            ])?
-            .first::<String>(Some("submission_id"))
+            ])?;
+        let insert_outbox = self
+            .database
+            .prepare(
+                "INSERT INTO public_submission_delivery_outbox (task_id, source_submission_id, funnel_id, revision_id, page_id, form_id, destination_version_id, mapping_version_id, state, created_at) SELECT source.submission_id, source.submission_id, source.funnel_id, source.revision_id, source.page_id, source.form_id, installation.destination_version_id, settings.mapping_version_id, 'pending', source.submitted_at FROM public_form_submissions AS source JOIN webhook_installation_delivery AS installation ON installation.installation_id = 1 AND installation.enabled = 1 JOIN public_form_delivery_settings AS settings ON settings.funnel_id = source.funnel_id AND settings.form_id = source.form_id AND settings.enabled = 1 AND settings.expected_destination_version_id = installation.destination_version_id JOIN public_form_delivery_mapping_versions AS mapping ON mapping.mapping_version_id = settings.mapping_version_id AND mapping.funnel_id = source.funnel_id AND mapping.form_id = source.form_id AND mapping.destination_version_id = installation.destination_version_id WHERE source.submission_id = ? AND changes() = 1",
+            )
+            .bind_refs([&submission_id])?;
+        let results = self
+            .database
+            .batch(vec![canonical_lookup, insert_submission, insert_outbox])
             .await?;
-        if inserted.is_some() {
-            return Ok(PublicFormSubmissionResult::Stored);
+        let canonical_state = results
+            .first()
+            .ok_or(RepositoryError::InvalidField("public_form_submission"))?
+            .results::<PublicFormSubmissionCanonicalState>()?
+            .into_iter()
+            .next()
+            .ok_or(RepositoryError::InvalidField("public_form_submission"))?;
+        let inserted = results
+            .get(1)
+            .ok_or(RepositoryError::InvalidField("public_form_submission"))?
+            .results::<PublicFormSubmissionId>()?
+            .into_iter()
+            .next();
+        if let Some(inserted) = inserted {
+            return Ok(PublicFormSubmissionResult::Stored {
+                submission_id: inserted.submission_id,
+            });
         }
 
         let state = self
             .database
             .prepare(
-                "SELECT EXISTS(SELECT 1 FROM funnels WHERE id = ? AND slug = ? AND published_revision_id = ?) AS is_current, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ? AND request_fingerprint = ?) AS is_duplicate, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS is_key_reuse, (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = ? AND submitted_at >= unixepoch() - 60) >= ? AS is_rate_limited, EXISTS(SELECT 1 FROM public_submission_erasure_markers WHERE replay_digest = ? AND expires_at > unixepoch()) AS is_erased_replay",
+                "SELECT (SELECT submission_id FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS canonical_submission_id, EXISTS(SELECT 1 FROM funnels WHERE id = ? AND slug = ? AND published_revision_id = ?) AS is_current, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ? AND request_fingerprint = ?) AS is_duplicate, EXISTS(SELECT 1 FROM public_form_submissions WHERE funnel_id = ? AND form_id = ? AND submission_key = ?) AS is_key_reuse, (SELECT COUNT(*) FROM public_form_submissions WHERE funnel_id = ? AND submitted_at >= unixepoch() - 60) >= ? AS is_rate_limited, EXISTS(SELECT 1 FROM public_submission_erasure_markers WHERE replay_digest = ? AND expires_at > unixepoch()) AS is_erased_replay",
             )
             .bind_refs([
+                &funnel_id,
+                &form_id,
+                &submission_key,
                 &funnel_id,
                 &funnel_slug,
                 &revision_id,
@@ -1502,7 +1545,13 @@ impl<'a> Repository<'a> {
             return Ok(PublicFormSubmissionResult::ErasedReplay);
         }
         if state.is_duplicate == 1 {
-            return Ok(PublicFormSubmissionResult::Duplicate);
+            let canonical_submission_id = state
+                .canonical_submission_id
+                .or(canonical_state.canonical_submission_id)
+                .ok_or(RepositoryError::InvalidField("public_form_submission"))?;
+            return Ok(PublicFormSubmissionResult::Duplicate {
+                submission_id: canonical_submission_id,
+            });
         }
         if state.is_key_reuse == 1 {
             return Ok(PublicFormSubmissionResult::KeyReuseMismatch);

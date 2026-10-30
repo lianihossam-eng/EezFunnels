@@ -205,7 +205,8 @@ pub async fn submit_public_form(
     };
 
     match storage_result {
-        PublicFormSubmissionResult::Stored | PublicFormSubmissionResult::Duplicate => {}
+        PublicFormSubmissionResult::Stored { .. }
+        | PublicFormSubmissionResult::Duplicate { .. } => {}
         PublicFormSubmissionResult::KeyReuseMismatch | PublicFormSubmissionResult::ErasedReplay => {
             return Ok(SubmitPublicFormOutcome::KeyReuseMismatch {
                 current_page_slug,

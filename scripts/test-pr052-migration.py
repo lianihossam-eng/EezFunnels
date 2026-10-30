@@ -6,6 +6,7 @@ import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+MIGRATION_NAME = "0012_public_form_submission_channel.sql"
 MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 
 
@@ -13,9 +14,8 @@ def main() -> int:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     for migration in MIGRATIONS:
-        if migration.name == "0012_public_form_submission_channel.sql":
-            continue
-        connection.executescript(migration.read_text(encoding="utf-8"))
+        if migration.name < MIGRATION_NAME:
+            connection.executescript(migration.read_text(encoding="utf-8"))
 
     connection.execute(
         "INSERT INTO funnels (id, name, slug) VALUES ('fixture', 'Fixture', 'fixture')"
@@ -41,7 +41,7 @@ def main() -> int:
         ),
     )
 
-    migration = ROOT / "migrations" / "0012_public_form_submission_channel.sql"
+    migration = ROOT / "migrations" / MIGRATION_NAME
     connection.executescript(migration.read_text(encoding="utf-8"))
     legacy_channel = connection.execute(
         "SELECT submission_channel FROM public_form_submissions"

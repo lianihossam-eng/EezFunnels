@@ -71,6 +71,10 @@ The recovery guarantee applies only when D1 is restored while the original R2 bu
 
 The initial R2 recovery control is created conditionally only when there are no erasure intents, replay markers, or journals. If the control object is missing while any erasure state exists, normal submission routes fail closed.
 
-## Future delivery requirement
+## Outbox and future dispatch
 
-PUB-007 adds no delivery connector. A later outbox and dispatcher must require the same ready recovery gate and the retained-source visibility predicate when claiming or retrying a task. It must suppress unstarted work when an erasure intent appears and recheck the source immediately before transport. A request already sent to a receiver cannot be recalled; the documented guarantee must distinguish that in-flight boundary.
+PUB-008 adds a disabled-by-default, reference-only outbox. Accepting a form creates a task only when the installation and form are enabled and the form's expected destination version matches the current installation destination. The source and task commit in one D1 batch. A new destination version does not retarget old tasks; each form must be explicitly revalidated. Direct source insertion during restore does not create a task.
+
+When an erasure intent commits, the matching task is deleted in the same D1 batch as the intent and replay marker. The `retained_visible_public_submission_delivery` view also hides a task if its source is expired or has an erasure intent. Source purge cascades to its task. The R2 journal remains the recovery authority, and D1 task visibility does not prove the recovery gate is open.
+
+PUB-009's dispatcher must require the recovery-ready gate, acquire and retry only through the retained-visible source predicate, and recheck the gate and source immediately before transport. An erasure cannot recall a request already sent to a receiver; a request in flight at deletion time remains outside the cancellation guarantee.
