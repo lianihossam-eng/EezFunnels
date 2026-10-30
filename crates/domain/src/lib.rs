@@ -13,12 +13,14 @@ pub mod form_submission_status;
 pub mod interaction_event;
 pub mod interaction_report;
 pub mod service_brief;
+pub mod submission_follow_up;
 pub mod webhook_delivery;
 
 pub use form_completions::FormCompletionPeriod;
 pub use form_submission_channel::FormSubmissionChannel;
 pub use form_submission_status::FormSubmissionStatus;
 pub use interaction_report::InteractionReportPeriod;
+pub use submission_follow_up::{FollowUpValidationError, SubmissionFollowUp};
 
 const MAX_SECTIONS_PER_REVISION: usize = 100;
 

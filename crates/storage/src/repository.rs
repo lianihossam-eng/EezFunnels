@@ -333,6 +333,10 @@ pub struct PublicFormSubmissionCursor {
 pub struct PublicFormSubmissionRecord {
     pub submission_id: String,
     pub triage_status: FormSubmissionStatus,
+    pub follow_up_version: i32,
+    pub next_action: Option<String>,
+    pub due_on: Option<String>,
+    pub close_reason: Option<String>,
     pub funnel_id: String,
     pub funnel_name: String,
     pub funnel_slug: String,
@@ -1780,7 +1784,7 @@ impl<'a> Repository<'a> {
         };
         let limit = D1Type::Integer((PUBLIC_FORM_SUBMISSION_PAGE_SIZE + 1) as i32);
         let query = format!(
-            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label, delivery_state.status AS delivery_state, CASE WHEN delivery_state.status = 'pending' AND delivery_state.attempt_count > 0 AND delivery_state.next_attempt_at > unixepoch() THEN 1 ELSE 0 END AS delivery_retry_scheduled, CASE WHEN delivery.created_at IS NOT NULL AND delivery.created_at + 86400 > unixepoch() THEN 1 ELSE 0 END AS delivery_retry_window_open, delivery_state.attempt_count AS delivery_attempt_count, CASE WHEN delivery_state.last_attempt_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', delivery_state.last_attempt_at, 'unixepoch') ELSE NULL END AS delivery_last_attempt_at_label, CASE WHEN delivery_state.status = 'pending' AND delivery_state.next_attempt_at > unixepoch() THEN strftime('%Y-%m-%d %H:%M UTC', delivery_state.next_attempt_at, 'unixepoch') ELSE NULL END AS delivery_next_attempt_at_label, delivery_state.last_http_status AS delivery_last_http_status, delivery_state.last_outcome_code AS delivery_last_outcome_code FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id LEFT JOIN public_submission_delivery_outbox AS delivery ON delivery.source_submission_id = public_form_submissions.submission_id LEFT JOIN public_submission_delivery_state AS delivery_state ON delivery_state.task_id = delivery.task_id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents AS intent WHERE intent.submission_id = public_form_submissions.submission_id){funnel_predicate}{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
+            "SELECT public_form_submissions.submission_id, public_form_submissions.triage_status, public_form_submissions.follow_up_version, public_form_submissions.next_action, public_form_submissions.due_on, public_form_submissions.close_reason, public_form_submissions.funnel_id, funnels.name AS funnel_name, funnels.slug AS funnel_slug, public_form_submissions.revision_id, revisions.schema_version AS revision_schema_version, public_form_submissions.page_id, public_form_submissions.form_id, public_form_submissions.field_values_json, public_form_submissions.request_consent_acknowledged, public_form_submissions.request_consent_copy_version, public_form_submissions.request_consent_copy, public_form_submissions.request_consent_recorded_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.request_consent_recorded_at, 'unixepoch') AS request_consent_recorded_at_label, public_form_submissions.marketing_opt_in, public_form_submissions.marketing_opt_in_copy_version, public_form_submissions.marketing_opt_in_copy, public_form_submissions.marketing_opt_in_recorded_at, CASE WHEN public_form_submissions.marketing_opt_in_recorded_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.marketing_opt_in_recorded_at, 'unixepoch') ELSE NULL END AS marketing_opt_in_recorded_at_label, public_form_submissions.submitted_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_label, strftime('%Y-%m-%dT%H:%M:%SZ', public_form_submissions.submitted_at, 'unixepoch') AS submitted_at_datetime, public_form_submissions.expires_at, strftime('%Y-%m-%d %H:%M UTC', public_form_submissions.expires_at, 'unixepoch') AS expires_at_label, delivery_state.status AS delivery_state, CASE WHEN delivery_state.status = 'pending' AND delivery_state.attempt_count > 0 AND delivery_state.next_attempt_at > unixepoch() THEN 1 ELSE 0 END AS delivery_retry_scheduled, CASE WHEN delivery.created_at IS NOT NULL AND delivery.created_at + 86400 > unixepoch() THEN 1 ELSE 0 END AS delivery_retry_window_open, delivery_state.attempt_count AS delivery_attempt_count, CASE WHEN delivery_state.last_attempt_at IS NOT NULL THEN strftime('%Y-%m-%d %H:%M UTC', delivery_state.last_attempt_at, 'unixepoch') ELSE NULL END AS delivery_last_attempt_at_label, CASE WHEN delivery_state.status = 'pending' AND delivery_state.next_attempt_at > unixepoch() THEN strftime('%Y-%m-%d %H:%M UTC', delivery_state.next_attempt_at, 'unixepoch') ELSE NULL END AS delivery_next_attempt_at_label, delivery_state.last_http_status AS delivery_last_http_status, delivery_state.last_outcome_code AS delivery_last_outcome_code FROM public_form_submissions JOIN funnels ON funnels.id = public_form_submissions.funnel_id JOIN revisions ON revisions.id = public_form_submissions.revision_id AND revisions.funnel_id = funnels.id LEFT JOIN public_submission_delivery_outbox AS delivery ON delivery.source_submission_id = public_form_submissions.submission_id LEFT JOIN public_submission_delivery_state AS delivery_state ON delivery_state.task_id = delivery.task_id WHERE public_form_submissions.expires_at > unixepoch() AND revisions.schema_version = 2 AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents AS intent WHERE intent.submission_id = public_form_submissions.submission_id){funnel_predicate}{status_predicate} AND (? IS NULL OR public_form_submissions.submitted_at < ? OR (public_form_submissions.submitted_at = ? AND public_form_submissions.submission_id < ?)) ORDER BY public_form_submissions.submitted_at DESC, public_form_submissions.submission_id DESC LIMIT ?"
         );
         let mut bindings = Vec::with_capacity(7);
         if let Some(funnel_id) = funnel_id {
@@ -1823,15 +1827,30 @@ impl<'a> Repository<'a> {
 
         let submission_id = D1Type::Text(submission_id);
         let status = D1Type::Text(status.as_str());
-        let updated = self
+        let insert_event = self
             .database
             .prepare(
-                "UPDATE public_form_submissions SET triage_status = ? WHERE submission_id = ? AND expires_at > unixepoch() AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = public_form_submissions.submission_id) RETURNING submission_id",
+                "INSERT INTO public_submission_follow_up_events (submission_id, version, status, next_action, due_on, close_reason, recorded_at, provenance, supersedes_version) SELECT source.submission_id, source.follow_up_version + 1, ?, source.next_action, source.due_on, CASE WHEN ? = 'closed' THEN source.close_reason ELSE NULL END, unixepoch(), 'legacy_status', CASE WHEN source.follow_up_version = 0 THEN NULL ELSE source.follow_up_version END FROM public_form_submissions AS source WHERE source.submission_id = ? AND source.expires_at > unixepoch() AND source.follow_up_version < 2147483647 AND source.triage_status <> ? AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = source.submission_id)",
             )
-            .bind_refs([&status, &submission_id])?
-            .first::<String>(Some("submission_id"))
+            .bind_refs([&status, &status, &submission_id, &status])?;
+        let update_submission = self
+            .database
+            .prepare(
+                "UPDATE public_form_submissions SET triage_status = ?, close_reason = CASE WHEN ? = 'closed' THEN close_reason ELSE NULL END, follow_up_version = follow_up_version + 1 WHERE submission_id = ? AND expires_at > unixepoch() AND EXISTS (SELECT 1 FROM public_submission_follow_up_events AS event WHERE event.submission_id = public_form_submissions.submission_id AND event.version = public_form_submissions.follow_up_version + 1 AND event.status = ? AND event.provenance = 'legacy_status') AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = public_form_submissions.submission_id)",
+            )
+            .bind_refs([&status, &status, &submission_id, &status])?;
+        self.database
+            .batch(vec![insert_event, update_submission])
             .await?;
-        Ok(updated.is_some())
+        let visible = self
+            .database
+            .prepare(
+                "SELECT EXISTS(SELECT 1 FROM public_form_submissions WHERE submission_id = ? AND expires_at > unixepoch() AND NOT EXISTS (SELECT 1 FROM public_submission_erasure_intents WHERE submission_id = public_form_submissions.submission_id)) AS present",
+            )
+            .bind_refs([&submission_id])?
+            .first::<PublicFormSubmissionVisible>(None)
+            .await?;
+        Ok(visible.is_some_and(|visible| visible.present == 1))
     }
 
     pub async fn form_completion_count_rows(
@@ -2023,6 +2042,11 @@ impl<'a> Repository<'a> {
             Err(RepositoryError::InvalidJson)
         }
     }
+}
+
+#[derive(Deserialize)]
+struct PublicFormSubmissionVisible {
+    present: i64,
 }
 
 pub fn validate_schema_version(version: i64) -> RepositoryResult<()> {

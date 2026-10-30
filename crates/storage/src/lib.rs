@@ -13,6 +13,7 @@ pub mod repository;
 pub mod service_brief;
 pub mod stage;
 pub mod submission_delivery;
+pub mod submission_follow_up;
 pub mod submission_lifecycle;
 
 pub const MAX_PUBLIC_FORM_SUBMISSION_BYTES: usize = 512 * 1024;
@@ -77,6 +78,12 @@ impl Bindings {
         &self,
     ) -> submission_delivery::SubmissionDeliveryRepository<'_> {
         submission_delivery::SubmissionDeliveryRepository::new(&self.database)
+    }
+
+    pub fn submission_follow_up_repository(
+        &self,
+    ) -> submission_follow_up::SubmissionFollowUpRepository<'_> {
+        submission_follow_up::SubmissionFollowUpRepository::new(&self.database)
     }
 
     pub fn delivery_control_repository(&self) -> delivery_controls::DeliveryControlRepository<'_> {

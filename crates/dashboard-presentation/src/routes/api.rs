@@ -27,6 +27,10 @@ pub(super) struct FormSubmissionListResponse {
 pub(super) struct FormSubmissionListItem {
     pub(super) submission_id: String,
     pub(super) status: FormSubmissionStatus,
+    pub(super) follow_up_version: i32,
+    pub(super) next_action: Option<String>,
+    pub(super) due_on: Option<String>,
+    pub(super) close_reason: Option<String>,
     pub(super) funnel_name: String,
     pub(super) page_title: String,
     pub(super) form_purpose: String,
@@ -419,27 +423,119 @@ pub(super) async fn load_interaction_report(
 }
 
 #[cfg(feature = "browser")]
-pub(super) async fn update_public_form_submission_status(
+pub(super) async fn update_public_form_submission_follow_up(
     submission_id: &str,
-    status: FormSubmissionStatus,
-) -> Result<(), ()> {
+    request_body: &str,
+    idempotency_key: PreparedIdempotencyKey,
+) -> Result<i32, FollowUpMutationFailure> {
     let response = api_request(
-        "POST",
-        &format!("/api/submissions/{submission_id}/status"),
-        Some(serde_json::json!({ "status": status }).to_string()),
+        "PUT",
+        &format!("/api/submissions/{submission_id}/follow-up"),
+        Some(request_body.to_owned()),
+        Some(idempotency_key),
+    )
+    .await
+    .map_err(|_| FollowUpMutationFailure::Uncertain)?;
+    if response.status == 409 {
+        if serde_json::from_str::<serde_json::Value>(&response.body)
+            .ok()
+            .and_then(|body| {
+                body.get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("conflict/submission_follow_up_correction_target")
+        {
+            return Err(FollowUpMutationFailure::CorrectionTargetUnavailable);
+        }
+        return Err(FollowUpMutationFailure::Conflict);
+    }
+    if response.status == 0 || response.status >= 500 {
+        return Err(FollowUpMutationFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(FollowUpMutationFailure::Rejected);
+    }
+    let result = serde_json::from_str::<FollowUpMutationResponse>(&response.body)
+        .map_err(|_| FollowUpMutationFailure::Uncertain)?;
+    let expected_version = serde_json::from_str::<serde_json::Value>(request_body)
+        .ok()
+        .and_then(|body| {
+            body.get("expected_version")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .and_then(|version| i32::try_from(version).ok());
+    if result.submission_id == submission_id
+        && expected_version
+            .is_some_and(|version| (version..=version.saturating_add(1)).contains(&result.version))
+    {
+        Ok(result.version)
+    } else {
+        Err(FollowUpMutationFailure::Uncertain)
+    }
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_public_form_submission_follow_up(
+    submission_id: &str,
+) -> Result<FollowUpHistoryResponse, ()> {
+    let response = api_request(
+        "GET",
+        &format!("/api/submissions/{submission_id}/follow-up"),
+        None,
         None,
     )
     .await?;
     if response.status != 200 {
         return Err(());
     }
-    let result = serde_json::from_str::<FormSubmissionStatusMutationResponse>(&response.body)
-        .map_err(|_| ())?;
-    if result.submission_id == submission_id && result.status == status {
-        Ok(())
-    } else {
-        Err(())
-    }
+    serde_json::from_str::<FollowUpHistoryResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FollowUpMutationFailure {
+    Conflict,
+    CorrectionTargetUnavailable,
+    Uncertain,
+    Rejected,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct FollowUpMutationResponse {
+    submission_id: String,
+    version: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct FollowUpHistoryResponse {
+    pub(super) current: FollowUpSnapshotResponse,
+    pub(super) events: Vec<FollowUpEventResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct FollowUpSnapshotResponse {
+    pub(super) submission_id: String,
+    pub(super) version: i32,
+    pub(super) status: FormSubmissionStatus,
+    pub(super) next_action: Option<String>,
+    pub(super) due_on: Option<String>,
+    pub(super) close_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct FollowUpEventResponse {
+    pub(super) version: i32,
+    pub(super) status: FormSubmissionStatus,
+    pub(super) next_action: Option<String>,
+    pub(super) due_on: Option<String>,
+    pub(super) close_reason: Option<String>,
+    pub(super) recorded_at_label: String,
+    pub(super) provenance: String,
+    pub(super) supersedes_version: Option<i32>,
+    pub(super) corrects_version: Option<i32>,
 }
 
 #[cfg(feature = "browser")]
@@ -684,11 +780,4 @@ pub(super) async fn save_service_brief(
         return Err(ServiceBriefSaveFailure::Uncertain);
     }
     Ok(saved)
-}
-
-#[cfg(feature = "browser")]
-#[derive(Deserialize)]
-struct FormSubmissionStatusMutationResponse {
-    submission_id: String,
-    status: FormSubmissionStatus,
 }

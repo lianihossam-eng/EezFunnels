@@ -41,6 +41,7 @@ mod mcp;
 mod origin;
 mod service_brief;
 mod sitemap;
+mod submission_follow_up;
 mod webhook_transport;
 
 const INTERACTION_SCRIPT: &str = include_str!("interaction.js");
@@ -180,6 +181,9 @@ pub async fn fetch(
         .await
     } else if let Some(submission_id) = form_submission_export_id_from_path(&request_path) {
         form_submission_export_response(&env, request, submission_id, correlation_id.clone()).await
+    } else if let Some(submission_id) = submission_follow_up::submission_id_from_path(&request_path)
+    {
+        submission_follow_up::response(&env, request, submission_id, &correlation_id).await
     } else if let Some(submission_id) = form_submission_delete_id_from_path(&request_path) {
         form_submission_delete_response(&env, request, submission_id, correlation_id.clone()).await
     } else if let Some(submission_id) = form_submission_status_id_from_path(&request_path) {

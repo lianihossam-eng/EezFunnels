@@ -24,6 +24,18 @@ This table records the capabilities on the series baseline, commit 65feaeee, and
 
 The public journey may record that a request arrived, that an owner contacted or qualified it, and that the owner documented an outcome. It does not provide a native calendar, reservation system, payment processing, subscription handling, customer account, or full CRM. Do not describe a submitted form as a booking, a qualified request as a sale, or an HTTP webhook acknowledgement as proof of a completed downstream action.
 
+## Submission follow-up history
+
+The inbox keeps a current status and optional next action, due date, and close reason. `POST /api/submissions/:submission_id/status` retains its strict one-field body and four existing status values. A change through that endpoint also appends a `legacy_status` history event; setting the same status remains a successful no-op.
+
+`GET /api/submissions/:submission_id/follow-up` reads the retained current state and its history. `PUT` accepts the complete disposition with `expected_version` and an `Idempotency-Key`. A stale version or an incompatible reuse of a key, including across submissions, returns a conflict. The state and history event are written atomically; a no-op does not create an event. Event snapshots carry server-recorded time, provenance, and the version they supersede. Events and idempotency receipts expire with, and are erased alongside, their source submission.
+
+An owner can explicitly correct one earlier ordinary event by sending its version as `corrects_version`. A correction is a new event recorded at the time it is made; it does not rewrite or backdate the original event. A correction can target only an earlier ordinary event, and that event can be corrected once. A correction cannot itself be corrected; invalid, already-used, or unavailable targets return a conflict. The current disposition values describe the result after the correction, while the linked event identifies what was corrected.
+
+The dashboard keeps follow-up drafts and retry operations in route memory. Drafts remain available when filters or pages remove their submission from the visible list, and a stale save must be explicitly reviewed before another save. An uncertain retry reuses its original request and idempotency key. Discarding a draft or deleting a submission clears its local follow-up state; draft text is not stored in browser storage.
+
+Submissions that predate this journal start at version zero with no history event. Their existing status is preserved, and the system does not infer when contact or qualification occurred. `closed` records an owner follow-up outcome; it never means a sale or payment.
+
 The service journey is a working product hypothesis, not a validated result from user research. Test fixtures, sample funnels, and reference receivers use fictional scenarios; demos are not evidence of customer outcomes or conversion uplift.
 
 ## Private service brief

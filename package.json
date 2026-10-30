@@ -14,6 +14,7 @@
     "test:pr053:migration": "python3 scripts/test-pr053-migration.py",
     "test:pr057:migration": "python3 scripts/test-pr057-migration.py",
     "test:pub005:migration": "python3 scripts/test-pub005-migration.py",
+    "test:pub011:migration": "python3 scripts/test-pub011-migration.py",
     "test:pub005:browser": "bash scripts/smoke-pub005-service-brief.sh",
     "test:pr010:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr011:browser": "node scripts/test-pr010-browser.mjs",
