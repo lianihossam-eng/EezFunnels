@@ -13,6 +13,17 @@ fn funnel_blueprint_catalog_is_closed_and_stable() {
 
     assert_eq!(ids, ["tripwire", "vsl", "webinar", "launch", "lead_gen"]);
     assert!(serde_json::from_str::<FunnelBlueprint>("\"unknown\"").is_err());
+    assert!(FunnelBlueprint::ALL[..4]
+        .iter()
+        .all(|blueprint| blueprint.description().contains("outline")));
+    assert!(FunnelBlueprint::Vsl
+        .description()
+        .contains("video blocks, embeds"));
+    assert_eq!(FunnelBlueprint::LeadGen.id(), "lead_gen");
+    assert!(FunnelBlueprint::LeadGen
+        .description()
+        .to_lowercase()
+        .contains("working service inquiry form"));
 }
 
 #[test]
@@ -89,7 +100,34 @@ fn v2_create_preserves_omitted_language_and_prepares_current_renderer_manifest()
     assert_eq!(document["schema_version"], 2);
     assert_eq!(document["blueprint_id"], "lead_gen");
     assert!(document.get("language").is_none());
-    assert_eq!(document["pages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(document["pages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(document["pages"][1]["slug"], "request-received");
+    assert_eq!(document["pages"][1]["noindex"], true);
+    assert_eq!(document["forms"].as_array().map(Vec::len), Some(1));
+    let form = &document["forms"][0];
+    assert_eq!(form["purpose"], "Service inquiry");
+    assert_eq!(form["fields"].as_array().map(Vec::len), Some(3));
+    assert_eq!(form["fields"][0]["required"], false);
+    assert_eq!(form["fields"][1]["required"], true);
+    assert_eq!(form["fields"][2]["required"], true);
+    assert_eq!(form["fields"][2]["presentation"], "multiline");
+    assert_eq!(
+        form["request_consent"]["copy_version"],
+        "request-ack-service-en"
+    );
+    assert_eq!(
+        form["request_consent"]["copy"],
+        "I have read and understood the information about this request."
+    );
+    assert!(form.get("marketing_opt_in").is_none());
+    assert_eq!(form["result"]["kind"], "success_page");
+    assert_eq!(form["result"]["page_id"], document["pages"][1]["id"]);
+    assert!(document["pages"][0]["sections"]
+        .as_array()
+        .expect("home sections")
+        .iter()
+        .flat_map(|section| section["blocks"].as_array().expect("section blocks"))
+        .any(|block| block["kind"] == "form" && block["form_id"] == form["id"]));
     assert_eq!(
         document["pages"][0]["sections"]
             .as_array()
@@ -108,9 +146,12 @@ fn v2_create_preserves_omitted_language_and_prepares_current_renderer_manifest()
         &prepared.revision().render_manifest_json,
     )
     .expect("starter public page renders");
-    assert!(html.contains("Welcome to your new funnel"));
-    assert!(html.contains("What makes this offer valuable"));
-    assert!(html.contains("Take the next step today."));
+    assert!(html.contains("A clear service offer"));
+    assert!(html.contains("What the service includes"));
+    assert!(html.contains("name=\"project_details\" rows=\"4\" maxlength=\"8192\" required"));
+    assert!(html.contains("<textarea"));
+    assert!(html.contains("Send request"));
+    assert!(!html.contains("example.com"));
 }
 
 #[test]
@@ -136,7 +177,42 @@ fn v2_create_accepts_french_language_and_localizes_generated_public_copy() {
     )
     .expect("French public page");
     assert!(html.contains("<html lang=\"fr\">"));
-    assert!(html.contains("Bienvenue dans votre nouvel entonnoir"));
+    assert!(html.contains("Une offre de service claire"));
+    assert!(html.contains("Adresse e-mail"));
+    assert!(html.contains("Décrivez votre besoin"));
+    assert!(html.contains("J’ai pris connaissance des informations relatives à cette demande."));
+    assert!(!html.contains("example.com"));
+}
+
+#[test]
+fn service_starter_confirmation_uses_its_internal_page_route() {
+    let prepared = FunnelCreateCommandV2::from_json(
+        r#"{"name":"Service request","blueprint":"lead_gen","language":"en"}"#,
+    )
+    .expect("service inquiry command")
+    .prepare("service-funnel", "service-revision")
+    .expect("service inquiry revision");
+    let revision = prepared.revision();
+    let record = RevisionRecord {
+        id: revision.id.clone(),
+        funnel_id: revision.funnel_id.clone(),
+        schema_version: revision.schema_version,
+        data_json: revision.data_json.clone(),
+        render_manifest_json: revision.render_manifest_json.clone(),
+        created_at: "2026-10-30T00:00:00Z".to_owned(),
+    };
+
+    let confirmation = render_published_revision(
+        &record,
+        "service-funnel",
+        "service-funnel",
+        Some("request-received"),
+    )
+    .expect("form result slug resolves to the generated confirmation page");
+
+    assert!(confirmation.contains("Your request has been received."));
+    assert!(confirmation.contains("This confirms receipt only; it is not a reservation"));
+    assert!(!confirmation.contains("example.com"));
 }
 
 #[test]
@@ -198,7 +274,7 @@ fn published_revision_dispatch_uses_the_stored_schema_version() {
     };
     let typed_html = render_published_revision(&typed_record, "typed-funnel", "typed-funnel", None)
         .expect("V2 reader selected by the stored row");
-    assert!(typed_html.contains("Welcome to your new funnel"));
+    assert!(typed_html.contains("A clear service offer"));
 }
 
 #[test]
@@ -217,8 +293,9 @@ fn v2_page_projection_is_bounded_and_does_not_expose_document_copy() {
     let projection = v2_page_projection(&document);
     let serialized = serde_json::to_string(&projection).expect("projection JSON");
 
-    assert_eq!(projection.len(), 1);
+    assert_eq!(projection.len(), 2);
     assert_eq!(projection[0]["title"], "Home");
+    assert_eq!(projection[1]["slug"], "request-received");
     assert!(!serialized.contains("Welcome to your new funnel"));
     assert!(!serialized.contains("document_json"));
     assert!(serialized.len() < 16 * 1024);
@@ -296,7 +373,33 @@ fn every_blueprint_has_a_bounded_renderable_initial_snapshot() {
             &typed.revision().render_manifest_json,
         )
         .expect("typed blueprint renders");
-        assert!(html.contains("Welcome to your new funnel"));
+        assert_eq!(
+            document["pages"].as_array().map(Vec::len),
+            Some(if blueprint == FunnelBlueprint::LeadGen {
+                2
+            } else {
+                1
+            })
+        );
+        assert_eq!(
+            document["forms"].as_array().map(Vec::len),
+            Some(if blueprint == FunnelBlueprint::LeadGen {
+                1
+            } else {
+                0
+            })
+        );
+        assert!(!typed.revision().data_json.contains("example.com"));
+        assert!(!html.contains("example.com"));
+        if blueprint == FunnelBlueprint::LeadGen {
+            assert!(html.contains("A clear service offer"));
+            assert!(
+                html.contains("name=\"project_details\" rows=\"4\" maxlength=\"8192\" required")
+            );
+        } else {
+            assert!(html.contains("Welcome to your new funnel"));
+            assert!(html.contains("Choose a real destination before adding a call to action."));
+        }
     }
 }
 

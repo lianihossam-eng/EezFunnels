@@ -174,6 +174,13 @@ try {
   assert.equal(await publicLanguage.inputValue(), "fr");
   await tabUntil(
     page,
+    (active) => active.tag === "INPUT" && active.type === "radio",
+    "blueprint options",
+  );
+  for (let index = 0; index < 4; index += 1) await pressKeyboard(page, "ArrowDown");
+  assert.equal(await page.locator('input[name="blueprint"]:checked').inputValue(), "lead_gen");
+  await tabUntil(
+    page,
     (active) => active.tag === "BUTTON" && hasName(active, "Create funnel"),
     "Create funnel submit button",
   );
@@ -189,6 +196,7 @@ try {
     createRequestPromise,
   ]);
   assert.equal(createRequest.postDataJSON()?.language, "fr");
+  assert.equal(createRequest.postDataJSON()?.blueprint, "lead_gen");
   const created = await responseJson(createResponse, 201, "Create funnel");
   const createdV2FunnelId = created.funnel?.id;
   assert.equal(typeof createdV2FunnelId, "string");
@@ -201,25 +209,25 @@ try {
   await page.getByRole("link", { name: funnelName }).click();
   await page.getByRole("heading", { name: funnelName }).waitFor();
   await page.locator(".editor-section-list .text-button").first().waitFor();
-  await page.locator(".editor-section-list .text-button").first().click();
-  const frenchFormResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
-  );
-  await page.getByRole("button", { name: "Add form" }).click();
-  assert.equal((await frenchFormResponsePromise).status(), 200);
+  await page.locator(".editor-section-list .text-button").nth(2).click();
   const frenchPurpose = page.getByLabel("Submission purpose");
   await frenchPurpose.waitFor();
-  assert.equal(await frenchPurpose.inputValue(), "Répondre à cette demande.");
+  assert.equal(await frenchPurpose.inputValue(), "Demande de service");
   assert.equal(
     await page.getByLabel("Required request consent").inputValue(),
-    "J’accepte d’être contacté au sujet de cette demande.",
+    "J’ai pris connaissance des informations relatives à cette demande.",
   );
   const frenchPreview = page.frameLocator(".editor-preview-frame");
   const frenchPreviewForm = frenchPreview.locator("form[data-preview='true']");
   await frenchPreviewForm.getByLabel("Votre nom").waitFor();
   await frenchPreviewForm.getByLabel("Adresse e-mail").waitFor();
+  await frenchPreviewForm.getByLabel("Décrivez votre besoin").waitFor();
+  assert.equal(await frenchPreviewForm.getByLabel("Votre nom").getAttribute("required"), null);
+  assert.equal(await frenchPreviewForm.getByLabel("Adresse e-mail").getAttribute("required"), "");
+  assert.equal(await frenchPreviewForm.getByLabel("Décrivez votre besoin").evaluate((element) => element.tagName), "TEXTAREA");
   await frenchPreviewForm.getByRole("button", { name: "Envoyer" }).waitFor();
-  assert.equal(await frenchPreview.getByText("Merci, votre demande a bien été reçue.").count(), 1);
+  assert.equal(await frenchPreview.getByText("Demande de service").count(), 1);
+  assert.equal(await frenchPreview.locator('a[href*="example.com"]').count(), 0);
 
   const frenchTextFieldResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
@@ -243,8 +251,27 @@ try {
   );
   await page.getByRole("button", { name: "Add page" }).click();
   assert.equal((await frenchPageResponsePromise).status(), 200);
-  await page.getByLabel("Current page").selectOption("page-home");
+  const currentPage = page.getByLabel("Current page");
+  await currentPage.selectOption("page-home");
+  await page.locator(".editor-section-list .text-button").nth(2).click();
   const resultDestination = page.getByLabel("After submission");
+  assert.equal(await resultDestination.inputValue(), "page-request-received");
+  const initialConfirmation = resultDestination.locator('option[value="page-request-received"]');
+  assert.equal(await initialConfirmation.textContent(), "Success page: Demande reçue");
+  const receiptPageSelector = page.getByLabel("Current page");
+  await receiptPageSelector.selectOption("page-request-received");
+  await page.getByRole("button", { name: "Delete page Demande reçue" }).click();
+  const deleteReceiptDialog = page.getByRole("dialog", { name: "Delete Demande reçue?" });
+  await deleteReceiptDialog.waitFor({ state: "visible" });
+  const deleteReceiptResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await deleteReceiptDialog.getByRole("button", { name: "Delete page", exact: true }).click();
+  assert.equal((await deleteReceiptResponsePromise).status(), 200);
+  await currentPage.selectOption("page-home");
+  await page.locator(".editor-section-list .text-button").nth(2).click();
+  assert.equal(await resultDestination.inputValue(), "inline");
+  await frenchPreview.getByText("Merci.").waitFor({ state: "attached" });
   const frenchSuccessPageId = await resultDestination.locator("option").evaluateAll((options) =>
     options.find((option) => option.label === "Success page: Étape 2")?.value,
   );
@@ -253,13 +280,16 @@ try {
     (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
   );
   await resultDestination.selectOption(frenchSuccessPageId);
-  assert.equal((await successPageModeResponsePromise).status(), 200);
+  const successPageModeResponse = await successPageModeResponsePromise;
+  assert.equal(successPageModeResponse.status(), 200);
   const inlineResultResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
   );
   await resultDestination.selectOption("inline");
   assert.equal((await inlineResultResponsePromise).status(), 200);
-  await frenchPreview.getByText("Merci, votre demande a bien été reçue.").waitFor({ state: "attached" });
+  await frenchPreview.getByText("Merci, votre demande a bien été reçue.").waitFor({
+    state: "attached",
+  });
 
   await page.getByLabel("Block type").selectOption("heading");
   const frenchBlockResponsePromise = page.waitForResponse(

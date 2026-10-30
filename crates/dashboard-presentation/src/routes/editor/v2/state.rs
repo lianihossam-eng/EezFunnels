@@ -1266,7 +1266,7 @@ mod tests {
     }
 
     fn document() -> DocumentV2 {
-        DocumentV2::starter("funnel-a", BlueprintId::LeadGen, ThemePreset::Minimal)
+        DocumentV2::starter("funnel-a", BlueprintId::Tripwire, ThemePreset::Minimal)
             .expect("valid V2 starter")
     }
 

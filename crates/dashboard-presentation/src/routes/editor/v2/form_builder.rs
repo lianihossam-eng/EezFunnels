@@ -823,9 +823,13 @@ pub(super) fn V2FormEditor(state: Signal<V2EditorState>, form: FormV2, locked: b
                             });
                         }
                     },
-                    option { value: "inline", "Inline confirmation" }
+                    option { value: "inline", selected: result_value == "inline", "Inline confirmation" }
                     for page in pages.iter() {
-                        option { value: "{page.id().as_str()}", "Success page: {page.title()}" }
+                        option {
+                            value: "{page.id().as_str()}",
+                            selected: result_value == page.id().as_str(),
+                            "Success page: {page.title()}"
+                        }
                     }
                 }
             }

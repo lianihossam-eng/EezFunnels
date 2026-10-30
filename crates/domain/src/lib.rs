@@ -234,17 +234,21 @@ impl FunnelBlueprint {
             Self::Vsl => "Video sales letter",
             Self::Webinar => "Webinar",
             Self::Launch => "Product launch",
-            Self::LeadGen => "Lead generation",
+            Self::LeadGen => "Service inquiry",
         }
     }
 
     pub const fn description(self) -> &'static str {
         match self {
-            Self::Tripwire => "A focused page for a small first offer.",
-            Self::Vsl => "A presentation-led offer with customer proof.",
-            Self::Webinar => "An event page for a live or recorded session.",
-            Self::Launch => "A product announcement with benefits and proof.",
-            Self::LeadGen => "A useful resource offered in exchange for a lead.",
+            Self::Tripwire => "Page outline only; checkout and payment are not included.",
+            Self::Vsl => {
+                "Video sales letter outline only; video blocks, embeds, and checkout are not included."
+            }
+            Self::Webinar => "Event page outline; registration and booking are not included.",
+            Self::Launch => {
+                "Product launch page outline; checkout and campaign automation are not included."
+            }
+            Self::LeadGen => "Working service inquiry form with an offer page and confirmation.",
         }
     }
 }

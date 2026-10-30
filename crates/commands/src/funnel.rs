@@ -377,6 +377,11 @@ fn convert_v1_to_v2(
         }]
     })?;
 
+    if let Some(pages) = document_json.get_mut("pages").and_then(Value::as_array_mut) {
+        pages.truncate(1);
+    }
+    document_json["forms"] = Value::Array(Vec::new());
+
     if let Some(primary_color) = &source.snapshot.theme_overrides.primary_color {
         document_json["theme"]["overrides"]["colors"]["color-primary"] =
             serde_json::json!(primary_color);

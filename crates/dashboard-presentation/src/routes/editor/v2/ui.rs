@@ -2058,7 +2058,7 @@ fn V2ThemeStyleControl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eez_domain::document_v2::{BlueprintId, IdKind, IdSource};
+    use eez_domain::document_v2::{BlockId, BlueprintId, IdKind, IdSource};
     use eez_domain::ThemePreset;
 
     struct TestIds(u32);
@@ -2074,26 +2074,25 @@ mod tests {
     }
 
     fn document() -> DocumentV2 {
-        DocumentV2::starter("funnel-a", BlueprintId::LeadGen, ThemePreset::Minimal)
+        DocumentV2::starter("funnel-a", BlueprintId::Tripwire, ThemePreset::Minimal)
             .expect("valid V2 starter")
     }
 
     #[test]
     fn button_action_edit_preserves_its_label() {
-        let document = document();
-        let button = document
-            .pages()
-            .iter()
-            .flat_map(|page| page.sections())
-            .flat_map(|section| section.blocks())
-            .find(|block| matches!(block, BlockV2::Button { .. }))
-            .expect("starter document includes a button block");
-        let expected_label = match button {
+        let button = BlockV2::Button {
+            id: BlockId::parse("test-button").expect("valid button ID"),
+            label: "Contact the service provider".to_owned(),
+            action: ActionV2::ExternalHttps {
+                url: "https://service.example.test/contact".to_owned(),
+            },
+        };
+        let expected_label = match &button {
             BlockV2::Button { label, .. } => label.clone(),
             _ => unreachable!("selected block is a button"),
         };
         let NewBlock::Button { label, action } = block_value_with_action(
-            button,
+            &button,
             ActionV2::ExternalHttps {
                 url: "https://example.invalid".to_owned(),
             },

@@ -227,7 +227,7 @@ pub(super) fn Funnels() -> Element {
             div { class: "dialog-heading",
                 p { class: "eyebrow", "New workspace asset" }
                 h2 { id: "create-funnel-title", "Create a funnel" }
-                p { id: "create-funnel-description", "Choose a starting point. You can edit every section later." }
+                p { id: "create-funnel-description", "Choose a page outline or a working service inquiry flow. The other blueprints do not include checkout, registration, or automation." }
             }
             form {
                 onsubmit: move |event| {
@@ -579,6 +579,8 @@ mod tests {
 
         assert_eq!(html.matches("<input").count(), 6, "{html}");
         assert_eq!(html.matches("disabled").count(), 7, "{html}");
+        assert!(html.contains("Page outline only; checkout and payment are not included."));
+        assert!(html.contains("Working service inquiry form with an offer page and confirmation."));
     }
 
     #[test]

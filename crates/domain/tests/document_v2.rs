@@ -1,8 +1,8 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
-    FontFamily, FormId, FormPresentation, FormSubmissionIssueCode, FormSubmissionIssueTarget,
-    FormSubmissionValue, IdKind, IdSource, PublicLanguage, SectionKind, ThemeColors,
-    ThemeOverrides, TypeScale,
+    FontFamily, FormField, FormId, FormPresentation, FormResult, FormSubmissionIssueCode,
+    FormSubmissionIssueTarget, FormSubmissionValue, IdKind, IdSource, PublicLanguage, SectionKind,
+    TextPresentation, ThemeColors, ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -64,7 +64,7 @@ fn form_fields_expose_the_submission_key_and_owner_facing_label() {
 
 #[test]
 fn theme_override_edit_updates_resolved_tokens_and_rejects_invalid_colors() {
-    let document = DocumentV2::starter("funnel-theme", BlueprintId::LeadGen, ThemePreset::Minimal)
+    let document = DocumentV2::starter("funnel-theme", BlueprintId::Tripwire, ThemePreset::Minimal)
         .expect("starter document");
     let mut ids = TestIds(0);
     let overrides = ThemeOverrides {
@@ -306,11 +306,35 @@ fn french_language_defaults_are_generated_without_rewriting_authored_copy() {
     assert_eq!(french.pages()[0].title(), "Accueil");
     assert_eq!(french.public_language(), PublicLanguage::French);
     assert!(String::from_utf8_lossy(french.canonical_bytes()).contains("\"language\":\"fr\""));
-    assert!(french.pages()[0].sections()[0].blocks().iter().any(|block| {
-        matches!(block, BlockV2::Heading { text, .. } if text == "Bienvenue dans votre nouvel entonnoir")
-    }));
+    assert!(french.pages()[0].sections()[0]
+        .blocks()
+        .iter()
+        .any(|block| {
+            matches!(block, BlockV2::Heading { text, .. } if text == "Une offre de service claire")
+        }));
+    assert_eq!(french.pages()[1].title(), "Demande reçue");
+    assert_eq!(french.forms()[0].purpose(), "Demande de service");
+    assert_eq!(
+        french.forms()[0].request_consent().copy_version().as_str(),
+        "request-ack-service-fr"
+    );
+    assert_eq!(
+        french.forms()[0].request_consent().copy(),
+        "J’ai pris connaissance des informations relatives à cette demande."
+    );
+    assert_eq!(
+        french.forms()[0].fields()[2].label(),
+        "Décrivez votre besoin"
+    );
 
-    let section = french.pages()[0]
+    let french_page_base = DocumentV2::starter_with_language(
+        "funnel-fr-page-base",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+        Some(PublicLanguage::French),
+    )
+    .expect("French page-base starter");
+    let section = french_page_base.pages()[0]
         .sections()
         .iter()
         .find(|section| section.section_type() == SectionKind::Cta)
@@ -318,7 +342,7 @@ fn french_language_defaults_are_generated_without_rewriting_authored_copy() {
         .id()
         .clone();
     let mut ids = TestIds(0);
-    let french_with_form = french
+    let french_with_form = french_page_base
         .apply(
             Edit::CreateForm {
                 section,
@@ -609,7 +633,7 @@ fn explicit_v2_starter_creates_a_native_editable_document_without_v1_conversion(
     .expect("valid native V2 starter");
 
     assert_eq!(document.funnel_id().as_str(), "new-funnel");
-    assert_eq!(document.pages().len(), 1);
+    assert_eq!(document.pages().len(), 2);
     assert_eq!(
         document.pages()[0]
             .sections()
@@ -633,7 +657,69 @@ fn explicit_v2_starter_creates_a_native_editable_document_without_v1_conversion(
         8
     );
     assert!(!document.has_images());
-    assert!(!document.has_forms());
+    assert!(document.has_forms());
+    assert_eq!(document.pages()[1].slug(), "request-received");
+    assert!(document.pages()[1].noindex());
+    assert_eq!(document.forms().len(), 1);
+    let form = &document.forms()[0];
+    assert!(matches!(
+        form.fields()[0],
+        FormField::Text {
+            required: false,
+            presentation: TextPresentation::SingleLine,
+            ..
+        }
+    ));
+    assert!(matches!(
+        form.fields()[1],
+        FormField::Email { required: true, .. }
+    ));
+    assert!(matches!(
+        form.fields()[2],
+        FormField::Text {
+            required: true,
+            presentation: TextPresentation::Multiline,
+            ..
+        }
+    ));
+    assert!(form.marketing_opt_in().is_none());
+    assert!(matches!(
+        form.result(),
+        FormResult::SuccessPage { page_id } if page_id.as_str() == "page-request-received"
+    ));
+    assert!(document.pages()[0]
+        .sections()
+        .iter()
+        .flat_map(|section| section.blocks())
+        .any(|block| matches!(block, BlockV2::Form { form_id, .. } if form_id.as_str() == "form-service-inquiry")));
+
+    let accepted_values = std::collections::BTreeMap::from([
+        ("email".to_owned(), "visitor@example.test".to_owned()),
+        (
+            "project_details".to_owned(),
+            "I need help preparing my shop for a move.".to_owned(),
+        ),
+    ]);
+    let accepted = validate_form_submission(form, &accepted_values, true, false)
+        .expect("name is optional and request fields are valid");
+    assert_eq!(accepted.values().get("name"), None);
+    assert!(!accepted.marketing_opt_in());
+
+    let missing_request_consent = validate_form_submission(form, &accepted_values, false, false)
+        .expect_err("request acknowledgement is required");
+    assert!(missing_request_consent.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::RequestConsent
+            && issue.code == FormSubmissionIssueCode::RequestConsentRequired
+    }));
+
+    let missing_details =
+        std::collections::BTreeMap::from([("email".to_owned(), "visitor@example.test".to_owned())]);
+    let rejected = validate_form_submission(form, &missing_details, true, false)
+        .expect_err("project details are required");
+    assert!(rejected.issues.iter().any(|issue| {
+        issue.target == FormSubmissionIssueTarget::Field("field-project-details".to_owned())
+            && issue.code == FormSubmissionIssueCode::Required
+    }));
 }
 
 #[test]

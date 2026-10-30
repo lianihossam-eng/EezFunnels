@@ -104,7 +104,7 @@ try {
         "Content-Type": "application/json",
         "Idempotency-Key": `media-create-${randomUUID()}`,
       },
-      body: JSON.stringify({ name: "Media library smoke", blueprint: "lead_gen" }),
+      body: JSON.stringify({ name: "Media library smoke", blueprint: "tripwire" }),
     }),
     201,
     "Create V2 funnel",
@@ -173,6 +173,7 @@ try {
   const baseRevisionId = documentResponse.headers.get("x-funnel-revision-id");
   assert.ok(baseRevisionId);
   let document = JSON.parse(await documentResponse.text());
+  assert.equal(document.forms.length, 0, "tripwire fixture starts without a generated form");
   const entryPage = document.pages.find((candidate) => candidate.id === document.entry_page_id);
   assert.ok(entryPage);
   const imageLocation = entryPage.sections

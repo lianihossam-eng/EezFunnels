@@ -101,6 +101,10 @@ fn escape_xml_text(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eez_domain::{
+        document_v2::{BlueprintId, DocumentV2},
+        ThemePreset,
+    };
     use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
     use url::Url;
 
@@ -184,6 +188,24 @@ mod tests {
         assert!(sitemap.contains("https://funnels.example/f/private-offer"));
         assert!(!sitemap.contains("internal-step"));
         assert_eq!(sitemap.matches("<url>").count(), 4);
+    }
+
+    #[test]
+    fn service_starter_confirmation_is_noindex_and_omitted_from_the_sitemap() {
+        let origin = Url::parse("https://funnels.example/").expect("valid origin");
+        let document =
+            DocumentV2::starter("service-funnel", BlueprintId::LeadGen, ThemePreset::Minimal)
+                .expect("service starter");
+        assert!(document.pages()[1].noindex());
+        let data_json = std::str::from_utf8(document.canonical_bytes()).expect("canonical JSON");
+        let sitemap = build_sitemap(
+            &origin,
+            &[revision("service-offer", "service-funnel", 2, data_json)],
+        )
+        .expect("valid service starter revision");
+
+        assert!(sitemap.contains("https://funnels.example/f/service-offer"));
+        assert!(!sitemap.contains("request-received"));
     }
 
     #[test]
