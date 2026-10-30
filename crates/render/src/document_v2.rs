@@ -3,16 +3,13 @@ use std::fmt::{Display, Formatter};
 
 use eez_domain::document_v2::{
     ActionV2, BlockV2, DocumentV2, FormField, FormId, FormResult, FormSubmissionIssue,
-    FormSubmissionIssueCode, FormSubmissionIssueTarget, FormV2, PageId, SectionKind,
+    FormSubmissionIssueCode, FormSubmissionIssueTarget, FormV2, PageId, PublicLanguage,
+    SectionKind, TextPresentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v7";
-const PREVIOUS_RENDERER_VERSION_V2: &str = "renderer-v6";
-const EARLIER_RENDERER_VERSION_V2: &str = "renderer-v5";
-const OLDER_RENDERER_VERSION_V2: &str = "renderer-v4";
-const OLDEST_RENDERER_VERSION_V2: &str = "renderer-v3";
+pub const RENDERER_VERSION_V2: &str = "renderer-v8";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -26,7 +23,100 @@ pub struct FormSubmissionFeedback<'a> {
     pub values: &'a BTreeMap<String, String>,
     pub request_consent_accepted: bool,
     pub marketing_opt_in: bool,
-    pub summary_message: Option<&'a str>,
+    pub notice: Option<FormRecoveryNotice>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormRecoveryNotice {
+    SubmissionUncertain,
+    RateLimited,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormErrorPageKind {
+    StaleRevision,
+    KeyReuseMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RendererFeature {
+    Multipage,
+    Forms,
+    Images,
+    Metadata,
+    PublicLanguage,
+    FormPresentation,
+    MultilineText,
+}
+
+#[derive(Clone, Copy)]
+struct RendererProfile {
+    version: &'static str,
+    features: &'static [RendererFeature],
+}
+
+impl RendererProfile {
+    fn supports(self, feature: RendererFeature) -> bool {
+        self.features.contains(&feature)
+    }
+}
+
+const RENDERER_V3_FEATURES: &[RendererFeature] = &[];
+const RENDERER_V4_FEATURES: &[RendererFeature] = &[RendererFeature::Multipage];
+const RENDERER_V5_FEATURES: &[RendererFeature] =
+    &[RendererFeature::Multipage, RendererFeature::Forms];
+const RENDERER_V6_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+];
+const RENDERER_V7_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+    RendererFeature::Metadata,
+];
+const RENDERER_V8_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+    RendererFeature::Metadata,
+    RendererFeature::PublicLanguage,
+    RendererFeature::FormPresentation,
+    RendererFeature::MultilineText,
+];
+const RENDERER_PROFILES: &[RendererProfile] = &[
+    RendererProfile {
+        version: "renderer-v3",
+        features: RENDERER_V3_FEATURES,
+    },
+    RendererProfile {
+        version: "renderer-v4",
+        features: RENDERER_V4_FEATURES,
+    },
+    RendererProfile {
+        version: "renderer-v5",
+        features: RENDERER_V5_FEATURES,
+    },
+    RendererProfile {
+        version: "renderer-v6",
+        features: RENDERER_V6_FEATURES,
+    },
+    RendererProfile {
+        version: "renderer-v7",
+        features: RENDERER_V7_FEATURES,
+    },
+    RendererProfile {
+        version: RENDERER_VERSION_V2,
+        features: RENDERER_V8_FEATURES,
+    },
+];
+
+fn renderer_profile(version: &str) -> Option<RendererProfile> {
+    RENDERER_PROFILES
+        .iter()
+        .copied()
+        .find(|profile| profile.version == version)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,6 +129,9 @@ pub enum V2RenderError {
     ImagesNotEnabled,
     FormsNotEnabled,
     MetadataNotEnabled,
+    PublicLanguageNotEnabled,
+    FormPresentationNotEnabled,
+    MultilineTextNotEnabled,
     SerializationFailed,
 }
 
@@ -53,6 +146,9 @@ impl Display for V2RenderError {
             Self::ImagesNotEnabled => "validation/v2_images_not_enabled",
             Self::FormsNotEnabled => "validation/v2_forms_not_enabled",
             Self::MetadataNotEnabled => "validation/v2_metadata_not_enabled",
+            Self::PublicLanguageNotEnabled => "validation/v2_public_language_not_enabled",
+            Self::FormPresentationNotEnabled => "validation/v2_form_presentation_not_enabled",
+            Self::MultilineTextNotEnabled => "validation/v2_multiline_text_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -183,7 +279,9 @@ pub fn render_owner_preview_with_assets(
     assets: &[AssetDigestRecord],
 ) -> Result<String, V2RenderError> {
     let assets = canonical_asset_records(document, assets)?;
-    render_page(document, page_id, LinkMode::Inert, &assets, true, None)
+    let profile =
+        renderer_profile(RENDERER_VERSION_V2).ok_or(V2RenderError::UnsupportedRenderer)?;
+    render_page(document, page_id, LinkMode::Inert, &assets, profile, None)
 }
 
 pub fn render_published(
@@ -285,58 +383,41 @@ fn render_published_route_with_optional_feedback(
         revision.render_manifest_json,
         assets,
     )?;
-    if document.has_forms()
-        && !matches!(
-            manifest.renderer_version(),
-            RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2 | EARLIER_RENDERER_VERSION_V2
-        )
-    {
+    let profile =
+        renderer_profile(manifest.renderer_version()).ok_or(V2RenderError::UnsupportedRenderer)?;
+    if document.has_forms() && !profile.supports(RendererFeature::Forms) {
         return Err(V2RenderError::FormsNotEnabled);
     }
-    let (page, link_mode) = match manifest.renderer_version() {
-        OLDEST_RENDERER_VERSION_V2 => {
-            if page_slug.is_some() {
-                return Err(V2RenderError::PageMissing);
-            }
-            (
-                document
-                    .page(document.entry_page_id())
-                    .ok_or(V2RenderError::PageMissing)?,
-                LinkMode::PublishedV3,
-            )
+    let (page, link_mode) = if profile.supports(RendererFeature::Multipage) {
+        let page = match page_slug {
+            Some(slug) => document
+                .pages()
+                .iter()
+                .find(|page| page.slug() == slug)
+                .ok_or(V2RenderError::PageMissing)?,
+            None => document
+                .page(document.entry_page_id())
+                .ok_or(V2RenderError::PageMissing)?,
+        };
+        (
+            page,
+            LinkMode::Published {
+                funnel_slug: public_funnel_slug,
+            },
+        )
+    } else {
+        if page_slug.is_some() {
+            return Err(V2RenderError::PageMissing);
         }
-        OLDER_RENDERER_VERSION_V2
-        | EARLIER_RENDERER_VERSION_V2
-        | PREVIOUS_RENDERER_VERSION_V2
-        | RENDERER_VERSION_V2 => {
-            let page = match page_slug {
-                Some(slug) => document
-                    .pages()
-                    .iter()
-                    .find(|page| page.slug() == slug)
-                    .ok_or(V2RenderError::PageMissing)?,
-                None => document
-                    .page(document.entry_page_id())
-                    .ok_or(V2RenderError::PageMissing)?,
-            };
-            (
-                page,
-                LinkMode::Published {
-                    funnel_slug: public_funnel_slug,
-                },
-            )
-        }
-        _ => return Err(V2RenderError::UnsupportedRenderer),
+        (
+            document
+                .page(document.entry_page_id())
+                .ok_or(V2RenderError::PageMissing)?,
+            LinkMode::PublishedV3,
+        )
     };
     let assets = canonical_asset_records(&document, assets)?;
-    render_page(
-        &document,
-        page.id(),
-        link_mode,
-        &assets,
-        manifest.renderer_version() == RENDERER_VERSION_V2,
-        feedback,
-    )
+    render_page(&document, page.id(), link_mode, &assets, profile, feedback)
 }
 
 pub fn validate_revision_v2(
@@ -419,30 +500,54 @@ fn validate_manifest(
     {
         return Err(V2RenderError::IdentityMismatch);
     }
-    if !matches!(
-        manifest.renderer_version.as_str(),
-        RENDERER_VERSION_V2
-            | PREVIOUS_RENDERER_VERSION_V2
-            | EARLIER_RENDERER_VERSION_V2
-            | OLDER_RENDERER_VERSION_V2
-            | OLDEST_RENDERER_VERSION_V2
-    ) || manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
+    let profile =
+        renderer_profile(&manifest.renderer_version).ok_or(V2RenderError::UnsupportedRenderer)?;
+    if manifest.document_validator_version != DOCUMENT_VALIDATOR_VERSION_V2
         || manifest.canonicalizer_profile != CANONICALIZER_PROFILE_V2
         || manifest.theme_profile_version != THEME_PROFILE_VERSION_V2
     {
         return Err(V2RenderError::UnsupportedRenderer);
     }
-    if !renderer_supports_metadata(&manifest.renderer_version)
+    if !profile.supports(RendererFeature::Metadata)
         && document.pages().iter().any(|page| {
             page.seo_title().is_some() || page.seo_description().is_some() || page.noindex()
         })
     {
         return Err(V2RenderError::MetadataNotEnabled);
     }
+    if document.explicit_language().is_some() && !profile.supports(RendererFeature::PublicLanguage)
+    {
+        return Err(V2RenderError::PublicLanguageNotEnabled);
+    }
+    if document
+        .forms()
+        .iter()
+        .any(|form| form.presentation().is_some())
+        && !profile.supports(RendererFeature::FormPresentation)
+    {
+        return Err(V2RenderError::FormPresentationNotEnabled);
+    }
+    if document
+        .forms()
+        .iter()
+        .flat_map(|form| form.fields())
+        .any(|field| {
+            matches!(
+                field,
+                FormField::Text {
+                    presentation: TextPresentation::Multiline,
+                    ..
+                }
+            )
+        })
+        && !profile.supports(RendererFeature::MultilineText)
+    {
+        return Err(V2RenderError::MultilineTextNotEnabled);
+    }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let assets = canonical_asset_records(document, assets)?;
-    if !renderer_supports_images(&manifest.renderer_version) && !assets.is_empty() {
+    if !profile.supports(RendererFeature::Images) && !assets.is_empty() {
         return Err(V2RenderError::ImagesNotEnabled);
     }
     let assets_bytes = serde_json_canonicalizer::to_vec(&assets)
@@ -454,17 +559,6 @@ fn validate_manifest(
         return Err(V2RenderError::DigestMismatch);
     }
     Ok(())
-}
-
-fn renderer_supports_images(renderer_version: &str) -> bool {
-    matches!(
-        renderer_version,
-        RENDERER_VERSION_V2 | PREVIOUS_RENDERER_VERSION_V2
-    )
-}
-
-fn renderer_supports_metadata(renderer_version: &str) -> bool {
-    renderer_version == RENDERER_VERSION_V2
 }
 
 fn canonical_asset_records(
@@ -537,13 +631,25 @@ fn render_page(
     page_id: &PageId,
     link_mode: LinkMode<'_>,
     assets: &[AssetDigestRecord],
-    metadata_enabled: bool,
+    renderer: RendererProfile,
     feedback: Option<&FormSubmissionFeedback<'_>>,
 ) -> Result<String, V2RenderError> {
     let page = document.page(page_id).ok_or(V2RenderError::PageMissing)?;
-    let profile = document.resolved_theme_profile();
+    let theme_profile = document.resolved_theme_profile();
+    let language = if renderer.supports(RendererFeature::PublicLanguage) {
+        document.public_language()
+    } else {
+        PublicLanguage::English
+    };
     let mut html = String::with_capacity(document.canonical_bytes().len() * 2);
-    html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>");
+    html.push_str("<!doctype html><html lang=\"");
+    html.push_str(if renderer.supports(RendererFeature::PublicLanguage) {
+        language.as_str()
+    } else {
+        PublicLanguage::English.as_str()
+    });
+    html.push_str("\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>");
+    let metadata_enabled = renderer.supports(RendererFeature::Metadata);
     let title = if metadata_enabled {
         page.head_title()
     } else {
@@ -579,39 +685,43 @@ fn render_page(
     }
     html.push_str(".v2-image{display:block;max-width:100%;height:auto}");
     html.push_str("#funnel{--color-background:");
-    html.push_str(&profile.desktop["color-background"]);
+    html.push_str(&theme_profile.desktop["color-background"]);
     html.push_str(";--color-border:");
-    html.push_str(&profile.desktop["color-border"]);
+    html.push_str(&theme_profile.desktop["color-border"]);
     html.push_str(";--color-muted:");
-    html.push_str(&profile.desktop["color-muted"]);
+    html.push_str(&theme_profile.desktop["color-muted"]);
     html.push_str(";--color-on-primary:");
-    html.push_str(&profile.desktop["color-on-primary"]);
+    html.push_str(&theme_profile.desktop["color-on-primary"]);
     html.push_str(";--color-primary:");
-    html.push_str(&profile.desktop["color-primary"]);
+    html.push_str(&theme_profile.desktop["color-primary"]);
     html.push_str(";--color-surface:");
-    html.push_str(&profile.desktop["color-surface"]);
+    html.push_str(&theme_profile.desktop["color-surface"]);
     html.push_str(";--color-text:");
-    html.push_str(&profile.desktop["color-text"]);
+    html.push_str(&theme_profile.desktop["color-text"]);
     html.push_str(";--font-family:");
-    html.push_str(&profile.desktop["font-family"]);
+    html.push_str(&theme_profile.desktop["font-family"]);
     html.push_str(";--font-scale:");
-    html.push_str(&profile.desktop["font-scale"]);
+    html.push_str(&theme_profile.desktop["font-scale"]);
     html.push_str(";--radius-button:");
-    html.push_str(&profile.desktop["radius-button"]);
+    html.push_str(&theme_profile.desktop["radius-button"]);
     html.push_str(";--radius-card:");
-    html.push_str(&profile.desktop["radius-card"]);
+    html.push_str(&theme_profile.desktop["radius-card"]);
     html.push_str(";--shadow-card:");
-    html.push_str(&profile.desktop["shadow-card"]);
+    html.push_str(&theme_profile.desktop["shadow-card"]);
     html.push_str(";--spacing-section:");
-    html.push_str(&profile.desktop["spacing-section"]);
+    html.push_str(&theme_profile.desktop["spacing-section"]);
     html.push_str(";--content-width:");
-    html.push_str(&profile.desktop["content-width"]);
+    html.push_str(&theme_profile.desktop["content-width"]);
     html.push('}');
     html.push_str("@media (min-width:640px) and (max-width:1023px){#funnel{");
-    push_profile_variables(&mut html, &profile.tablet);
+    push_profile_variables(&mut html, &theme_profile.tablet);
     html.push_str("}}@media (max-width:639px){#funnel{");
-    push_profile_variables(&mut html, &profile.mobile);
-    html.push_str("}}</style></head><body><main id=\"funnel\"");
+    push_profile_variables(&mut html, &theme_profile.mobile);
+    html.push_str("}}");
+    if renderer.supports(RendererFeature::MultilineText) {
+        html.push_str(".v2-form textarea{width:100%;min-height:7rem;padding:.6rem .75rem;border:1px solid var(--color-border);border-radius:var(--radius-button);background:var(--color-background);color:var(--color-text);font:inherit;resize:vertical}");
+    }
+    html.push_str("</style></head><body><main id=\"funnel\"");
     if matches!(
         link_mode,
         LinkMode::PublishedV3
@@ -718,7 +828,15 @@ fn render_page(
                             .ok_or(V2RenderError::IdentityMismatch)?;
                         let form_feedback =
                             feedback.filter(|feedback| feedback.form_id == form.id());
-                        push_form(&mut html, form, page.id(), Some(funnel_slug), form_feedback);
+                        push_form(
+                            &mut html,
+                            form,
+                            page.id(),
+                            Some(funnel_slug),
+                            language,
+                            renderer.supports(RendererFeature::PublicLanguage),
+                            form_feedback,
+                        );
                     }
                     LinkMode::Inert | LinkMode::Published { funnel_slug: None } => {
                         let form = document
@@ -726,7 +844,15 @@ fn render_page(
                             .ok_or(V2RenderError::IdentityMismatch)?;
                         let form_feedback =
                             feedback.filter(|feedback| feedback.form_id == form.id());
-                        push_form(&mut html, form, page.id(), None, form_feedback);
+                        push_form(
+                            &mut html,
+                            form,
+                            page.id(),
+                            None,
+                            language,
+                            renderer.supports(RendererFeature::PublicLanguage),
+                            form_feedback,
+                        );
                     }
                     LinkMode::PublishedV3 => return Err(V2RenderError::FormsNotEnabled),
                 },
@@ -743,6 +869,8 @@ fn push_form(
     form: &FormV2,
     page_id: &PageId,
     funnel_slug: Option<&str>,
+    language: PublicLanguage,
+    localized: bool,
     feedback: Option<&FormSubmissionFeedback<'_>>,
 ) {
     let form_id = form.id().as_str();
@@ -766,7 +894,7 @@ fn push_form(
     }
     html.push('>');
     if let Some(feedback) = feedback {
-        push_form_submission_summary(html, form, feedback);
+        push_form_submission_summary(html, form, feedback, language, localized);
     }
     html.push_str("<fieldset><legend>");
     html.push_str(&crate::escape_html_text(form.purpose()));
@@ -785,6 +913,10 @@ fn push_form(
             value.map(String::as_str),
             field_issue,
             feedback.is_some(),
+            FormCopyContext {
+                language,
+                localized,
+            },
         );
     }
     html.push_str("</fieldset>");
@@ -813,12 +945,17 @@ fn push_form(
     html.push_str(&crate::escape_html_attribute(&request_id));
     html.push_str("\">");
     html.push_str(&crate::escape_html_text(form.request_consent().copy()));
+    if localized {
+        html.push_str(" <span class=\"v2-field-requirement\">");
+        html.push_str(public_copy(language, "Required", "Obligatoire"));
+        html.push_str("</span>");
+    }
     html.push_str("</label></div>");
     if let Some(issue) = request_consent_issue {
         push_inline_form_error(
             html,
             &format!("{request_id}-error"),
-            form_submission_issue_message(issue.code),
+            form_submission_issue_message(issue.code, language, localized),
         );
     }
 
@@ -834,13 +971,61 @@ fn push_form(
         html.push_str(&crate::escape_html_attribute(&marketing_id));
         html.push_str("\">");
         html.push_str(&crate::escape_html_text(consent.copy()));
+        if localized {
+            html.push_str(" <span class=\"v2-field-requirement\">");
+            html.push_str(public_copy(language, "Optional", "Facultatif"));
+            html.push_str("</span>");
+        }
         html.push_str("</label></div>");
     }
 
-    if funnel_slug.is_some() {
-        html.push_str("<button class=\"v2-button\" type=\"submit\">Send</button></form>");
+    if localized {
+        if let Some(url) = form
+            .presentation()
+            .and_then(|presentation| presentation.information_url.as_deref())
+        {
+            html.push_str("<p class=\"v2-form-information\">");
+            if funnel_slug.is_some() {
+                html.push_str("<a href=\"");
+                html.push_str(&crate::escape_html_attribute(url));
+                html.push_str("\" rel=\"noopener noreferrer\">");
+                html.push_str(public_copy(
+                    language,
+                    "Information about this request",
+                    "Informations sur cette demande",
+                ));
+                html.push_str("</a>");
+            } else {
+                html.push_str("<span aria-disabled=\"true\">");
+                html.push_str(public_copy(
+                    language,
+                    "Information about this request",
+                    "Informations sur cette demande",
+                ));
+                html.push_str("</span>");
+            }
+            html.push_str("</p>");
+        }
+    }
+    let submit_label = if localized {
+        form.presentation()
+            .and_then(|presentation| presentation.submit_label.as_deref())
+            .unwrap_or_else(|| public_copy(language, "Send", "Envoyer"))
     } else {
-        html.push_str("<button class=\"v2-button\" type=\"button\" aria-disabled=\"true\" title=\"Preview only\">Send</button></form>");
+        "Send"
+    };
+    if funnel_slug.is_some() {
+        html.push_str("<button class=\"v2-button\" type=\"submit\">");
+        html.push_str(&crate::escape_html_text(submit_label));
+        html.push_str("</button></form>");
+    } else {
+        html.push_str(
+            "<button class=\"v2-button\" type=\"button\" aria-disabled=\"true\" title=\"",
+        );
+        html.push_str(public_copy(language, "Preview only", "Aperçu uniquement"));
+        html.push_str("\">");
+        html.push_str(&crate::escape_html_text(submit_label));
+        html.push_str("</button></form>");
     }
     if let FormResult::Inline { message } = form.result() {
         html.push_str("<p class=\"v2-form-result\" id=\"form-success-");
@@ -855,8 +1040,10 @@ fn push_form_submission_summary(
     html: &mut String,
     form: &FormV2,
     feedback: &FormSubmissionFeedback<'_>,
+    language: PublicLanguage,
+    localized: bool,
 ) {
-    if feedback.issues.is_empty() && feedback.summary_message.is_none() {
+    if feedback.issues.is_empty() && feedback.notice.is_none() {
         return;
     }
     let summary_id = format!("form-{}-errors", form.id().as_str());
@@ -872,17 +1059,38 @@ fn push_form_submission_summary(
     )));
     html.push_str("\">");
     html.push_str(if feedback.issues.is_empty() {
-        "Submission update"
+        public_copy(language, "Submission update", "Mise à jour de la demande")
     } else {
-        "There is a problem with this form"
+        public_copy(
+            language,
+            "There is a problem with this form",
+            "Ce formulaire contient une erreur",
+        )
     });
     html.push_str("</h2>");
-    if let Some(message) = feedback.summary_message {
+    if let Some(notice) = feedback.notice {
         html.push_str("<p>");
-        html.push_str(&crate::escape_html_text(message));
+        html.push_str(match notice {
+            FormRecoveryNotice::SubmissionUncertain => public_copy(
+                language,
+                "We could not confirm your submission. If you retry, keep the same answers; this form reuses the same submission key.",
+                "Nous n’avons pas pu confirmer votre demande. Pour réessayer, gardez les mêmes réponses : le formulaire réutilisera la même clé.",
+            ),
+            FormRecoveryNotice::RateLimited => public_copy(
+                language,
+                "Please wait before trying again. Your answers are kept here and this form will reuse the same submission key.",
+                "Veuillez patienter avant de réessayer. Vos réponses sont conservées ici et le formulaire réutilisera la même clé.",
+            ),
+        });
         html.push_str("</p>");
     } else {
-        html.push_str("<p>Correct the fields below and submit again.</p>");
+        html.push_str("<p>");
+        html.push_str(public_copy(
+            language,
+            "Correct the fields below and submit again.",
+            "Corrigez les champs ci-dessous puis réessayez.",
+        ));
+        html.push_str("</p>");
     }
     if !feedback.issues.is_empty() {
         html.push_str("<ul>");
@@ -900,20 +1108,28 @@ fn push_form_submission_summary(
                     html.push_str("\">");
                     html.push_str(&crate::escape_html_text(field.label()));
                     html.push_str(": ");
-                    html.push_str(form_submission_issue_message(issue.code));
+                    html.push_str(form_submission_issue_message(
+                        issue.code, language, localized,
+                    ));
                     html.push_str("</a>");
                 } else {
-                    html.push_str(form_submission_issue_message(issue.code));
+                    html.push_str(form_submission_issue_message(
+                        issue.code, language, localized,
+                    ));
                 }
             } else if issue.target == FormSubmissionIssueTarget::RequestConsent {
                 let consent_id = format!("form-{}-request-consent", form.id().as_str());
                 html.push_str("<a href=\"#");
                 html.push_str(&crate::escape_html_attribute(&consent_id));
                 html.push_str("\">");
-                html.push_str(form_submission_issue_message(issue.code));
+                html.push_str(form_submission_issue_message(
+                    issue.code, language, localized,
+                ));
                 html.push_str("</a>");
             } else {
-                html.push_str(form_submission_issue_message(issue.code));
+                html.push_str(form_submission_issue_message(
+                    issue.code, language, localized,
+                ));
             }
             html.push_str("</li>");
         }
@@ -922,17 +1138,101 @@ fn push_form_submission_summary(
     html.push_str("</div>");
 }
 
-fn form_submission_issue_message(code: FormSubmissionIssueCode) -> &'static str {
-    match code {
-        FormSubmissionIssueCode::Required => "This field is required.",
-        FormSubmissionIssueCode::InvalidValue => "Enter a valid value.",
-        FormSubmissionIssueCode::InvalidChoice => "Choose one of the available options.",
-        FormSubmissionIssueCode::RequestConsentRequired => {
-            "Confirm that you have read this information."
-        }
-        FormSubmissionIssueCode::MarketingConsentUnavailable => "Review the form and try again.",
-        FormSubmissionIssueCode::UnknownField => "Review the form and try again.",
+fn form_submission_issue_message(
+    code: FormSubmissionIssueCode,
+    language: PublicLanguage,
+    localized: bool,
+) -> &'static str {
+    if !localized || language == PublicLanguage::English {
+        return match code {
+            FormSubmissionIssueCode::Required => "This field is required.",
+            FormSubmissionIssueCode::InvalidValue => "Enter a valid value.",
+            FormSubmissionIssueCode::InvalidChoice => "Choose one of the available options.",
+            FormSubmissionIssueCode::RequestConsentRequired => {
+                "Confirm that you have read this information."
+            }
+            FormSubmissionIssueCode::MarketingConsentUnavailable
+            | FormSubmissionIssueCode::UnknownField => "Review the form and try again.",
+        };
     }
+    match code {
+        FormSubmissionIssueCode::Required => "Ce champ est obligatoire.",
+        FormSubmissionIssueCode::InvalidValue => "Saisissez une valeur valide.",
+        FormSubmissionIssueCode::InvalidChoice => "Choisissez une option disponible.",
+        FormSubmissionIssueCode::RequestConsentRequired => {
+            "Confirmez avoir pris connaissance de ces informations."
+        }
+        FormSubmissionIssueCode::MarketingConsentUnavailable
+        | FormSubmissionIssueCode::UnknownField => "Vérifiez le formulaire puis réessayez.",
+    }
+}
+
+fn public_copy(
+    language: PublicLanguage,
+    english: &'static str,
+    french: &'static str,
+) -> &'static str {
+    match language {
+        PublicLanguage::English => english,
+        PublicLanguage::French => french,
+    }
+}
+
+pub fn render_form_error_page(
+    language: PublicLanguage,
+    kind: FormErrorPageKind,
+    recovery_path: Option<&str>,
+) -> String {
+    let (title, message) = match kind {
+        FormErrorPageKind::StaleRevision => (
+            public_copy(language, "This form has changed", "Ce formulaire a été modifié"),
+            public_copy(
+                language,
+                "Reload the current page and review its information before sending your request again.",
+                "Rechargez la page actuelle et vérifiez ses informations avant d’envoyer votre demande.",
+            ),
+        ),
+        FormErrorPageKind::KeyReuseMismatch => (
+            public_copy(
+                language,
+                "Form response already used",
+                "Réponse de formulaire déjà utilisée",
+            ),
+            public_copy(
+                language,
+                "This form key is already tied to a different response. Reload the current form and enter your answers again.",
+                "Cette clé est déjà associée à une autre réponse. Rechargez le formulaire actuel et saisissez de nouveau vos réponses.",
+            ),
+        ),
+    };
+    let mut html = String::from("<!doctype html><html lang=\"");
+    html.push_str(language.as_str());
+    html.push_str("\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"robots\" content=\"noindex\"><title>");
+    html.push_str(&crate::escape_html_text(title));
+    html.push_str("</title></head><body><main><h1>");
+    html.push_str(&crate::escape_html_text(title));
+    html.push_str("</h1><p>");
+    html.push_str(&crate::escape_html_text(message));
+    html.push_str("</p>");
+    if let Some(recovery_path) = recovery_path {
+        html.push_str("<p><a href=\"");
+        html.push_str(&crate::escape_html_attribute(recovery_path));
+        html.push_str("\">");
+        html.push_str(public_copy(
+            language,
+            "Open the current form",
+            "Ouvrir le formulaire actuel",
+        ));
+        html.push_str("</a></p>");
+    }
+    html.push_str("</main></body></html>");
+    html
+}
+
+#[derive(Clone, Copy)]
+struct FormCopyContext {
+    language: PublicLanguage,
+    localized: bool,
 }
 
 fn push_form_field(
@@ -942,7 +1242,12 @@ fn push_form_field(
     value: Option<&str>,
     issue: Option<&FormSubmissionIssue>,
     is_recovery: bool,
+    copy: FormCopyContext,
 ) {
+    let FormCopyContext {
+        language,
+        localized,
+    } = copy;
     let (id, name, label, help, required) = match field {
         FormField::Text {
             id,
@@ -1004,17 +1309,20 @@ fn push_form_field(
             html.push_str(&crate::escape_html_attribute(&input_id));
             html.push_str("\">");
             html.push_str(&crate::escape_html_text(label));
+            if localized {
+                push_form_requirement(html, required, language);
+            }
             html.push_str("</label></div>");
             if let Some(issue) = issue {
                 push_inline_form_error(
                     html,
                     &format!("{input_id}-error"),
-                    form_submission_issue_message(issue.code),
+                    form_submission_issue_message(issue.code, language, localized),
                 );
             }
         }
         FormField::Select { options, .. } => {
-            push_form_label(html, label, &input_id);
+            push_form_label(html, label, &input_id, required, language, localized);
             html.push_str("<select id=\"");
             html.push_str(&crate::escape_html_attribute(&input_id));
             html.push_str("\" name=\"");
@@ -1026,7 +1334,13 @@ fn push_form_field(
             if is_recovery && value.is_none_or(str::is_empty) {
                 html.push_str(" selected");
             }
-            html.push_str(">Choose an option</option>");
+            html.push('>');
+            html.push_str(public_copy(
+                language,
+                "Choose an option",
+                "Choisissez une option",
+            ));
+            html.push_str("</option>");
             for option in options {
                 html.push_str("<option value=\"");
                 html.push_str(&crate::escape_html_attribute(option));
@@ -1043,7 +1357,7 @@ fn push_form_field(
                 push_inline_form_error(
                     html,
                     &format!("{input_id}-error"),
-                    form_submission_issue_message(issue.code),
+                    form_submission_issue_message(issue.code, language, localized),
                 );
             }
         }
@@ -1056,14 +1370,7 @@ fn push_form_field(
                 FormField::Phone { .. } => "tel",
                 FormField::Checkbox { .. } | FormField::Select { .. } => return,
             };
-            push_form_label(html, label, &input_id);
-            html.push_str("<input type=\"");
-            html.push_str(input_type);
-            html.push_str("\" id=\"");
-            html.push_str(&crate::escape_html_attribute(&input_id));
-            html.push_str("\" name=\"");
-            html.push_str(&crate::escape_html_attribute(name));
-            html.push_str("\" maxlength=\"");
+            push_form_label(html, label, &input_id, required, language, localized);
             let maximum = validation
                 .as_ref()
                 .and_then(|range| range.max_length)
@@ -1073,31 +1380,82 @@ fn push_form_field(
                     FormField::Phone { .. } => 64,
                     FormField::Checkbox { .. } | FormField::Select { .. } => 0,
                 });
-            html.push_str(&maximum.to_string());
-            html.push('"');
-            if let Some(minimum) = validation.as_ref().and_then(|range| range.min_length) {
-                html.push_str(" minlength=\"");
-                html.push_str(&minimum.to_string());
+            let minlength = validation.as_ref().and_then(|range| range.min_length);
+            let multiline = localized
+                && matches!(
+                    field,
+                    FormField::Text {
+                        presentation: TextPresentation::Multiline,
+                        ..
+                    }
+                );
+            if multiline {
+                html.push_str("<textarea id=\"");
+                html.push_str(&crate::escape_html_attribute(&input_id));
+                html.push_str("\" name=\"");
+                html.push_str(&crate::escape_html_attribute(name));
+                html.push_str("\" rows=\"4\" maxlength=\"");
+                html.push_str(&maximum.to_string());
                 html.push('"');
-            }
-            if matches!(field, FormField::Email { .. }) {
-                html.push_str(" autocomplete=\"email\"");
-            } else if matches!(field, FormField::Phone { .. }) {
-                html.push_str(" autocomplete=\"tel\"");
-            }
-            if let Some(value) = value {
-                html.push_str(" value=\"");
-                html.push_str(&crate::escape_html_attribute(value));
+                if let Some(minimum) = minlength {
+                    html.push_str(" minlength=\"");
+                    html.push_str(&minimum.to_string());
+                    html.push('"');
+                }
+                push_form_required(html, required);
+                push_form_error_attributes(
+                    html,
+                    help,
+                    &help_id,
+                    &format!("{input_id}-error"),
+                    issue,
+                );
+                html.push('>');
+                html.push('\n');
+                if let Some(value) = value {
+                    html.push_str(&crate::escape_html_text_preserving_whitespace(value));
+                }
+                html.push_str("</textarea>");
+            } else {
+                html.push_str("<input type=\"");
+                html.push_str(input_type);
+                html.push_str("\" id=\"");
+                html.push_str(&crate::escape_html_attribute(&input_id));
+                html.push_str("\" name=\"");
+                html.push_str(&crate::escape_html_attribute(name));
+                html.push_str("\" maxlength=\"");
+                html.push_str(&maximum.to_string());
                 html.push('"');
+                if let Some(minimum) = minlength {
+                    html.push_str(" minlength=\"");
+                    html.push_str(&minimum.to_string());
+                    html.push('"');
+                }
+                if matches!(field, FormField::Email { .. }) {
+                    html.push_str(" autocomplete=\"email\"");
+                } else if matches!(field, FormField::Phone { .. }) {
+                    html.push_str(" autocomplete=\"tel\"");
+                }
+                if let Some(value) = value {
+                    html.push_str(" value=\"");
+                    html.push_str(&crate::escape_html_attribute(value));
+                    html.push('"');
+                }
+                push_form_required(html, required);
+                push_form_error_attributes(
+                    html,
+                    help,
+                    &help_id,
+                    &format!("{input_id}-error"),
+                    issue,
+                );
+                html.push('>');
             }
-            push_form_required(html, required);
-            push_form_error_attributes(html, help, &help_id, &format!("{input_id}-error"), issue);
-            html.push('>');
             if let Some(issue) = issue {
                 push_inline_form_error(
                     html,
                     &format!("{input_id}-error"),
-                    form_submission_issue_message(issue.code),
+                    form_submission_issue_message(issue.code, language, localized),
                 );
             }
         }
@@ -1113,12 +1471,32 @@ fn push_form_field(
     html.push_str("</div>");
 }
 
-fn push_form_label(html: &mut String, label: &str, input_id: &str) {
+fn push_form_label(
+    html: &mut String,
+    label: &str,
+    input_id: &str,
+    required: bool,
+    language: PublicLanguage,
+    localized: bool,
+) {
     html.push_str("<label for=\"");
     html.push_str(&crate::escape_html_attribute(input_id));
     html.push_str("\">");
     html.push_str(&crate::escape_html_text(label));
+    if localized {
+        push_form_requirement(html, required, language);
+    }
     html.push_str("</label>");
+}
+
+fn push_form_requirement(html: &mut String, required: bool, language: PublicLanguage) {
+    html.push_str(" <span class=\"v2-field-requirement\">");
+    html.push_str(if required {
+        public_copy(language, "Required", "Obligatoire")
+    } else {
+        public_copy(language, "Optional", "Facultatif")
+    });
+    html.push_str("</span>");
 }
 
 fn push_form_required(html: &mut String, required: bool) {

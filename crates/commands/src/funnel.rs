@@ -3,7 +3,9 @@ use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
 use eez_domain::{
-    document_v2::{BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId},
+    document_v2::{
+        BlueprintId, DocumentV2, Edit, FormId, IdKind, IdSource, PageId, PublicLanguage,
+    },
     DomainError, FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, Funnel,
     FunnelBlueprint, FunnelId, InteractionReportPeriod, RenderManifest, Revision, RevisionId,
     Section, ThemePreset,
@@ -155,6 +157,8 @@ impl FunnelCreateCommand {
 pub struct FunnelCreateCommandV2 {
     name: String,
     blueprint: FunnelBlueprint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    language: Option<PublicLanguage>,
 }
 
 impl FunnelCreateCommandV2 {
@@ -187,10 +191,11 @@ impl FunnelCreateCommandV2 {
             &self.name,
             slug_from_name_and_id(&self.name, &funnel_id),
         )?;
-        let document = DocumentV2::starter(
+        let document = DocumentV2::starter_with_language(
             &funnel_id,
             blueprint_id(self.blueprint),
             ThemePreset::Minimal,
+            self.language,
         )
         .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let prepared = render_v2::prepare_revision(&document, &revision_id)

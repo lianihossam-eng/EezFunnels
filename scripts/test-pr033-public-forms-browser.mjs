@@ -105,7 +105,7 @@ try {
     element.type = "text";
     element.required = false;
   });
-  await recoveryPage.getByLabel("Name").fill("Grace Hopper");
+  await recoveryPage.getByLabel("Name").fill("\nGrace Hopper");
   await recoveryEmail.fill("not-an-email");
   await recoveryPage.locator('input[name="_request_consent"]').check();
   const validationResponsePromise = recoveryPage.waitForResponse(
@@ -126,6 +126,7 @@ try {
   const recoverySummary = recoveryPage.locator(`#${summaryId}`);
   assert.equal(await recoverySummary.getAttribute("autofocus"), "");
   assert.equal(await recoverySummary.getAttribute("role"), "alert");
+  assert.equal(await recoveryPage.getByLabel("Name").inputValue(), "\nGrace Hopper");
   assert.equal(await recoveryEmail.inputValue(), "not-an-email");
   const retryAction = new URL(
     await recoveryPage.locator("form.v2-form").getAttribute("action"),

@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use super::starter::starter_section;
 use super::theme::{ResolvedThemeProfile, ThemeV2};
 use super::validate::{build_index, canonicalize, validate_data, DocumentIndex};
 use super::{
@@ -123,6 +124,54 @@ pub enum BlueprintId {
     Webinar,
     Launch,
     LeadGen,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PublicLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "fr")]
+    French,
+}
+
+impl PublicLanguage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::French => "fr",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextPresentation {
+    #[default]
+    SingleLine,
+    Multiline,
+}
+
+impl TextPresentation {
+    pub const fn is_single_line(&self) -> bool {
+        matches!(self, Self::SingleLine)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FormPresentation {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub submit_label: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub information_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -333,6 +382,12 @@ pub struct FormV2 {
     )]
     pub(crate) marketing_opt_in: Option<ConsentCopy>,
     pub(crate) result: FormResult,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) presentation: Option<FormPresentation>,
 }
 
 impl FormV2 {
@@ -358,6 +413,10 @@ impl FormV2 {
 
     pub fn result(&self) -> &FormResult {
         &self.result
+    }
+
+    pub fn presentation(&self) -> Option<&FormPresentation> {
+        self.presentation.as_ref()
     }
 }
 
@@ -482,6 +541,8 @@ pub enum FormField {
             skip_serializing_if = "Option::is_none"
         )]
         validation: Option<ValidationRange>,
+        #[serde(default, skip_serializing_if = "TextPresentation::is_single_line")]
+        presentation: TextPresentation,
     },
     Email {
         id: FieldId,
@@ -575,6 +636,12 @@ pub(crate) struct DocumentData {
     pub(crate) entry_page_id: PageId,
     pub(crate) pages: Vec<PageV2>,
     pub(crate) forms: Vec<FormV2>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) language: Option<PublicLanguage>,
 }
 
 #[derive(Clone, Debug)]
@@ -598,8 +665,18 @@ impl DocumentV2 {
         blueprint_id: BlueprintId,
         preset: crate::ThemePreset,
     ) -> Result<Self, DocumentError> {
+        Self::starter_with_language(funnel_id, blueprint_id, preset, None)
+    }
+
+    pub fn starter_with_language(
+        funnel_id: &str,
+        blueprint_id: BlueprintId,
+        preset: crate::ThemePreset,
+        language: Option<PublicLanguage>,
+    ) -> Result<Self, DocumentError> {
         let funnel_id = V2FunnelId::parse(funnel_id.to_owned())?;
         let page_id = PageId::parse("page-home")?;
+        let effective_language = language.unwrap_or(PublicLanguage::English);
         let section_types = match blueprint_id {
             BlueprintId::Tripwire => {
                 &[SectionKind::Hero, SectionKind::Features, SectionKind::Cta][..]
@@ -632,9 +709,9 @@ impl DocumentV2 {
         let sections = section_types
             .iter()
             .copied()
-            .map(starter_section)
+            .map(|section_type| starter_section(section_type, effective_language))
             .collect::<Result<Vec<_>, _>>()?;
-        let data = build_data_from_parts(
+        let mut data = build_data_from_parts(
             funnel_id,
             blueprint_id,
             ThemeV2 {
@@ -645,7 +722,11 @@ impl DocumentV2 {
             vec![PageV2 {
                 id: page_id,
                 slug: String::new(),
-                title: "Home".to_owned(),
+                title: match effective_language {
+                    PublicLanguage::English => "Home",
+                    PublicLanguage::French => "Accueil",
+                }
+                .to_owned(),
                 seo_title: None,
                 seo_description: None,
                 noindex: false,
@@ -653,6 +734,7 @@ impl DocumentV2 {
             }],
             Vec::new(),
         );
+        data.language = language;
         Self::from_validated(data)
     }
 
@@ -691,6 +773,14 @@ impl DocumentV2 {
 
     pub fn blueprint_id(&self) -> BlueprintId {
         self.data.blueprint_id
+    }
+
+    pub fn public_language(&self) -> PublicLanguage {
+        self.data.language.unwrap_or(PublicLanguage::English)
+    }
+
+    pub fn explicit_language(&self) -> Option<PublicLanguage> {
+        self.data.language
     }
 
     pub fn theme(&self) -> &ThemeV2 {
@@ -768,89 +858,6 @@ impl DocumentV2 {
     }
 }
 
-fn starter_section(section_type: SectionKind) -> Result<SectionV2, DocumentError> {
-    let (section_id, blocks) = match section_type {
-        SectionKind::Hero => (
-            "section-hero",
-            vec![
-                BlockV2::Heading {
-                    id: BlockId::parse("block-hero-title")?,
-                    level: 1,
-                    text: "Welcome to your new funnel".to_owned(),
-                },
-                BlockV2::Text {
-                    id: BlockId::parse("block-hero-copy")?,
-                    text: "Replace this text with your offer.".to_owned(),
-                },
-            ],
-        ),
-        SectionKind::Features => (
-            "section-features",
-            vec![
-                BlockV2::Heading {
-                    id: BlockId::parse("block-features-title")?,
-                    level: 2,
-                    text: "What makes this offer valuable".to_owned(),
-                },
-                BlockV2::List {
-                    id: BlockId::parse("block-features-list")?,
-                    items: vec![
-                        "A clear outcome for your customers".to_owned(),
-                        "A simple next step to take action".to_owned(),
-                    ],
-                },
-            ],
-        ),
-        SectionKind::Testimonials => (
-            "section-testimonials",
-            vec![
-                BlockV2::Heading {
-                    id: BlockId::parse("block-testimonials-title")?,
-                    level: 2,
-                    text: "Trusted by customers".to_owned(),
-                },
-                BlockV2::Text {
-                    id: BlockId::parse("block-testimonials-copy")?,
-                    text: "Add a genuine customer story to build confidence.".to_owned(),
-                },
-            ],
-        ),
-        SectionKind::Cta => (
-            "section-cta",
-            vec![
-                BlockV2::Heading {
-                    id: BlockId::parse("block-cta-title")?,
-                    level: 2,
-                    text: "Ready to get started?".to_owned(),
-                },
-                BlockV2::Text {
-                    id: BlockId::parse("block-cta-copy")?,
-                    text: "Take the next step today.".to_owned(),
-                },
-                BlockV2::Button {
-                    id: BlockId::parse("block-cta-button")?,
-                    label: "Get started".to_owned(),
-                    action: ActionV2::ExternalHttps {
-                        url: "https://example.com".to_owned(),
-                    },
-                },
-            ],
-        ),
-        SectionKind::Footer => (
-            "section-footer",
-            vec![BlockV2::Text {
-                id: BlockId::parse("block-footer-copy")?,
-                text: "Your business · All rights reserved.".to_owned(),
-            }],
-        ),
-    };
-    Ok(SectionV2 {
-        id: SectionId::parse(section_id.to_owned())?,
-        section_type,
-        blocks,
-    })
-}
-
 pub(crate) fn build_data_from_parts(
     funnel_id: V2FunnelId,
     blueprint_id: BlueprintId,
@@ -869,5 +876,6 @@ pub(crate) fn build_data_from_parts(
         entry_page_id,
         pages,
         forms,
+        language: None,
     }
 }

@@ -1511,6 +1511,97 @@ try {
   await page.getByText("No valid success page is available yet. Add another page or remove the path back to this form page.").waitFor();
   assert.equal(await previewFrame.locator(".v2-form-result").count(), 1);
 
+  const addSuccessPageResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add page" }).click();
+  assert.equal((await addSuccessPageResponse).status(), 200);
+  await page.getByLabel("Current page").selectOption("page-home");
+  const successPageId = await resultDestination.locator("option").evaluateAll((options) =>
+    options.find((option) => option.value !== "inline")?.value,
+  );
+  assert.ok(successPageId);
+  const successPageResultResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await resultDestination.selectOption(successPageId);
+  assert.equal((await successPageResultResponse).status(), 200);
+  const inlineResultResponse = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await resultDestination.selectOption("inline");
+  assert.equal((await inlineResultResponse).status(), 200);
+  assert.equal(
+    (await previewFrame.locator(".v2-form-result").textContent())?.trim(),
+    "Thanks for reaching out. We’ll be in touch soon.",
+  );
+
+  const saveButton = page.getByRole("button", { name: "Save revision" });
+  const submitLabel = page.getByLabel("Submit button label (optional)");
+  const submitLabelErrorId = await submitLabel.getAttribute("aria-describedby");
+  const submitLabelError = page.locator(`[id="${submitLabelErrorId}"]`);
+  let invalidSubmitLabelEditRequests = 0;
+  const countInvalidSubmitLabelEditRequests = (request) => {
+    if (request.method() === "POST" && request.url().includes("/edit-v2")) {
+      invalidSubmitLabelEditRequests += 1;
+    }
+  };
+  page.on("request", countInvalidSubmitLabelEditRequests);
+  await submitLabel.fill("   ");
+  await submitLabel.press("Tab");
+  await submitLabelError.getByText("Enter visible button text, or clear the optional label.").waitFor();
+  assert.equal(await submitLabel.getAttribute("aria-invalid"), "true");
+  assert.equal(await submitLabel.inputValue(), "   ");
+  assert.equal(await saveButton.isDisabled(), true);
+  await page.waitForTimeout(100);
+  assert.equal(invalidSubmitLabelEditRequests, 0);
+  page.off("request", countInvalidSubmitLabelEditRequests);
+
+  const submitLabelEditResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await submitLabel.fill("Send a request");
+  await submitLabel.press("Tab");
+  assert.equal((await submitLabelEditResponsePromise).status(), 200);
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll("button")].find((item) => item.textContent.includes("Save revision"));
+    return button && !button.disabled;
+  });
+
+  const informationUrl = page.getByLabel("Information link URL (optional)");
+  const informationUrlErrorId = await informationUrl.getAttribute("aria-describedby");
+  const informationUrlError = page.locator(`[id="${informationUrlErrorId}"]`);
+  let invalidInformationUrlEditRequests = 0;
+  const countInvalidInformationUrlEditRequests = (request) => {
+    if (request.method() === "POST" && request.url().includes("/edit-v2")) {
+      invalidInformationUrlEditRequests += 1;
+    }
+  };
+  page.on("request", countInvalidInformationUrlEditRequests);
+  await informationUrl.fill("https://example.test/%");
+  await informationUrl.press("Tab");
+  await informationUrlError.getByText("Enter an HTTPS URL up to 2,048 characters.").waitFor();
+  assert.equal(await informationUrl.getAttribute("aria-invalid"), "true");
+  assert.equal(await informationUrl.inputValue(), "https://example.test/%");
+  assert.equal(await saveButton.isDisabled(), true);
+  await page.waitForTimeout(100);
+  assert.equal(invalidInformationUrlEditRequests, 0);
+  page.off("request", countInvalidInformationUrlEditRequests);
+
+  const informationUrlEditResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    { timeout: 10000 },
+  );
+  await informationUrl.fill("https://example.test/privacy");
+  await informationUrl.press("Tab");
+  assert.equal((await informationUrlEditResponsePromise).status(), 200);
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll("button")].find((item) => item.textContent.includes("Save revision"));
+    return button && !button.disabled;
+  });
+  assert.equal(await previewFrame.locator(".v2-form-information span[aria-disabled='true']").count(), 1);
+
   const purposeInput = page.getByLabel("Submission purpose");
   const purposeErrorId = await purposeInput.getAttribute("aria-describedby");
   const purposeError = page.locator(`[id="${purposeErrorId}"]`);
@@ -1523,7 +1614,6 @@ try {
   await purposeInput.fill("");
   await purposeError.getByText("Enter a purpose between 1 and 1,024 characters.").waitFor();
   assert.equal(await purposeInput.getAttribute("aria-invalid"), "true");
-  const saveButton = page.getByRole("button", { name: "Save revision" });
   assert.equal(await saveButton.isDisabled(), true);
   await page.waitForTimeout(100);
   assert.equal(invalidEditRequests, 0);

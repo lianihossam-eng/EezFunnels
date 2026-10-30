@@ -677,6 +677,26 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
             }
             if let Some(document) = view.document.clone() {
                 section { class: "editor-toolbar", "aria-label": "Typed editor actions",
+                    label { class: "editor-setting-control", r#for: "public-language",
+                        "Public language"
+                        select {
+                            id: "public-language",
+                            value: document.public_language().as_str(),
+                            disabled: locked,
+                            onchange: move |event| {
+                                let language = match event.value().as_str() {
+                                    "en" => Some(PublicLanguage::English),
+                                    "fr" => Some(PublicLanguage::French),
+                                    _ => None,
+                                };
+                                if let Some(language) = language {
+                                    dispatch_v2_edit(state, Edit::SetPublicLanguage { language: Some(language) });
+                                }
+                            },
+                            option { value: "en", "English" }
+                            option { value: "fr", "Français" }
+                        }
+                    }
                     div {
                         p { class: "eyebrow", "Draft revision" }
                         code { "{view.base_revision_id}" }
@@ -1335,7 +1355,14 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                                         disabled: locked,
                                         onclick: move |_| {
                                             let kind = state.with(|state| state.new_block_kind);
-                                            let block = kind.create();
+                                            let language = state.with(|state| {
+                                                state
+                                                    .document
+                                                    .as_ref()
+                                                    .map(DocumentV2::public_language)
+                                                    .unwrap_or(PublicLanguage::English)
+                                            });
+                                            let block = kind.create(language);
                                             if let Some((section, after)) = add_block_location.clone() {
                                                 dispatch_v2_edit(state, Edit::AddBlock { section, after, block });
                                             }
@@ -1875,8 +1902,13 @@ fn section_kind_id(kind: SectionKind) -> &'static str {
 fn next_page_defaults(document: &DocumentV2) -> Option<(String, String)> {
     (2..=50).find_map(|number| {
         let slug = format!("step-{number}");
-        (!document.pages().iter().any(|page| page.slug() == slug))
-            .then(|| (format!("Step {number}"), slug))
+        (!document.pages().iter().any(|page| page.slug() == slug)).then(|| {
+            let title = match document.public_language() {
+                PublicLanguage::English => format!("Step {number}"),
+                PublicLanguage::French => format!("Étape {number}"),
+            };
+            (title, slug)
+        })
     })
 }
 

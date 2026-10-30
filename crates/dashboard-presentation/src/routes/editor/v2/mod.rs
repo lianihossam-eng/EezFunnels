@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(feature = "browser")]
 use crate::routes::RouteView;
+use eez_domain::document_v2::PublicLanguage;
 use eez_domain::document_v2::{
     is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult,
     IdKind, IdSource, NewBlock, SectionKind,
@@ -36,6 +37,18 @@ mod drafts;
 mod orchestration;
 mod state;
 mod ui;
+
+fn public_default_text(
+    language: PublicLanguage,
+    english: &'static str,
+    french: &'static str,
+) -> String {
+    match language {
+        PublicLanguage::English => english,
+        PublicLanguage::French => french,
+    }
+    .to_owned()
+}
 
 #[cfg(feature = "browser")]
 pub(super) use ui::V2FunnelDetail;

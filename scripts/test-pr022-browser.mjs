@@ -167,6 +167,11 @@ try {
   assert.equal(await nameInput.evaluate((element) => element === document.activeElement), true);
   const funnelName = "PR-022 publication journey";
   await typeKeyboard(page, funnelName, { delay: 8 });
+  await pressKeyboard(page, "Tab");
+  const publicLanguage = page.getByLabel("Public language");
+  assert.equal(await publicLanguage.evaluate((element) => element === document.activeElement), true);
+  await pressKeyboard(page, "ArrowDown");
+  assert.equal(await publicLanguage.inputValue(), "fr");
   await tabUntil(
     page,
     (active) => active.tag === "BUTTON" && hasName(active, "Create funnel"),
@@ -175,8 +180,15 @@ try {
   const createResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith("/api/funnels/v2"),
   );
+  const createRequestPromise = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().endsWith("/api/funnels/v2"),
+  );
   await pressKeyboard(page, "Enter");
-  const createResponse = await createResponsePromise;
+  const [createResponse, createRequest] = await Promise.all([
+    createResponsePromise,
+    createRequestPromise,
+  ]);
+  assert.equal(createRequest.postDataJSON()?.language, "fr");
   const created = await responseJson(createResponse, 201, "Create funnel");
   const createdV2FunnelId = created.funnel?.id;
   assert.equal(typeof createdV2FunnelId, "string");
@@ -185,6 +197,77 @@ try {
   await createDialog.waitFor({ state: "hidden" });
   await page.getByRole("link", { name: funnelName }).waitFor();
   await assertCriticalAxeFindingsAbsent(page, "Funnel dashboard");
+
+  await page.getByRole("link", { name: funnelName }).click();
+  await page.getByRole("heading", { name: funnelName }).waitFor();
+  await page.locator(".editor-section-list .text-button").first().waitFor();
+  await page.locator(".editor-section-list .text-button").first().click();
+  const frenchFormResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add form" }).click();
+  assert.equal((await frenchFormResponsePromise).status(), 200);
+  const frenchPurpose = page.getByLabel("Submission purpose");
+  await frenchPurpose.waitFor();
+  assert.equal(await frenchPurpose.inputValue(), "Répondre à cette demande.");
+  assert.equal(
+    await page.getByLabel("Required request consent").inputValue(),
+    "J’accepte d’être contacté au sujet de cette demande.",
+  );
+  const frenchPreview = page.frameLocator(".editor-preview-frame");
+  const frenchPreviewForm = frenchPreview.locator("form[data-preview='true']");
+  await frenchPreviewForm.getByLabel("Votre nom").waitFor();
+  await frenchPreviewForm.getByLabel("Adresse e-mail").waitFor();
+  await frenchPreviewForm.getByRole("button", { name: "Envoyer" }).waitFor();
+  assert.equal(await frenchPreview.getByText("Merci, votre demande a bien été reçue.").count(), 1);
+
+  const frenchTextFieldResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add text field" }).click();
+  assert.equal((await frenchTextFieldResponsePromise).status(), 200);
+  await frenchPreviewForm.getByLabel("Nouveau champ texte").waitFor();
+
+  const frenchMarketingResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByLabel("Offer separate, optional marketing consent").check();
+  assert.equal((await frenchMarketingResponsePromise).status(), 200);
+  assert.equal(
+    await page.getByLabel("Optional marketing consent wording").inputValue(),
+    "Je souhaite recevoir ponctuellement des nouvelles du produit.",
+  );
+
+  const frenchPageResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add page" }).click();
+  assert.equal((await frenchPageResponsePromise).status(), 200);
+  await page.getByLabel("Current page").selectOption("page-home");
+  const resultDestination = page.getByLabel("After submission");
+  const frenchSuccessPageId = await resultDestination.locator("option").evaluateAll((options) =>
+    options.find((option) => option.label === "Success page: Étape 2")?.value,
+  );
+  assert.ok(frenchSuccessPageId);
+  const successPageModeResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await resultDestination.selectOption(frenchSuccessPageId);
+  assert.equal((await successPageModeResponsePromise).status(), 200);
+  const inlineResultResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await resultDestination.selectOption("inline");
+  assert.equal((await inlineResultResponsePromise).status(), 200);
+  await frenchPreview.getByText("Merci, votre demande a bien été reçue.").waitFor({ state: "attached" });
+
+  await page.getByLabel("Block type").selectOption("heading");
+  const frenchBlockResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add block" }).click();
+  assert.equal((await frenchBlockResponsePromise).status(), 200);
+  await frenchPreview.getByRole("heading", { name: "Nouveau titre" }).waitFor();
 
   const funnelNameV1 = "PR-022 V1 publication journey";
   const createV1Response = await fetch(`${worker.origin}/api/funnels`, {
