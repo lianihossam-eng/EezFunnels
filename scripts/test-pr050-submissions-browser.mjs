@@ -26,7 +26,7 @@ try {
 
   const graceEntry = entries.filter({ hasText: "Grace Hopper" });
   assert.equal(await graceEntry.count(), 1);
-  await graceEntry.locator("summary").click();
+  await graceEntry.locator(":scope > summary").click();
   await page.getByText("Grace Hopper", { exact: true }).waitFor({ state: "visible" });
   await page.getByRole("heading", { name: "Consent record" }).first().waitFor({ state: "visible" });
   const consentCopy = graceEntry.getByText("I agree to be contacted about this updated request.", { exact: true });
@@ -69,7 +69,7 @@ try {
   const qualifiedEntry = page.locator("details.submission-entry").filter({
     has: page.locator(".submission-status-badge").getByText("Qualified", { exact: true }),
   });
-  await qualifiedEntry.locator("summary").click();
+  await qualifiedEntry.locator(":scope > summary").click();
   await qualifiedEntry.getByText("Grace Hopper", { exact: true }).waitFor({ state: "visible" });
 
   const closedList = page.waitForResponse((response) =>
@@ -203,6 +203,152 @@ try {
   if (process.env.PR050_SCREENSHOT) {
     await page.screenshot({ path: process.env.PR050_SCREENSHOT, fullPage: true });
   }
+
+  const deletePage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const deletePageErrors = [];
+  deletePage.on("pageerror", (error) => deletePageErrors.push(error.message));
+  await deletePage.goto(pageUrl, { waitUntil: "networkidle" });
+  const deleteEntry = deletePage.locator("details.submission-entry").filter({ hasText: "Grace Hopper" });
+  assert.equal(await deleteEntry.count(), 1);
+  const deleteTargetHref = await deleteEntry.locator("a[href*='/export']").getAttribute("href");
+  assert.ok(deleteTargetHref);
+  await deleteEntry.locator("summary").first().click();
+  await deleteEntry.locator("details.submission-delete-confirmation > summary").click();
+
+  let markDeleteStarted;
+  const deleteStarted = new Promise((resolve) => { markDeleteStarted = resolve; });
+  let releaseDelete;
+  const deletePaused = new Promise((resolve) => { releaseDelete = resolve; });
+  await deletePage.route("**/api/submissions/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      markDeleteStarted();
+      await deletePaused;
+      await route.fulfill({ status: 204, body: "" });
+    } else {
+      await route.continue();
+    }
+  });
+  const delayedDeleteResponse = deletePage.waitForResponse(
+    (response) => response.request().method() === "DELETE",
+  );
+  await deletePage.getByRole("button", { name: "Delete permanently" }).click();
+  await deleteStarted;
+  await deletePage.getByText("Finishing the deletion…", { exact: false }).waitFor({ state: "visible" });
+  assert.equal(await deletePage.locator(`a[href="${deleteTargetHref}"]`).count(), 0);
+  const filteredDuringDelete = deletePage.waitForResponse(
+    (response) => response.request().method() === "GET" && response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  await deletePage.getByRole("combobox", { name: "Filter submissions by funnel" }).selectOption(funnelId);
+  assert.equal((await filteredDuringDelete).status(), 200);
+  assert.equal(await deletePage.locator(`a[href="${deleteTargetHref}"]`).count(), 0);
+  await deletePage.getByText("Finishing the deletion…", { exact: false }).waitFor({ state: "visible" });
+  const remainingDeleteEntry = deletePage.locator("details.submission-entry").first();
+  await remainingDeleteEntry.locator("summary").first().click();
+  await remainingDeleteEntry.locator("details.submission-delete-confirmation > summary").click();
+  assert.equal(
+    await remainingDeleteEntry.getByRole("button", { name: "Delete permanently" }).isDisabled(),
+    true,
+  );
+  const refreshAfterDelete = deletePage.waitForResponse(
+    (response) => response.request().method() === "GET" && response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  releaseDelete();
+  assert.equal((await delayedDeleteResponse).status(), 204);
+  assert.equal((await refreshAfterDelete).status(), 200);
+  await deletePage.getByText("Finishing the deletion…", { exact: false }).waitFor({ state: "detached" });
+  assert.deepEqual(deletePageErrors, []);
+  await deletePage.close();
+
+  const deleteFailurePage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await deleteFailurePage.goto(pageUrl, { waitUntil: "networkidle" });
+  const failedDeleteEntry = deleteFailurePage.locator("details.submission-entry").filter({ hasText: "Grace Hopper" });
+  assert.equal(await failedDeleteEntry.count(), 1);
+  const failedDeleteTargetHref = await failedDeleteEntry.locator("a[href*='/export']").getAttribute("href");
+  assert.ok(failedDeleteTargetHref);
+  await failedDeleteEntry.locator("summary").first().click();
+  await failedDeleteEntry.locator("details.submission-delete-confirmation > summary").click();
+  let markFailedDeleteStarted;
+  const failedDeleteStarted = new Promise((resolve) => { markFailedDeleteStarted = resolve; });
+  let releaseFailedDelete;
+  const failedDeletePaused = new Promise((resolve) => { releaseFailedDelete = resolve; });
+  let markFailedListStarted;
+  const failedListStarted = new Promise((resolve) => { markFailedListStarted = resolve; });
+  let releaseFailedList;
+  const failedListPaused = new Promise((resolve) => { releaseFailedList = resolve; });
+  await deleteFailurePage.route("**/api/submissions**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      markFailedDeleteStarted();
+      await failedDeletePaused;
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    } else if (route.request().method() === "GET" && route.request().url().includes(`/api/submissions?funnel_id=${funnelId}`)) {
+      markFailedListStarted();
+      await failedListPaused;
+      await route.continue();
+    } else {
+      await route.continue();
+    }
+  });
+  const failedDeleteResponse = deleteFailurePage.waitForResponse(
+    (response) => response.request().method() === "DELETE",
+  );
+  await deleteFailurePage.getByRole("button", { name: "Delete permanently" }).click();
+  await failedDeleteStarted;
+  await deleteFailurePage.getByText("Finishing the deletion…", { exact: false }).waitFor({ state: "visible" });
+  assert.equal(await deleteFailurePage.locator(`a[href="${failedDeleteTargetHref}"]`).count(), 0);
+  const delayedFailedListResponse = deleteFailurePage.waitForResponse(
+    (response) => response.request().method() === "GET" && response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  await deleteFailurePage.getByRole("combobox", { name: "Filter submissions by funnel" }).selectOption(funnelId);
+  await failedListStarted;
+  releaseFailedDelete();
+  assert.equal((await failedDeleteResponse).status(), 503);
+  await deleteFailurePage.getByRole("alert").filter({ hasText: "server could not confirm the deletion" }).waitFor({ state: "visible" });
+  await deleteFailurePage.getByText("Finishing the deletion…", { exact: false }).waitFor({ state: "detached" });
+  releaseFailedList();
+  assert.equal((await delayedFailedListResponse).status(), 200);
+  assert.equal(await deleteFailurePage.locator(`a[href="${failedDeleteTargetHref}"]`).count(), 0);
+  await deleteFailurePage.getByRole("alert").filter({ hasText: "server could not confirm the deletion" }).waitFor({ state: "visible" });
+  const reloadedAfterFailure = deleteFailurePage.waitForResponse(
+    (response) => response.request().method() === "GET" && response.url().includes(`/api/submissions?funnel_id=${funnelId}`),
+  );
+  await deleteFailurePage.getByRole("button", { name: "Reload inbox" }).click();
+  assert.equal((await reloadedAfterFailure).status(), 200);
+  await deleteFailurePage.locator("details.submission-entry").first().waitFor({ state: "visible" });
+  assert.equal(await deleteFailurePage.locator(`a[href="${failedDeleteTargetHref}"]`).count(), 1);
+  assert.equal(await deleteFailurePage.getByRole("alert").count(), 0);
+  await deleteFailurePage.close();
+
+  const navigationDeletePage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const navigationDeleteErrors = [];
+  navigationDeletePage.on("pageerror", (error) => navigationDeleteErrors.push(error.message));
+  await navigationDeletePage.goto(pageUrl, { waitUntil: "networkidle" });
+  const navigationEntry = navigationDeletePage.locator("details.submission-entry").first();
+  await navigationEntry.locator("summary").first().click();
+  await navigationEntry.locator("details.submission-delete-confirmation > summary").click();
+  let markNavigationDeleteStarted;
+  const navigationDeleteStarted = new Promise((resolve) => { markNavigationDeleteStarted = resolve; });
+  let releaseNavigationDelete;
+  const navigationDeletePaused = new Promise((resolve) => { releaseNavigationDelete = resolve; });
+  await navigationDeletePage.route("**/api/submissions/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      markNavigationDeleteStarted();
+      await navigationDeletePaused;
+      await route.fulfill({ status: 204, body: "" });
+    } else {
+      await route.continue();
+    }
+  });
+  const delayedNavigationDeleteResponse = navigationDeletePage.waitForResponse(
+    (response) => response.request().method() === "DELETE",
+  );
+  await navigationDeletePage.getByRole("button", { name: "Delete permanently" }).click();
+  await navigationDeleteStarted;
+  await navigationDeletePage.getByRole("link", { name: "Funnels", exact: true }).click();
+  await navigationDeletePage.getByRole("heading", { name: "Funnels", level: 1 }).waitFor({ state: "visible" });
+  releaseNavigationDelete();
+  assert.equal((await delayedNavigationDeleteResponse).status(), 204);
+  assert.deepEqual(navigationDeleteErrors, []);
+  await navigationDeletePage.close();
 
   const failurePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
   let failFunnelList = true;

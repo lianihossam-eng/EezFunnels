@@ -42,6 +42,8 @@ The system has three independent choices:
 
 The versioned rendering, erasure, webhook, and measurement decisions are recorded in [ADR 0001](adr/0001-versioned-rendering-compatibility.md), [ADR 0002](adr/0002-submission-erasure-and-recovery.md), [ADR 0003](adr/0003-webhook-delivery.md), and [ADR 0004](adr/0004-measurement-boundaries.md).
 
+Owners can export and target-delete one retained submission. D1 restore remains blocked by an R2-authoritative gate until its retained erasure journals have been reconciled; see the [submission erasure runbook](runbooks/submission-erasure.md) before restoring D1.
+
 ## Delivery tracking
 
 [Issue 82](https://github.com/lianihossam-eng/EezFunnels/issues/82) owns the live checklist for the 21-PR series. The [milestone guide](public-series.md) records the evidence required at each delivery gate; it does not duplicate the issue's per-PR status.

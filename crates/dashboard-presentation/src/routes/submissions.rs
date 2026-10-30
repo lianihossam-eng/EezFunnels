@@ -3,7 +3,9 @@ use eez_domain::FormSubmissionStatus;
 use serde_json::Value;
 
 #[cfg(feature = "browser")]
-use super::api::{load_submission_page, update_public_form_submission_status};
+use super::api::{
+    delete_public_form_submission, load_submission_page, update_public_form_submission_status,
+};
 use super::api::{FormSubmissionListItem, FormSubmissionListResponse};
 #[cfg(feature = "browser")]
 use super::funnels::refresh_funnel_list;
@@ -34,6 +36,9 @@ struct SubmissionInboxState {
     response: Option<Result<FormSubmissionListResponse, ()>>,
     loading_more: bool,
     load_more_error: bool,
+    delete_pending: Option<String>,
+    delete_error: bool,
+    delete_error_id: Option<String>,
 }
 
 impl SubmissionInboxState {
@@ -77,9 +82,15 @@ impl SubmissionInboxState {
     fn complete(
         &mut self,
         request: SubmissionRequestVersion,
-        response: Result<FormSubmissionListResponse, ()>,
+        mut response: Result<FormSubmissionListResponse, ()>,
     ) {
         if request.is_current(self.latest) {
+            if let Ok(response) = response.as_mut() {
+                response.items.retain(|item| {
+                    self.delete_pending.as_deref() != Some(item.submission_id.as_str())
+                        && self.delete_error_id.as_deref() != Some(item.submission_id.as_str())
+                });
+            }
             self.response = Some(response);
             self.loading_more = false;
             self.load_more_error = false;
@@ -117,6 +128,10 @@ impl SubmissionInboxState {
         self.loading_more = false;
         match response {
             Ok(mut next_page) => {
+                next_page.items.retain(|item| {
+                    self.delete_pending.as_deref() != Some(item.submission_id.as_str())
+                        && self.delete_error_id.as_deref() != Some(item.submission_id.as_str())
+                });
                 if let Some(Ok(current_page)) = self.response.as_mut() {
                     current_page.items.append(&mut next_page.items);
                     current_page.next_cursor = next_page.next_cursor;
@@ -126,12 +141,79 @@ impl SubmissionInboxState {
             Err(()) => self.load_more_error = true,
         }
     }
+
+    #[cfg(any(feature = "browser", test))]
+    fn begin_delete(&mut self, submission_id: &str) -> bool {
+        if self.delete_pending.is_some() || self.delete_error {
+            return false;
+        }
+        self.latest = self.latest.next();
+        if let Some(Ok(response)) = self.response.as_mut() {
+            response
+                .items
+                .retain(|item| item.submission_id != submission_id);
+        }
+        self.loading_more = false;
+        self.load_more_error = false;
+        self.delete_pending = Some(submission_id.to_owned());
+        self.delete_error = false;
+        self.delete_error_id = None;
+        true
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn finish_delete(&mut self) {
+        self.delete_pending = None;
+        self.delete_error = false;
+        self.delete_error_id = None;
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn fail_delete(&mut self, submission_id: &str) {
+        self.latest = self.latest.next();
+        self.loading_more = false;
+        self.load_more_error = false;
+        self.delete_pending = None;
+        self.delete_error = true;
+        self.delete_error_id = Some(submission_id.to_owned());
+    }
+
+    #[cfg(any(feature = "browser", test))]
+    fn clear_delete_error(&mut self) {
+        self.delete_error = false;
+        self.delete_error_id = None;
+    }
 }
 
 #[component]
 pub(super) fn Submissions() -> Element {
     let load_state = use_signal(SubmissionInboxState::default);
     let funnel_list_state = use_signal(FunnelListLoad::default);
+    #[cfg(feature = "browser")]
+    let mut delete_state = load_state;
+    let on_delete = use_callback(move |submission_id: String| {
+        #[cfg(feature = "browser")]
+        {
+            if !delete_state.with_mut(|state| state.begin_delete(&submission_id)) {
+                return;
+            }
+            let mut request_state = delete_state;
+            spawn(async move {
+                let deleted = delete_public_form_submission(&submission_id).await.is_ok();
+                if request_state.try_peek().is_err() {
+                    return;
+                }
+                if deleted {
+                    request_state.with_mut(SubmissionInboxState::finish_delete);
+                    refresh_submission_list(request_state).await;
+                } else {
+                    request_state.with_mut(|state| state.fail_delete(&submission_id));
+                }
+            });
+        }
+        #[cfg(not(feature = "browser"))]
+        let _ = submission_id;
+    });
 
     #[cfg(feature = "browser")]
     {
@@ -236,6 +318,27 @@ pub(super) fn Submissions() -> Element {
                 }
             }
         }
+        if snapshot.delete_pending.is_some() {
+            p { class: "submission-delete-feedback", role: "status", "The submission was removed from this view. Finishing the deletion…" }
+        }
+        if snapshot.delete_error {
+            div { class: "submission-delete-error", role: "alert",
+                p { "The server could not confirm the deletion. The submission was removed from this view; reload to check the stored result." }
+                button {
+                    class: "secondary-button",
+                    r#type: "button",
+                    onclick: move |_| {
+                        #[cfg(feature = "browser")]
+                        {
+                                let mut load_state = load_state;
+                            load_state.with_mut(SubmissionInboxState::clear_delete_error);
+                            spawn(async move { refresh_submission_list(load_state).await; });
+                        }
+                    },
+                    "Reload inbox"
+                }
+            }
+        }
         match snapshot.response {
             None => rsx! {
                 section { class: "submission-loading", "aria-label": "Loading submissions", role: "status", "aria-busy": "true",
@@ -284,7 +387,7 @@ pub(super) fn Submissions() -> Element {
                 section { class: "submission-list", "aria-label": "Form submissions",
                     p { class: "submission-retention-note", "Only submissions within the configured retention period are shown." }
                     for item in response.items.iter() {
-                        SubmissionEntry { key: "{item.submission_id}", item: item.clone(), load_state }
+                        SubmissionEntry { key: "{item.submission_id}", item: item.clone(), load_state, delete_pending: snapshot.delete_pending.is_some() || snapshot.delete_error, on_delete }
                     }
                     if snapshot.load_more_error {
                         p { class: "editor-save-error", role: "alert", "Older submissions could not be loaded. Your current results are still available." }
@@ -313,6 +416,8 @@ pub(super) fn Submissions() -> Element {
 fn SubmissionEntry(
     item: FormSubmissionListItem,
     load_state: Signal<SubmissionInboxState>,
+    delete_pending: bool,
+    on_delete: EventHandler<String>,
 ) -> Element {
     #[allow(unused_mut)]
     let mut current_status = use_signal(|| item.status);
@@ -320,6 +425,7 @@ fn SubmissionEntry(
     let mut status_error = use_signal(|| false);
     let status_control_id = format!("submission-status-{}", item.submission_id);
     let submission_id = item.submission_id.clone();
+    let delete_submission_id = submission_id.clone();
     let status_accessible_name = format!(
         "Follow-up status for {} submitted {}",
         item.form_purpose, item.submitted_at_label
@@ -336,6 +442,26 @@ fn SubmissionEntry(
                 span { class: "submission-status-badge", "{current_status().label()}" }
             }
             div { class: "submission-entry-content",
+                div { class: "submission-entry-actions",
+                    a {
+                        class: "secondary-button",
+                        href: "/api/submissions/{submission_id}/export",
+                        "Export JSON"
+                    }
+                    details { class: "submission-delete-confirmation",
+                        summary { "Delete submission" }
+                        p { "This permanently removes this response after its recovery record is saved. The action cannot be undone." }
+                        button {
+                            class: "danger-button",
+                            r#type: "button",
+                            disabled: delete_pending,
+                            onclick: move |_| {
+                                on_delete.call(delete_submission_id.clone());
+                            },
+                            "Delete permanently"
+                        }
+                    }
+                }
                 div { class: "submission-status-control",
                     label { r#for: "{status_control_id}", "Follow-up status" }
                     select {
@@ -593,5 +719,90 @@ mod tests {
         assert!(!state.loading_more);
         state.complete_more(older, Ok(submission_page(&["stale"], None)));
         assert!(state.response.is_none());
+    }
+
+    #[test]
+    fn deleting_a_submission_hides_its_cached_copy_and_invalidates_in_flight_pages() {
+        let mut state = SubmissionInboxState::default();
+        let initial_load = state.begin();
+        state.complete(
+            initial_load,
+            Ok(submission_page(&["target", "other"], Some("older-cursor"))),
+        );
+        let (stale_page, _, _, _) = state.begin_more().expect("older page starts");
+
+        assert!(state.begin_delete("target"));
+        assert!(!state.begin_delete("other"));
+
+        let refreshed = state.begin();
+        state.complete(
+            refreshed,
+            Ok(submission_page(&["target", "other"], Some("newer-cursor"))),
+        );
+
+        let visible_ids = &state.response.as_ref().unwrap().as_ref().unwrap().items;
+        assert_eq!(visible_ids.len(), 1);
+        assert_eq!(visible_ids[0].submission_id, "other");
+        assert_eq!(state.delete_pending.as_deref(), Some("target"));
+        state.complete_more(stale_page, Ok(submission_page(&["target"], None)));
+        let visible_ids = &state.response.as_ref().unwrap().as_ref().unwrap().items;
+        assert_eq!(visible_ids.len(), 1);
+        assert_eq!(visible_ids[0].submission_id, "other");
+
+        let delayed_list = state.begin();
+        state.fail_delete("target");
+        state.complete(
+            delayed_list,
+            Ok(submission_page(&["target", "other"], Some("late-cursor"))),
+        );
+        assert!(state.delete_error);
+        assert!(state.delete_pending.is_none());
+        assert!(state.response.is_none());
+
+        let background_refresh = state.begin();
+        state.complete(
+            background_refresh,
+            Ok(submission_page(&["target", "other"], None)),
+        );
+        let visible_ids = &state.response.as_ref().unwrap().as_ref().unwrap().items;
+        assert_eq!(visible_ids.len(), 1);
+        assert_eq!(visible_ids[0].submission_id, "other");
+        assert!(state.delete_error);
+
+        state.clear_delete_error();
+        assert!(state.delete_error_id.is_none());
+        let explicit_reload = state.begin();
+        state.complete(
+            explicit_reload,
+            Ok(submission_page(&["target", "other"], None)),
+        );
+        assert!(!state.delete_error);
+        assert_eq!(
+            state
+                .response
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .items
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn completing_a_deletion_clears_pending_and_error_state() {
+        let mut state = SubmissionInboxState {
+            delete_pending: Some("target".to_owned()),
+            delete_error: true,
+            delete_error_id: Some("target".to_owned()),
+            ..SubmissionInboxState::default()
+        };
+
+        state.finish_delete();
+
+        assert!(state.delete_pending.is_none());
+        assert!(!state.delete_error);
+        assert!(state.delete_error_id.is_none());
     }
 }

@@ -206,7 +206,7 @@ pub async fn submit_public_form(
 
     match storage_result {
         PublicFormSubmissionResult::Stored | PublicFormSubmissionResult::Duplicate => {}
-        PublicFormSubmissionResult::KeyReuseMismatch => {
+        PublicFormSubmissionResult::KeyReuseMismatch | PublicFormSubmissionResult::ErasedReplay => {
             return Ok(SubmitPublicFormOutcome::KeyReuseMismatch {
                 current_page_slug,
                 language: document.public_language(),
