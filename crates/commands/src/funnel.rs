@@ -1302,6 +1302,10 @@ struct FormSubmissionChannelCount {
 struct FormSubmissionListItem {
     submission_id: String,
     status: FormSubmissionStatus,
+    follow_up_version: i32,
+    next_action: Option<String>,
+    due_on: Option<String>,
+    close_reason: Option<String>,
     funnel_name: String,
     page_title: String,
     form_purpose: String,
@@ -3345,6 +3349,14 @@ fn form_submission_list_item(
     document: &DocumentV2,
 ) -> Result<FormSubmissionListItem, FunnelCommandError> {
     if record.revision_schema_version != 2
+        || record.follow_up_version < 0
+        || eez_domain::SubmissionFollowUp::new(
+            record.triage_status,
+            record.next_action.clone(),
+            record.due_on.clone(),
+            record.close_reason.clone(),
+        )
+        .is_err()
         || record.request_consent_acknowledged != 1
         || !matches!(record.marketing_opt_in, 0 | 1)
         || record.marketing_opt_in_copy_version.is_some() != record.marketing_opt_in_copy.is_some()
@@ -3387,6 +3399,10 @@ fn form_submission_list_item(
     Ok(FormSubmissionListItem {
         submission_id: record.submission_id,
         status: record.triage_status,
+        follow_up_version: record.follow_up_version,
+        next_action: record.next_action,
+        due_on: record.due_on,
+        close_reason: record.close_reason,
         funnel_name: record.funnel_name,
         page_title: page.title().to_owned(),
         form_purpose: form.purpose().to_owned(),

@@ -22,6 +22,7 @@ def main() -> int:
             "0012_public_form_submission_channel.sql",
             "0013_public_form_submission_status.sql",
             "0014_public_form_submission_funnel_inbox.sql",
+            "0021_public_submission_follow_up.sql",
         }:
             continue
         connection.executescript(migration.read_text(encoding="utf-8"))
@@ -58,6 +59,11 @@ def main() -> int:
 
     apply(connection, "0013_public_form_submission_status.sql")
     apply(connection, "0014_public_form_submission_funnel_inbox.sql")
+    apply(connection, "0021_public_submission_follow_up.sql")
+    follow_up_version = connection.execute(
+        "SELECT follow_up_version FROM public_form_submissions"
+    ).fetchone()
+    assert follow_up_version == (0,), follow_up_version
     legacy_status = connection.execute(
         "SELECT triage_status FROM public_form_submissions"
     ).fetchone()

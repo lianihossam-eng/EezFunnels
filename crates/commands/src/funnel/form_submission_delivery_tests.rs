@@ -11,6 +11,10 @@ fn record(
     PublicFormSubmissionRecord {
         submission_id: "11111111-1111-4111-8111-111111111111".to_owned(),
         triage_status: FormSubmissionStatus::New,
+        follow_up_version: 0,
+        next_action: None,
+        due_on: None,
+        close_reason: None,
         funnel_id: "22222222-2222-4222-8222-222222222222".to_owned(),
         funnel_name: "Funnel".to_owned(),
         funnel_slug: "funnel".to_owned(),

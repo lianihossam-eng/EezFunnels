@@ -1582,6 +1582,34 @@ h1 {
   gap: 12px;
 }
 
+.submission-draft-workspace {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid #e7c98a;
+  border-radius: 12px;
+  background: #fffaf0;
+}
+
+.submission-draft-workspace > .submission-section-title,
+.submission-draft-workspace > .submission-follow-up-help {
+  margin: 0;
+}
+
+.submission-pinned-draft {
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid #eadfca;
+}
+
+.submission-pinned-draft-context {
+  margin: 0 0 12px;
+  color: #59667d;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .submission-toolbar {
   display: flex;
   align-items: end;
@@ -1759,6 +1787,105 @@ h1 {
 .submission-status-control select:disabled {
   cursor: progress;
   opacity: 0.7;
+}
+
+.submission-follow-up {
+  display: grid;
+  gap: 11px;
+  min-width: 0;
+  margin: 0 0 18px;
+  color: #344159;
+}
+
+.submission-follow-up-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.submission-follow-up-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.submission-follow-up-field select,
+.submission-follow-up-field input,
+.submission-follow-up-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #cbd4e4;
+  border-radius: 8px;
+  background: #fff;
+  color: #26334b;
+  font: inherit;
+}
+
+.submission-follow-up-field textarea {
+  resize: vertical;
+}
+
+.submission-follow-up-field select:focus-visible,
+.submission-follow-up-field input:focus-visible,
+.submission-follow-up-field textarea:focus-visible,
+.submission-follow-up button:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 2px;
+}
+
+.submission-follow-up-field :disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.submission-follow-up-help {
+  margin: 0;
+  color: #647087;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.submission-follow-up-history {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 9px;
+  border-top: 1px solid #e5e9f0;
+}
+
+.submission-follow-up-timeline {
+  display: grid;
+  gap: 11px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.submission-follow-up-timeline li {
+  min-width: 0;
+  padding-left: 3px;
+  overflow-wrap: anywhere;
+}
+
+.submission-follow-up-timeline li p {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.submission-follow-up-event-time {
+  display: block;
+  margin-top: 3px;
+  color: #647087;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .submission-follow-up-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .submission-status-feedback {

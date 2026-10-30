@@ -48,6 +48,7 @@ impl ApiError {
             | "validation/generated_placeholder_marker_invalid"
             | "validation/media_asset_invalid"
             | "validation/service_brief_invalid"
+            | "validation/submission_follow_up_invalid"
             | "validation/service_brief_format_unsupported" => (
                 code.to_owned(),
                 ErrorCategory::Validation,
@@ -130,7 +131,9 @@ impl ApiError {
             | "conflict/v2_typed_command_required"
             | "conflict/v2_stage_active"
             | "conflict/media_asset_conflict"
-            | "conflict/service_brief_stale" => (
+            | "conflict/service_brief_stale"
+            | "conflict/submission_follow_up_stale"
+            | "conflict/submission_follow_up_correction_target" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
@@ -237,6 +240,11 @@ mod tests {
         ),
         (
             "validation/service_brief_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/submission_follow_up_invalid",
             ErrorCategory::Validation,
             400,
         ),
@@ -352,6 +360,16 @@ mod tests {
             409,
         ),
         ("conflict/service_brief_stale", ErrorCategory::Conflict, 409),
+        (
+            "conflict/submission_follow_up_stale",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/submission_follow_up_correction_target",
+            ErrorCategory::Conflict,
+            409,
+        ),
         ("rate_limit/exceeded", ErrorCategory::RateLimit, 429),
         ("external/timeout", ErrorCategory::External, 504),
         ("external/unavailable", ErrorCategory::External, 503),

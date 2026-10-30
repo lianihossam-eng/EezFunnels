@@ -38,6 +38,7 @@ jobs:
       - run: npm run test:pr010:migration
       - run: npm run test:pr052:migration
       - run: npm run test:pub005:migration
+      - run: npm run test:pub011:migration
       - run: npm run test:pr010:browser
       - run: npm run test:pr019:fuzz
       - run: npm run test:pub005:browser
