@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 mod funnel;
 pub mod public_delivery;
+pub mod public_delivery_controls;
 pub mod public_forms;
 pub mod public_interactions;
 mod registry;

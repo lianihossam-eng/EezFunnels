@@ -42,6 +42,61 @@ pub(super) struct FormSubmissionListItem {
     pub(super) submitted_at_label: String,
     pub(super) submitted_at_datetime: String,
     pub(super) expires_at_label: String,
+    pub(super) delivery: FormSubmissionDelivery,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct FormSubmissionDelivery {
+    pub(super) status: String,
+    pub(super) attempt_count: u8,
+    pub(super) last_attempt_at_label: Option<String>,
+    pub(super) next_attempt_at_label: Option<String>,
+    pub(super) last_http_status: Option<u16>,
+    pub(super) last_outcome_code: Option<String>,
+    pub(super) can_retry: bool,
+    pub(super) can_cancel: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct WebhookDestinationResponse {
+    pub(super) enabled: bool,
+    pub(super) destination_version_id: Option<String>,
+    pub(super) destination_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct WebhookFormDeliverySnapshot {
+    pub(super) funnel_id: String,
+    pub(super) published_revision_id: Option<String>,
+    pub(super) destination_version_id: Option<String>,
+    pub(super) forms: Vec<WebhookFormDeliveryOption>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct WebhookFormDeliveryOption {
+    pub(super) form_id: String,
+    pub(super) purpose: String,
+    pub(super) fields: Vec<WebhookFormFieldOption>,
+    pub(super) enabled: bool,
+    pub(super) expected_destination_version_id: Option<String>,
+    pub(super) mapping_version_id: Option<String>,
+    pub(super) selected_field_ids: Vec<String>,
+    pub(super) mapping_compatible: bool,
+    pub(super) needs_revalidation: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct WebhookFormFieldOption {
+    pub(super) field_id: String,
+    pub(super) label: String,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeliveryControlFailure {
+    Conflict,
+    Uncertain,
+    Rejected,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -400,6 +455,174 @@ pub(super) async fn delete_public_form_submission(submission_id: &str) -> Result
         Ok(())
     } else {
         Err(())
+    }
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_webhook_destination() -> Result<WebhookDestinationResponse, ()> {
+    let response = api_request("GET", "/api/webhook-delivery", None, None).await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    serde_json::from_str::<WebhookDestinationResponse>(&response.body).map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn save_webhook_destination(
+    expected_version_id: Option<&str>,
+    expected_enabled: bool,
+    destination_url: &str,
+    enabled: bool,
+    idempotency_key: PreparedIdempotencyKey,
+) -> Result<WebhookDestinationResponse, DeliveryControlFailure> {
+    let body = serde_json::json!({
+        "expected_version_id": expected_version_id,
+        "expected_enabled": expected_enabled,
+        "destination_url": destination_url,
+        "enabled": enabled,
+    })
+    .to_string();
+    let response = api_request(
+        "PUT",
+        "/api/webhook-delivery",
+        Some(body),
+        Some(idempotency_key),
+    )
+    .await
+    .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    if response.status == 409 {
+        return Err(DeliveryControlFailure::Conflict);
+    }
+    if response.status == 0 || response.status >= 500 {
+        return Err(DeliveryControlFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(DeliveryControlFailure::Rejected);
+    }
+    let saved = serde_json::from_str::<WebhookDestinationResponse>(&response.body)
+        .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    if saved.enabled != enabled || saved.destination_version_id.is_none() {
+        return Err(DeliveryControlFailure::Uncertain);
+    }
+    Ok(saved)
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_webhook_form_delivery(
+    funnel_id: &str,
+) -> Result<WebhookFormDeliverySnapshot, ()> {
+    let response = api_request(
+        "GET",
+        &format!("/api/funnels/{funnel_id}/webhook-delivery"),
+        None,
+        None,
+    )
+    .await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let snapshot =
+        serde_json::from_str::<WebhookFormDeliverySnapshot>(&response.body).map_err(|_| ())?;
+    if snapshot.funnel_id != funnel_id {
+        return Err(());
+    }
+    Ok(snapshot)
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn save_webhook_form_delivery(
+    funnel_id: &str,
+    expected_published_revision_id: &str,
+    form_id: &str,
+    destination_version_id: &str,
+    expected_mapping_version_id: Option<&str>,
+    enabled: bool,
+    selected_field_ids: &[String],
+    idempotency_key: PreparedIdempotencyKey,
+) -> Result<WebhookFormDeliverySnapshot, DeliveryControlFailure> {
+    let path = format!("/api/funnels/{funnel_id}/webhook-delivery");
+    let body = serde_json::json!({
+        "form_id": form_id,
+        "expected_published_revision_id": expected_published_revision_id,
+        "destination_version_id": destination_version_id,
+        "expected_mapping_version_id": expected_mapping_version_id,
+        "enabled": enabled,
+        "selected_field_ids": selected_field_ids,
+    })
+    .to_string();
+    let response = api_request("PUT", &path, Some(body), Some(idempotency_key))
+        .await
+        .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    if response.status == 409 {
+        return Err(DeliveryControlFailure::Conflict);
+    }
+    if response.status == 0 || response.status >= 500 {
+        return Err(DeliveryControlFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(DeliveryControlFailure::Rejected);
+    }
+    let snapshot = serde_json::from_str::<WebhookFormDeliverySnapshot>(&response.body)
+        .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    let expected_fields = selected_field_ids.iter().collect::<BTreeSet<_>>();
+    if snapshot.funnel_id != funnel_id
+        || !snapshot.forms.iter().any(|form| {
+            let returned_fields = form.selected_field_ids.iter().collect::<BTreeSet<_>>();
+            form.form_id == form_id
+                && form.mapping_version_id.as_deref().is_some()
+                && returned_fields == expected_fields
+                && form.enabled == enabled
+        })
+    {
+        return Err(DeliveryControlFailure::Uncertain);
+    }
+    Ok(snapshot)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SubmissionDeliveryAction {
+    Retry,
+    Cancel,
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn update_submission_delivery(
+    submission_id: &str,
+    action: SubmissionDeliveryAction,
+    idempotency_key: PreparedIdempotencyKey,
+) -> Result<(), DeliveryControlFailure> {
+    let action = match action {
+        SubmissionDeliveryAction::Retry => "retry",
+        SubmissionDeliveryAction::Cancel => "cancel",
+    };
+    let response = api_request(
+        "POST",
+        &format!("/api/submissions/{submission_id}/delivery/{action}"),
+        None,
+        Some(idempotency_key),
+    )
+    .await
+    .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    if response.status == 409 {
+        return Err(DeliveryControlFailure::Conflict);
+    }
+    if response.status == 0 || response.status >= 500 {
+        return Err(DeliveryControlFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(DeliveryControlFailure::Rejected);
+    }
+    #[derive(Deserialize)]
+    struct ActionResponse {
+        submission_id: String,
+        accepted: bool,
+    }
+    let result = serde_json::from_str::<ActionResponse>(&response.body)
+        .map_err(|_| DeliveryControlFailure::Uncertain)?;
+    if result.submission_id == submission_id && result.accepted {
+        Ok(())
+    } else {
+        Err(DeliveryControlFailure::Uncertain)
     }
 }
 

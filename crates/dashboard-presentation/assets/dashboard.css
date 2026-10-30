@@ -1875,6 +1875,210 @@ h1 {
   font-weight: 700;
 }
 
+.webhook-delivery-panel {
+  display: grid;
+  gap: 1.25rem;
+  margin: 0 0 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line, #d9e2ec);
+  border-radius: 1rem;
+  background: var(--surface, #fff);
+}
+
+.webhook-delivery-heading,
+.webhook-form-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.webhook-delivery-heading h2,
+.webhook-form-settings-heading h3 {
+  margin: 0;
+  color: var(--ink, #172b4d);
+}
+
+.webhook-delivery-description,
+.webhook-delivery-help,
+.webhook-form-settings-heading p {
+  max-width: 64rem;
+  margin: 0.45rem 0 0;
+  color: var(--muted, #5f6f82);
+  line-height: 1.55;
+}
+
+.webhook-delivery-badge {
+  flex: none;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.webhook-destination-form,
+.webhook-form-delivery-settings,
+.webhook-form-delivery-card {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.webhook-destination-form > label:first-child,
+.webhook-form-delivery-settings > label {
+  color: var(--ink, #172b4d);
+  font-weight: 700;
+}
+
+.webhook-destination-form input[type="url"],
+.webhook-form-delivery-settings select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line, #d9e2ec);
+  border-radius: 0.65rem;
+  background: #fff;
+  color: var(--ink, #172b4d);
+}
+
+.webhook-destination-form input:focus-visible,
+.webhook-form-delivery-settings select:focus-visible,
+.webhook-form-delivery-card input:focus-visible {
+  outline: 3px solid rgb(49 130 206 / 35%);
+  outline-offset: 2px;
+}
+
+.webhook-enabled-toggle,
+.webhook-field-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: var(--ink, #172b4d);
+  line-height: 1.45;
+}
+
+.webhook-enabled-toggle input,
+.webhook-field-option input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  accent-color: #2563eb;
+}
+
+.webhook-form-delivery-settings {
+  padding-top: 1rem;
+  border-top: 1px solid var(--line, #d9e2ec);
+}
+
+.webhook-form-settings-heading {
+  display: block;
+}
+
+.webhook-form-delivery-card {
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--line, #d9e2ec);
+  border-radius: 0.85rem;
+  background: #fbfdff;
+}
+
+.webhook-form-delivery-card legend {
+  padding: 0 0.35rem;
+  color: var(--ink, #172b4d);
+  font-weight: 750;
+}
+
+.webhook-field-options {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.webhook-field-options > p {
+  margin: 0;
+  color: var(--muted, #5f6f82);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.webhook-delivery-warning,
+.webhook-delivery-feedback,
+.webhook-delivery-error {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.webhook-delivery-warning {
+  color: #8a4b08;
+}
+
+.webhook-delivery-feedback {
+  color: #216e4e;
+}
+
+.webhook-delivery-error,
+.submission-delivery-error {
+  color: #b42318;
+}
+
+.webhook-form-delivery-actions,
+.submission-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.submission-webhook-delivery {
+  display: grid;
+  gap: 0.4rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--line, #d9e2ec);
+  border-radius: 0.8rem;
+  background: #fbfdff;
+}
+
+.submission-webhook-delivery .submission-section-title {
+  margin: 0;
+}
+
+.submission-delivery-status {
+  margin: 0.2rem 0 0;
+  color: var(--ink, #172b4d);
+  font-weight: 750;
+}
+
+.submission-delivery-description {
+  max-width: 54rem;
+  margin: 0;
+  color: var(--muted, #5f6f82);
+  line-height: 1.5;
+}
+
+.submission-delivery-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0.3rem 0;
+}
+
+.submission-delivery-details div {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.submission-delivery-details dt {
+  color: var(--muted, #5f6f82);
+}
+
+.submission-delivery-details dd {
+  margin: 0;
+  color: var(--ink, #172b4d);
+  font-weight: 650;
+}
+
 .submission-field-list,
 .submission-consent-list {
   margin-top: -10px;

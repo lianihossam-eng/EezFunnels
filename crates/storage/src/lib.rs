@@ -7,6 +7,7 @@ use repository::{
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
+pub mod delivery_controls;
 pub mod media;
 pub mod repository;
 pub mod service_brief;
@@ -76,6 +77,10 @@ impl Bindings {
         &self,
     ) -> submission_delivery::SubmissionDeliveryRepository<'_> {
         submission_delivery::SubmissionDeliveryRepository::new(&self.database)
+    }
+
+    pub fn delivery_control_repository(&self) -> delivery_controls::DeliveryControlRepository<'_> {
+        delivery_controls::DeliveryControlRepository::new(&self.database)
     }
 
     pub fn media_asset_repository(&self) -> media::MediaAssetRepository<'_> {

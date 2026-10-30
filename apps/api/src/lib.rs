@@ -33,6 +33,7 @@ use crate::json::{validate_unique_json, JsonValidationError};
 
 mod canonical;
 mod custom_hosts;
+mod delivery_controls;
 pub mod errors;
 pub mod host;
 mod json;
@@ -164,6 +165,19 @@ pub async fn fetch(
         v2_stage_capacity_response(&env, request, correlation_id.clone()).await
     } else if request_path == "/api/submissions/recovery" {
         submission_recovery_response(&env, request, correlation_id.clone()).await
+    } else if request_path == "/api/webhook-delivery" {
+        delivery_controls::installation_response(&env, request, &correlation_id).await
+    } else if let Some((submission_id, action)) =
+        delivery_controls::submission_action_from_path(&request_path)
+    {
+        delivery_controls::submission_action_response(
+            &env,
+            request,
+            submission_id,
+            action,
+            &correlation_id,
+        )
+        .await
     } else if let Some(submission_id) = form_submission_export_id_from_path(&request_path) {
         form_submission_export_response(&env, request, submission_id, correlation_id.clone()).await
     } else if let Some(submission_id) = form_submission_delete_id_from_path(&request_path) {
@@ -188,6 +202,8 @@ pub async fn fetch(
         funnel_interaction_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/service-brief") {
         service_brief::response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/webhook-delivery") {
+        delivery_controls::funnel_response(&env, request, funnel_id, &correlation_id).await
     } else if let Some(route) = public_interaction_events_route_from_path(&request_path) {
         public_interaction_events_response(&env, request, route, correlation_id.clone(), None).await
     } else if let Some(route) = public_form_submission_route_from_path(&request_path) {
@@ -283,6 +299,8 @@ pub async fn fetch(
     if funnel_subroute(&request_path, "/completions").is_some()
         || funnel_subroute(&request_path, "/interaction-report").is_some()
         || funnel_subroute(&request_path, "/service-brief").is_some()
+        || funnel_subroute(&request_path, "/webhook-delivery").is_some()
+        || request_path == "/api/webhook-delivery"
         || request_path == "/api/submissions"
         || request_path.starts_with("/api/submissions/")
     {
@@ -5769,6 +5787,12 @@ mod tests {
         assert!(submission_recovery_gated_path("/api/submissions"));
         assert!(submission_recovery_gated_path(
             "/api/submissions/11111111-1111-4111-8111-111111111111/export"
+        ));
+        assert!(submission_recovery_gated_path(
+            "/api/submissions/11111111-1111-4111-8111-111111111111/delivery/retry"
+        ));
+        assert!(submission_recovery_gated_path(
+            "/api/submissions/11111111-1111-4111-8111-111111111111/delivery/cancel"
         ));
         assert!(submission_recovery_gated_path(
             "/api/public/funnels/service/pages/home/forms/contact/submissions"

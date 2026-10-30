@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
 
 use crate::registry::{command_ids, resolve_command, CommandActor, CommandHandler};
+use eez_domain::webhook_delivery::WebhookDeliveryStatus;
 use eez_domain::{
     document_v2::{
         BlueprintId, DocumentV2, Edit, FormId, GeneratedPlaceholderCode,
@@ -61,6 +62,10 @@ mod form_submission_status_tests;
 #[cfg(test)]
 #[path = "funnel/publication_readiness_tests.rs"]
 mod publication_readiness_tests;
+
+#[cfg(test)]
+#[path = "funnel/form_submission_delivery_tests.rs"]
+mod form_submission_delivery_tests;
 
 const MAX_FUNNEL_NAME_BYTES: usize = 120;
 const MAX_SNAPSHOT_BYTES: usize = 1_048_576;
@@ -1312,6 +1317,19 @@ struct FormSubmissionListItem {
     submitted_at_label: String,
     submitted_at_datetime: String,
     expires_at_label: String,
+    delivery: FormSubmissionDelivery,
+}
+
+#[derive(Serialize)]
+struct FormSubmissionDelivery {
+    status: WebhookDeliveryStatus,
+    attempt_count: u8,
+    last_attempt_at_label: Option<String>,
+    next_attempt_at_label: Option<String>,
+    last_http_status: Option<u16>,
+    last_outcome_code: Option<String>,
+    can_retry: bool,
+    can_cancel: bool,
 }
 
 #[derive(Serialize)]
@@ -3334,6 +3352,7 @@ fn form_submission_list_item(
     {
         return Err(FunnelCommandError::Internal);
     }
+    let delivery = form_submission_delivery(&record)?;
     let page_id =
         PageId::parse(record.page_id.clone()).map_err(|_| FunnelCommandError::Internal)?;
     let form_id =
@@ -3383,6 +3402,68 @@ fn form_submission_list_item(
         submitted_at_label: record.submitted_at_label,
         submitted_at_datetime: record.submitted_at_datetime,
         expires_at_label: record.expires_at_label,
+        delivery,
+    })
+}
+
+fn form_submission_delivery(
+    record: &PublicFormSubmissionRecord,
+) -> Result<FormSubmissionDelivery, FunnelCommandError> {
+    if !matches!(record.delivery_retry_scheduled, 0 | 1)
+        || record.delivery_state.is_some() != record.delivery_attempt_count.is_some()
+    {
+        return Err(FunnelCommandError::Internal);
+    }
+    let attempt_count = record
+        .delivery_attempt_count
+        .map(u8::try_from)
+        .transpose()
+        .map_err(|_| FunnelCommandError::Internal)?
+        .unwrap_or(0);
+    if attempt_count > 5 {
+        return Err(FunnelCommandError::Internal);
+    }
+    let status = WebhookDeliveryStatus::from_storage(
+        record.delivery_state.as_deref(),
+        record.delivery_last_outcome_code.as_deref(),
+        record.delivery_retry_scheduled == 1,
+    )
+    .ok_or(FunnelCommandError::Internal)?;
+    let last_http_status = record
+        .delivery_last_http_status
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| FunnelCommandError::Internal)?;
+    if last_http_status.is_some_and(|status| !(100..=599).contains(&status)) {
+        return Err(FunnelCommandError::Internal);
+    }
+    let terminal_outcome = matches!(
+        record.delivery_last_outcome_code.as_deref(),
+        Some(
+            "invalid_destination"
+                | "incompatible_mapping"
+                | "invalid_submission"
+                | "signing_failed"
+                | "retry_exhausted"
+                | "delivery_window_elapsed"
+                | "cancelled_by_owner"
+        )
+    );
+    Ok(FormSubmissionDelivery {
+        status,
+        attempt_count,
+        last_attempt_at_label: record.delivery_last_attempt_at_label.clone(),
+        next_attempt_at_label: record.delivery_next_attempt_at_label.clone(),
+        last_http_status,
+        last_outcome_code: record.delivery_last_outcome_code.clone(),
+        can_retry: (status == WebhookDeliveryStatus::RetryScheduled
+            || status == WebhookDeliveryStatus::Failed)
+            && attempt_count < 5
+            && !terminal_outcome,
+        can_cancel: matches!(
+            status,
+            WebhookDeliveryStatus::Pending | WebhookDeliveryStatus::RetryScheduled
+        ),
     })
 }
 
