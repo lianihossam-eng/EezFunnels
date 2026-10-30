@@ -2,6 +2,8 @@
 
 Read [the architecture guide](docs/architecture.md) before changing code that crosses a crate boundary.
 
+For public-edition work, read the [public edition contract](docs/public-edition.md) and follow the [agent skill workflow](docs/skill-workflow.md). Issue [#82](https://github.com/lianihossam-eng/EezFunnels/issues/82) is the live tracker for the 21-PR improvement series; its milestones and evidence gates are documented in [docs/public-series.md](docs/public-series.md).
+
 ## Layer ownership
 
 - `eez-domain` owns business types, validation, and invariants. It has no framework, rendering, or persistence dependency.

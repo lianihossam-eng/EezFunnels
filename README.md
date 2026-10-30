@@ -92,6 +92,8 @@ The Rust Cloudflare Worker serves the Dioxus dashboard and the funnel API. D1 st
 
 Commands, the native CLI, and MCP behavior are documented in [Commands](docs/commands.md), [Themes](docs/themes.md), and [MCP setup](docs/mcp.md). The architecture is summarized above.
 
+See the [public edition contract](docs/public-edition.md) for current product boundaries, the [improvement series](docs/public-series.md) for delivery gates, and the [agent skill workflow](docs/skill-workflow.md) for contribution review and verification.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

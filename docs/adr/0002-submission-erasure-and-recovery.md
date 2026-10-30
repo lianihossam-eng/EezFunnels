@@ -1,0 +1,5 @@
+# Erase submissions with a bounded recovery journal
+
+Status: accepted for the public improvement series.
+
+A targeted owner deletion first hides the submission and suppresses pending delivery, writes a minimal private journal to R2, then purges the D1 row; each step must be retryable. The journal retains enough technical references to match a restored D1 row without storing its submitted values. Anti-replay markers use a domain-separated SHA-256 digest of an unambiguous canonical encoding of the funnel, form, and submission-key context, never a field-value fingerprint, and expire at the source's original expiry. Keep the R2 journal for the greater of source expiry or deletion time plus the declared recovery horizon, which defaults to 30 days and is configurable from 1 to 3,650 days. The restore guarantee applies only when D1 is restored with the R2 journal intact and the journal is reapplied before reads and dispatch resume; this avoids a permanent identifier-based suppression list while making the recovery limit explicit.
