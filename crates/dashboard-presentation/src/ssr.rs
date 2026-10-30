@@ -38,6 +38,7 @@ fn is_dashboard_path(path: &str) -> bool {
             let funnel_id = route
                 .strip_suffix("/completions")
                 .or_else(|| route.strip_suffix("/interaction-report"))
+                .or_else(|| route.strip_suffix("/brief"))
                 .unwrap_or(route);
             is_valid_funnel_id(funnel_id)
         }),

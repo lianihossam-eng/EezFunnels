@@ -2041,6 +2041,306 @@ h1 {
   min-width: 320px;
 }
 
+.service-brief-page {
+  width: min(100%, 860px);
+  margin: 0 auto;
+}
+
+.service-brief-heading {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.service-brief-heading .page-description {
+  margin-top: 0;
+}
+
+.service-brief-back-link {
+  margin-top: 4px;
+  text-decoration: none;
+}
+
+.service-brief-form {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+
+.service-brief-intention-section,
+.service-brief-fields-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #e1e6ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.service-brief-intentions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.service-brief-intentions legend,
+.service-brief-fields-section h2 {
+  padding: 0;
+  color: #27344c;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.service-brief-fields-section h2 {
+  margin: 0;
+}
+
+.service-brief-help,
+.service-brief-boundary-note {
+  margin: 0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.service-brief-intention-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e3e8f0;
+  border-radius: 9px;
+  color: #35415c;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.service-brief-intention-option:hover {
+  border-color: #bdc7dc;
+}
+
+.service-brief-intention-option:has(input:checked) {
+  border-color: #8290ed;
+  background: #f5f6ff;
+}
+
+.service-brief-intention-option input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: #5366d8;
+}
+
+.service-brief-intention-option input:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 3px;
+}
+
+.service-brief-intention-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.service-brief-intention-copy strong {
+  color: #29344e;
+  font-size: 12px;
+}
+
+.service-brief-intention-copy span {
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.service-brief-boundary-note {
+  color: #46536d;
+}
+
+.service-brief-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.service-brief-field {
+  min-width: 0;
+}
+
+.service-brief-field textarea {
+  min-height: 96px;
+  line-height: 1.5;
+}
+
+.service-brief-field textarea:focus-visible {
+  outline: 3px solid #aab6ff;
+  outline-offset: 2px;
+}
+
+.service-brief-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-top: 1px solid #e1e6ef;
+}
+
+.service-brief-save-state {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.service-brief-save-state p {
+  margin: 0;
+}
+
+.service-brief-save-state[role="alert"] {
+  color: #a43442;
+}
+
+.service-brief-save-state[role="status"] {
+  color: #23724f;
+}
+
+.service-brief-conflict-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid #e3b7bf;
+  border-radius: 9px;
+  background: #fffafb;
+}
+
+.service-brief-conflict-summary h3 {
+  margin: 0;
+  color: #27344c;
+  font-size: 13px;
+}
+
+.service-brief-conflict-summary dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.service-brief-conflict-summary dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.service-brief-conflict-summary dt {
+  color: #526078;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.service-brief-conflict-summary dd {
+  margin: 0;
+  color: #35415c;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.service-brief-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.service-brief-message,
+.service-brief-loading {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid #e1e6ef;
+  border-radius: 12px;
+  background: #fff;
+  color: #526078;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.service-brief-message h2,
+.service-brief-message p {
+  margin: 0;
+}
+
+.service-brief-message h2 {
+  color: #27344c;
+  font-size: 15px;
+}
+
+.service-brief-error {
+  border-color: #e7c8ce;
+}
+
+.service-brief-loading {
+  min-height: 340px;
+  align-content: start;
+}
+
+.service-brief-skeleton {
+  width: 72%;
+  height: 13px;
+  border-radius: 4px;
+  background: #edf0f6;
+}
+
+.service-brief-skeleton-title {
+  width: 45%;
+  height: 18px;
+  margin-bottom: 8px;
+  background: #e5e9f2;
+}
+
+.service-brief-skeleton-short {
+  width: 54%;
+  margin-bottom: 14px;
+}
+
+.service-brief-skeleton-field {
+  width: 100%;
+  height: 72px;
+  margin-top: 4px;
+  border: 1px solid #e6eaf2;
+  background: #fafbfc;
+}
+
+@media (max-width: 760px) {
+  .service-brief-intention-section,
+  .service-brief-fields-section {
+    padding: 16px;
+  }
+
+  .service-brief-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .service-brief-footer {
+    align-items: stretch;
+  }
+
+  .service-brief-actions {
+    justify-content: flex-start;
+  }
+}
+
 .interaction-daily-table {
   min-width: 640px;
 }

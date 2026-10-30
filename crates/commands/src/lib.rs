@@ -10,6 +10,7 @@ mod funnel;
 pub mod public_forms;
 pub mod public_interactions;
 mod registry;
+pub mod service_brief;
 
 pub use eez_domain::FunnelBlueprint;
 #[cfg(test)]

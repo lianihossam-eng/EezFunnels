@@ -6,11 +6,13 @@ mod editor;
 mod funnels;
 mod idempotency;
 mod reports;
+mod service_brief;
 mod submissions;
 
 use editor::FunnelDetail;
 use funnels::Funnels;
 use reports::{FunnelCompletions, FunnelInteractionReport};
+use service_brief::ServiceBriefPage;
 use submissions::Submissions;
 
 #[derive(Clone, PartialEq, Routable)]
@@ -27,6 +29,10 @@ pub(crate) enum RouteView {
     #[layout(DashboardShell)]
     #[route("/funnels/:id")]
     FunnelDetail { id: String },
+    #[end_layout]
+    #[layout(DashboardShell)]
+    #[route("/funnels/:id/brief")]
+    ServiceBriefPage { id: String },
     #[end_layout]
     #[layout(DashboardShell)]
     #[route("/funnels/:id/completions")]
@@ -47,6 +53,7 @@ fn DashboardShell() -> Element {
         RouteView::Dashboard {} => "Workspace / Overview",
         RouteView::Funnels {} => "Workspace / Funnels",
         RouteView::FunnelDetail { .. } => "Workspace / Funnel editor",
+        RouteView::ServiceBriefPage { .. } => "Workspace / Service brief",
         RouteView::FunnelCompletions { .. } => "Workspace / Form completions",
         RouteView::FunnelInteractionReport { .. } => "Workspace / Interaction counts",
         RouteView::Submissions {} => "Workspace / Submissions",

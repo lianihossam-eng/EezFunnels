@@ -1,4 +1,8 @@
 #[cfg(feature = "browser")]
+use eez_domain::service_brief::SERVICE_BRIEF_FORMAT_VERSION;
+#[cfg(any(feature = "browser", test))]
+use eez_domain::service_brief::{BriefVersion, ServiceBrief};
+#[cfg(feature = "browser")]
 use eez_domain::FormCompletionPeriod;
 use eez_domain::FormSubmissionStatus;
 #[cfg(any(feature = "browser", test))]
@@ -108,6 +112,24 @@ pub(super) struct FunnelCard {
     pub(super) published_revision_id: Option<String>,
     pub(super) created_at: String,
     pub(super) updated_at: String,
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(super) struct ServiceBriefApiResponse {
+    pub(super) funnel_id: String,
+    pub(super) version: BriefVersion,
+    pub(super) format_version: u8,
+    pub(super) brief: ServiceBrief,
+    pub(super) updated_at: Option<String>,
+}
+
+#[cfg(any(feature = "browser", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ServiceBriefSaveFailure {
+    Conflict,
+    Uncertain,
+    Rejected,
 }
 
 #[cfg(feature = "browser")]
@@ -363,6 +385,66 @@ pub(super) async fn update_public_form_submission_status(
     } else {
         Err(())
     }
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_service_brief(funnel_id: &str) -> Result<ServiceBriefApiResponse, ()> {
+    let response = api_request(
+        "GET",
+        &format!("/api/funnels/{funnel_id}/service-brief"),
+        None,
+        None,
+    )
+    .await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let brief = serde_json::from_str::<ServiceBriefApiResponse>(&response.body).map_err(|_| ())?;
+    if brief.funnel_id != funnel_id || brief.format_version != SERVICE_BRIEF_FORMAT_VERSION {
+        return Err(());
+    }
+    Ok(brief)
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn save_service_brief(
+    funnel_id: &str,
+    expected_version: BriefVersion,
+    brief: &ServiceBrief,
+) -> Result<ServiceBriefApiResponse, ServiceBriefSaveFailure> {
+    let body = serde_json::json!({
+        "expected_version": expected_version.value(),
+        "format_version": SERVICE_BRIEF_FORMAT_VERSION,
+        "brief": brief,
+    })
+    .to_string();
+    let response = api_request(
+        "PUT",
+        &format!("/api/funnels/{funnel_id}/service-brief"),
+        Some(body),
+        None,
+    )
+    .await
+    .map_err(|_| ServiceBriefSaveFailure::Uncertain)?;
+    if response.status == 409 {
+        return Err(ServiceBriefSaveFailure::Conflict);
+    }
+    if response.status == 0 || response.status >= 500 {
+        return Err(ServiceBriefSaveFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(ServiceBriefSaveFailure::Rejected);
+    }
+    let saved = serde_json::from_str::<ServiceBriefApiResponse>(&response.body)
+        .map_err(|_| ServiceBriefSaveFailure::Uncertain)?;
+    if saved.funnel_id != funnel_id
+        || saved.format_version != SERVICE_BRIEF_FORMAT_VERSION
+        || saved.version.value() < expected_version.value()
+        || saved.brief != *brief
+    {
+        return Err(ServiceBriefSaveFailure::Uncertain);
+    }
+    Ok(saved)
 }
 
 #[cfg(feature = "browser")]
