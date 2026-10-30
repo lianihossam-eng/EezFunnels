@@ -93,33 +93,105 @@ try {
   await page.locator('input[name="_request_consent"]').check();
   assert.equal(await form.evaluate((element) => element.checkValidity()), true);
 
-  await page.getByRole("button", { name: "Send" }).click();
-  await page.waitForURL((url) => url.hash === `#form-success-${formId}`);
-  const status = page.getByRole("status");
+  const noScriptContext = await browser.newContext({ javaScriptEnabled: false });
+  const recoveryPage = await noScriptContext.newPage();
+  await recoveryPage.goto(pageUrl, { waitUntil: "networkidle" });
+  const recoveryForm = recoveryPage.locator("form.v2-form");
+  const recoveryAction = new URL(await recoveryForm.getAttribute("action"), pageUrl);
+  const recoveryKey = recoveryAction.searchParams.get("key");
+  assert.ok(recoveryKey);
+  const recoveryEmail = recoveryPage.getByLabel("Email");
+  await recoveryEmail.evaluate((element) => {
+    element.type = "text";
+    element.required = false;
+  });
+  await recoveryPage.getByLabel("Name").fill("Grace Hopper");
+  await recoveryEmail.fill("not-an-email");
+  await recoveryPage.locator('input[name="_request_consent"]').check();
+  const validationResponsePromise = recoveryPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/submissions") &&
+      response.request().method() === "POST",
+  );
+  await recoveryPage.getByRole("button", { name: "Send" }).click();
+  const validationResponse = await validationResponsePromise;
+  assert.equal(validationResponse.status(), 422);
+  await recoveryPage.waitForLoadState("load");
+  const recoveryMarkup = await recoveryPage.content();
+  const summaryId = `form-${formId}-errors`;
+  await recoveryPage.waitForFunction(
+    (id) => document.activeElement?.id === id,
+    summaryId,
+  );
+  const recoverySummary = recoveryPage.locator(`#${summaryId}`);
+  assert.equal(await recoverySummary.getAttribute("autofocus"), "");
+  assert.equal(await recoverySummary.getAttribute("role"), "alert");
+  assert.equal(await recoveryEmail.inputValue(), "not-an-email");
+  const retryAction = new URL(
+    await recoveryPage.locator("form.v2-form").getAttribute("action"),
+    pageUrl,
+  );
+  assert.equal(retryAction.searchParams.get("key"), recoveryKey);
+  const recoveryEmailId = await recoveryEmail.getAttribute("id");
+  await recoveryPage.getByRole("link", { name: /Email: Enter a valid value/ }).click();
+  assert.equal(new URL(recoveryPage.url()).hash, `#${recoveryEmailId}`);
+  assert.equal(
+    await recoveryEmail.evaluate((element) => element === document.activeElement),
+    true,
+  );
+  await recoveryEmail.fill("grace@example.test");
+  const successfulResponsePromise = recoveryPage.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname.endsWith("/submissions") &&
+      response.request().method() === "POST",
+  );
+  await recoveryPage.getByRole("button", { name: "Send" }).click();
+  const successfulResponse = await successfulResponsePromise;
+  assert.equal(successfulResponse.status(), 303);
+  await recoveryPage.waitForURL((url) => url.hash === `#form-success-${formId}`);
+  const successMarkup = await recoveryPage.content();
+  const status = recoveryPage.getByRole("status");
   await status.waitFor({ state: "visible" });
-  assert.equal(await status.evaluate((element) => element === document.activeElement), true);
-  assert.equal(await marketingOptIn.count(), 1);
-  const nameLabel = page.locator(`label[for="${await name.getAttribute("id")}"]`);
+  assert.equal(
+    await status.evaluate((element) => element === document.activeElement),
+    true,
+  );
+  assert.equal(await recoveryPage.locator('input[name="_marketing_opt_in"]').count(), 1);
+  const recoveryName = recoveryPage.getByLabel("Name");
+  const nameLabel = recoveryPage.locator(
+    `label[for="${await recoveryName.getAttribute("id")}"]`,
+  );
   assert.equal(await nameLabel.evaluate((element) => getComputedStyle(element).textAlign), "left");
   const [formBox, statusBox] = await Promise.all([
-    form.evaluate((element) => element.getBoundingClientRect().toJSON()),
+    recoveryForm.evaluate((element) => element.getBoundingClientRect().toJSON()),
     status.evaluate((element) => element.getBoundingClientRect().toJSON()),
   ]);
   assert.ok(Math.abs(formBox.width - statusBox.width) < 1, { formBox, statusBox });
   assert.ok(statusBox.top >= formBox.bottom + 16, { formBox, statusBox });
-  await page.addScriptTag({ content: axeSource });
-  const violations = await page.evaluate(async () => {
-    const result = await window.axe.run(document, {
-      runOnly: {
-        type: "tag",
-        values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
-      },
+  const accessibilityPage = await page.context().newPage();
+  for (const [index, markup] of [recoveryMarkup, successMarkup].entries()) {
+    await accessibilityPage.setContent(markup, { waitUntil: "load" });
+    if (index === 1) {
+      await accessibilityPage.evaluate((fragment) => {
+        window.location.hash = fragment;
+      }, `form-success-${formId}`);
+      await accessibilityPage.getByRole("status").waitFor({ state: "visible" });
+    }
+    await accessibilityPage.addScriptTag({ content: axeSource });
+    const violations = await accessibilityPage.evaluate(async () => {
+      const result = await window.axe.run(document, {
+        runOnly: {
+          type: "tag",
+          values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+        },
+      });
+      return result.violations.filter(({ impact }) => impact === "critical" || impact === "serious");
     });
-    return result.violations.filter(({ impact }) => impact === "critical" || impact === "serious");
-  });
-  assert.deepEqual(violations, [], JSON.stringify(violations));
+    assert.deepEqual(violations, [], JSON.stringify(violations));
+  }
+  await accessibilityPage.close();
   if (process.env.PR033_SCREENSHOT) {
-    await page.screenshot({ path: process.env.PR033_SCREENSHOT, fullPage: true });
+    await recoveryPage.screenshot({ path: process.env.PR033_SCREENSHOT, fullPage: true });
   }
   assert.ok(
     interactionRequests.some((request) => request.postDataJSON()?.kind === "form_viewed"),

@@ -6,7 +6,8 @@ use url::Url;
 
 use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
-    FormSubmissionError, FormSubmissionValue, FormV2, PageId, ValidatedFormSubmission,
+    FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
+    FormSubmissionValue, FormV2, PageId, ValidatedFormSubmission,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -673,21 +674,32 @@ pub fn validate_form_submission(
     request_consent_accepted: bool,
     marketing_opt_in: bool,
 ) -> Result<ValidatedFormSubmission, FormSubmissionError> {
+    let mut issues = Vec::new();
     if !request_consent_accepted {
-        return Err(FormSubmissionError::RequestConsentRequired);
+        issues.push(FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::RequestConsent,
+            code: FormSubmissionIssueCode::RequestConsentRequired,
+        });
     }
     if marketing_opt_in && form.marketing_opt_in.is_none() {
-        return Err(FormSubmissionError::MarketingConsentUnavailable);
+        issues.push(FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::Form,
+            code: FormSubmissionIssueCode::MarketingConsentUnavailable,
+        });
     }
 
     if submitted_fields
         .keys()
         .any(|name| !form.fields.iter().any(|field| field.values().0 == name))
     {
-        return Err(FormSubmissionError::InvalidFieldValues);
+        issues.push(FormSubmissionIssue {
+            target: FormSubmissionIssueTarget::Form,
+            code: FormSubmissionIssueCode::UnknownField,
+        });
     }
 
     let mut values = BTreeMap::new();
+    let mut recoverable_values = BTreeMap::new();
     for field in &form.fields {
         let (name, _, _, validation, options) = field.values();
         match field {
@@ -696,19 +708,51 @@ pub fn validate_form_submission(
             | FormField::Phone { required, .. } => {
                 let Some(value) = submitted_fields.get(name) else {
                     if *required {
-                        return Err(FormSubmissionError::InvalidFieldValues);
+                        push_field_submission_issue(
+                            &mut issues,
+                            field,
+                            FormSubmissionIssueCode::Required,
+                        );
                     }
                     continue;
                 };
+                if value.chars().count() <= field.max_value_length() as usize
+                    && !value.chars().any(char::is_control)
+                {
+                    recoverable_values.insert(name.to_owned(), value.clone());
+                }
+                if *required && value.trim().is_empty() {
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::Required,
+                    );
+                    continue;
+                }
                 if !valid_form_text_value(value, *required, validation, field.max_value_length()) {
-                    return Err(FormSubmissionError::InvalidFieldValues);
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::InvalidValue,
+                    );
+                    continue;
                 }
                 if !value.is_empty() {
                     if matches!(field, FormField::Email { .. }) && !valid_submitted_email(value) {
-                        return Err(FormSubmissionError::InvalidFieldValues);
+                        push_field_submission_issue(
+                            &mut issues,
+                            field,
+                            FormSubmissionIssueCode::InvalidValue,
+                        );
+                        continue;
                     }
                     if matches!(field, FormField::Phone { .. }) && !valid_submitted_phone(value) {
-                        return Err(FormSubmissionError::InvalidFieldValues);
+                        push_field_submission_issue(
+                            &mut issues,
+                            field,
+                            FormSubmissionIssueCode::InvalidValue,
+                        );
+                        continue;
                     }
                 }
                 values.insert(name.to_owned(), FormSubmissionValue::Text(value.clone()));
@@ -717,10 +761,25 @@ pub fn validate_form_submission(
                 let checked = match submitted_fields.get(name).map(String::as_str) {
                     None => false,
                     Some("on") => true,
-                    Some(_) => return Err(FormSubmissionError::InvalidFieldValues),
+                    Some(_) => {
+                        push_field_submission_issue(
+                            &mut issues,
+                            field,
+                            FormSubmissionIssueCode::InvalidValue,
+                        );
+                        continue;
+                    }
                 };
+                if checked {
+                    recoverable_values.insert(name.to_owned(), "on".to_owned());
+                }
                 if *required && !checked {
-                    return Err(FormSubmissionError::InvalidFieldValues);
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::Required,
+                    );
+                    continue;
                 }
                 values.insert(name.to_owned(), FormSubmissionValue::Checkbox(checked));
             }
@@ -728,18 +787,33 @@ pub fn validate_form_submission(
                 let selected = submitted_fields.get(name).map(String::as_str);
                 let Some(selected) = selected else {
                     if *required {
-                        return Err(FormSubmissionError::InvalidFieldValues);
+                        push_field_submission_issue(
+                            &mut issues,
+                            field,
+                            FormSubmissionIssueCode::Required,
+                        );
                     }
                     continue;
                 };
                 if !selected.is_empty()
                     && !options.is_some_and(|allowed| allowed.contains(&selected.to_owned()))
                 {
-                    return Err(FormSubmissionError::InvalidFieldValues);
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::InvalidChoice,
+                    );
+                    continue;
                 }
                 if *required && selected.is_empty() {
-                    return Err(FormSubmissionError::InvalidFieldValues);
+                    push_field_submission_issue(
+                        &mut issues,
+                        field,
+                        FormSubmissionIssueCode::Required,
+                    );
+                    continue;
                 }
+                recoverable_values.insert(name.to_owned(), selected.to_owned());
                 values.insert(
                     name.to_owned(),
                     FormSubmissionValue::Select(selected.to_owned()),
@@ -748,10 +822,30 @@ pub fn validate_form_submission(
         }
     }
 
+    if !issues.is_empty() {
+        return Err(FormSubmissionError {
+            issues,
+            recoverable_values,
+            request_consent_accepted,
+            marketing_opt_in,
+        });
+    }
+
     Ok(ValidatedFormSubmission {
         values,
         marketing_opt_in,
     })
+}
+
+fn push_field_submission_issue(
+    issues: &mut Vec<FormSubmissionIssue>,
+    field: &FormField,
+    code: FormSubmissionIssueCode,
+) {
+    issues.push(FormSubmissionIssue {
+        target: FormSubmissionIssueTarget::Field(field.id().as_str().to_owned()),
+        code,
+    });
 }
 
 fn valid_form_text_value(

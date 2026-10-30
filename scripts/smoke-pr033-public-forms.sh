@@ -580,6 +580,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert stale_status == 409, (stale_status, stale_body)
         assert b"conflict/public_form_stale_revision" in stale_body
+        stale_html_status, stale_html_body, stale_html_headers = request_form_with_transport_retry(
+            action_path,
+            payload,
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html",
+            },
+        )
+        assert stale_html_status == 409, (stale_html_status, stale_html_body)
+        assert stale_html_headers.get("content-type", "").startswith("text/html"), stale_html_headers
+        assert stale_html_headers.get("cache-control") == "private, no-store", stale_html_headers
+        assert f'href="/f/{slug}"'.encode() in stale_html_body, stale_html_body
+        assert b"Ada Lovelace" not in stale_html_body, stale_html_body
 
         latest_status, latest_html, latest_headers = request(
             "GET", f"/f/{slug}?utm_medium=social&utm_campaign=campaign-fixture"
@@ -654,6 +667,76 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert invalid_status == 400, (invalid_status, invalid_body)
         assert b"ada@example.test" not in invalid_body
+        for accept_value in (
+            "*/*",
+            "text/html;q=0.8, application/json;q=0.9",
+            "text/html;q=0",
+        ):
+            generic_accept_status, generic_accept_body, generic_accept_headers = request_form_with_transport_retry(
+                action_path,
+                invalid_payload,
+                {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": accept_value,
+                },
+            )
+            assert generic_accept_status == 400, (accept_value, generic_accept_status)
+            assert generic_accept_headers.get("content-type", "").startswith("application/json"), generic_accept_headers
+            assert b"ada@example.test" not in generic_accept_body
+        malformed_html_status, malformed_html_body, malformed_html_headers = request_form_with_transport_retry(
+            action_path,
+            bytes([0xFF]),
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html",
+            },
+        )
+        assert malformed_html_status == 400, (malformed_html_status, malformed_html_body)
+        assert malformed_html_headers.get("content-type", "").startswith("text/html"), malformed_html_headers
+        assert b"\xff" not in malformed_html_body
+
+        consent_html_status, consent_html_body, consent_html_headers = request_form_with_transport_retry(
+            action_path,
+            invalid_payload,
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html",
+            },
+        )
+        assert consent_html_status == 422, (consent_html_status, consent_html_body)
+        assert consent_html_headers.get("content-type", "").startswith("text/html"), consent_html_headers
+        assert consent_html_headers.get("cache-control") == "private, no-store", consent_html_headers
+        assert consent_html_headers.get("vary") == "Accept", consent_html_headers
+        assert b'role="alert"' in consent_html_body, consent_html_body
+        assert b'href="#form-' + form_id.encode() + b'-request-consent"' in consent_html_body
+        assert b'value="Ada Lovelace"' in consent_html_body, consent_html_body
+        assert b'value="ada@example.test"' in consent_html_body, consent_html_body
+        assert b'name="_request_consent" value="on" required checked' not in consent_html_body
+        assert b"Ada%20Lovelace" not in consent_html_body
+
+        email_input = re.search(rb'<input[^>]*name="email"[^>]*>', latest_html)
+        assert email_input is not None, latest_html
+        email_input_id = re.search(rb'id="([^"]+)"', email_input.group(0))
+        assert email_input_id is not None, email_input.group(0)
+        email_id = email_input_id.group(1)
+        invalid_email_payload = urlencode(
+            {"name": "Ada Lovelace", "email": "not-an-email", "_request_consent": "on"}
+        ).encode()
+        invalid_email_status, invalid_email_html, invalid_email_headers = request_form_with_transport_retry(
+            action_path,
+            invalid_email_payload,
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html",
+            },
+        )
+        assert invalid_email_status == 422, (invalid_email_status, invalid_email_html)
+        assert invalid_email_headers.get("cache-control") == "private, no-store", invalid_email_headers
+        assert b'href="#' + email_id + b'"' in invalid_email_html, invalid_email_html
+        assert b'id="' + email_id + b'-error"' in invalid_email_html, invalid_email_html
+        assert b'value="not-an-email"' in invalid_email_html, invalid_email_html
+        assert b'name="_request_consent" value="on" required checked' in invalid_email_html
+        assert b'not-an-email' not in re.search(rb'action="([^"]+)"', invalid_email_html).group(1)
 
         cross_origin_status, cross_origin_body, _ = request_form_with_transport_retry(
             action_path,
@@ -1000,6 +1083,19 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         )
         assert rate_status == 429, (rate_status, rate_body)
         assert rate_headers.get("retry-after") == "60", rate_headers
+        rate_html_status, rate_html_body, rate_html_headers = request_form_with_transport_retry(
+            re.sub(r"(?<=key=)[0-9a-f-]{36}", rate_limit_key, action_path),
+            payload,
+            {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html",
+            },
+        )
+        assert rate_html_status == 429, (rate_html_status, rate_html_body)
+        assert rate_html_headers.get("retry-after") == "60", rate_html_headers
+        assert rate_html_headers.get("cache-control") == "private, no-store", rate_html_headers
+        assert b"Please wait before trying again" in rate_html_body, rate_html_body
+        assert b'value="Ada Lovelace"' in rate_html_body, rate_html_body
 
         read_status, read_body, _ = request(
             "GET", action_path.split("?", 1)[0]
