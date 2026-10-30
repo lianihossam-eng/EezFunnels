@@ -76,7 +76,7 @@ def main() -> int:
     connection.execute(
         "INSERT INTO public_submission_erasure_intents "
         "(submission_id, replay_digest, source_expires_at, deleted_at, retain_until) "
-        "VALUES (?, ?, 200, 110, 2_592_110)",
+        "VALUES (?, ?, 200, 110, 2592110)",
         (SUBMISSION_ID, DIGEST),
     )
     connection.execute(
@@ -137,7 +137,7 @@ def main() -> int:
     connection.execute(
         "INSERT INTO public_submission_erasure_intents "
         "(submission_id, replay_digest, source_expires_at, deleted_at, retain_until) "
-        "VALUES (?, ?, 300, 210, 2_592_210)",
+        "VALUES (?, ?, 300, 210, 2592210)",
         (late_id, late_digest),
     )
     assert connection.execute(
