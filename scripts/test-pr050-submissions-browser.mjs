@@ -26,7 +26,7 @@ try {
 
   const graceEntry = entries.filter({ hasText: "Grace Hopper" });
   assert.equal(await graceEntry.count(), 1);
-  await graceEntry.locator("summary").click();
+  await graceEntry.locator(":scope > summary").click();
   await page.getByText("Grace Hopper", { exact: true }).waitFor({ state: "visible" });
   await page.getByRole("heading", { name: "Consent record" }).first().waitFor({ state: "visible" });
   const consentCopy = graceEntry.getByText("I agree to be contacted about this updated request.", { exact: true });
@@ -69,7 +69,7 @@ try {
   const qualifiedEntry = page.locator("details.submission-entry").filter({
     has: page.locator(".submission-status-badge").getByText("Qualified", { exact: true }),
   });
-  await qualifiedEntry.locator("summary").click();
+  await qualifiedEntry.locator(":scope > summary").click();
   await qualifiedEntry.getByText("Grace Hopper", { exact: true }).waitFor({ state: "visible" });
 
   const closedList = page.waitForResponse((response) =>
