@@ -15,7 +15,7 @@ run_worker_first = ["/*"]
 enabled = true
 
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["* * * * *", "*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -73,4 +73,4 @@ binding = "KV"
 id = "00000000-0000-0000-0000-000000000002"
 
 [env.dev.triggers]
-crons = ["*/15 * * * *"]
+crons = ["* * * * *", "*/15 * * * *"]

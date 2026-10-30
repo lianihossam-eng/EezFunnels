@@ -40,6 +40,7 @@ mod mcp;
 mod origin;
 mod service_brief;
 mod sitemap;
+mod webhook_transport;
 
 const INTERACTION_SCRIPT: &str = include_str!("interaction.js");
 
@@ -302,12 +303,93 @@ pub async fn fetch(
 }
 
 #[event(scheduled)]
-pub async fn scheduled(
-    _event: worker::ScheduledEvent,
-    env: Env,
-    _context: worker::ScheduleContext,
-) {
-    let bindings = match eez_storage::Bindings::from_env(&env) {
+pub async fn scheduled(event: worker::ScheduledEvent, env: Env, _context: worker::ScheduleContext) {
+    match event.cron().as_str() {
+        "* * * * *" => run_webhook_dispatch(&env).await,
+        "*/15 * * * *" => run_periodic_cleanup(&env).await,
+        _ => {}
+    }
+}
+
+async fn run_webhook_dispatch(env: &Env) {
+    let bindings = match eez_storage::Bindings::from_env(env) {
+        Ok(bindings) => bindings,
+        Err(_) => {
+            worker::console_error!("Scheduled webhook dispatch could not load bindings");
+            return;
+        }
+    };
+    let lifecycle = bindings.submission_lifecycle_repository();
+    let deliveries = bindings.submission_delivery_repository();
+    match deliveries.has_due_tasks().await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(_) => {
+            worker::console_error!("Scheduled webhook dispatch could not check due tasks");
+            return;
+        }
+    }
+    if lifecycle.require_recovery_ready().await.is_err() {
+        worker::console_warn!("Scheduled webhook dispatch paused by submission recovery gate");
+        return;
+    }
+    if deliveries
+        .terminalize_exhausted_and_expired()
+        .await
+        .is_err()
+    {
+        worker::console_error!("Scheduled webhook dispatch could not terminalize expired tasks");
+        return;
+    }
+    match deliveries.has_dispatchable_tasks().await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(_) => {
+            worker::console_error!("Scheduled webhook dispatch could not check dispatchable tasks");
+            return;
+        }
+    }
+    let secret = match env.secret("WEBHOOK_SIGNING_SECRET") {
+        Ok(secret) => secret.to_string(),
+        Err(_) => {
+            worker::console_warn!(
+                "Scheduled webhook dispatch paused: signing secret is unavailable"
+            );
+            return;
+        }
+    };
+    let signing_key = match eez_domain::webhook_delivery::WebhookSigningKey::parse(&secret) {
+        Ok(key) => key,
+        Err(_) => {
+            worker::console_error!("Scheduled webhook dispatch paused: signing secret is invalid");
+            return;
+        }
+    };
+    match eez_commands::public_delivery::dispatch_due(
+        &lifecycle,
+        &deliveries,
+        &signing_key,
+        &webhook_transport::CloudflareWebhookTransport,
+    )
+    .await
+    {
+        Ok(summary) if summary.paused => {
+            worker::console_warn!("Scheduled webhook dispatch paused by submission recovery gate");
+        }
+        Ok(summary) if summary.attempted > 0 || summary.terminal > 0 => worker::console_log!(
+            "Scheduled webhook dispatch completed: attempted={}, accepted={}, retryable={}, terminal={}",
+            summary.attempted,
+            summary.accepted,
+            summary.retryable,
+            summary.terminal
+        ),
+        Ok(_) => {}
+        Err(_) => worker::console_error!("Scheduled webhook dispatch failed; durable tasks remain available for retry"),
+    }
+}
+
+async fn run_periodic_cleanup(env: &Env) {
+    let bindings = match eez_storage::Bindings::from_env(env) {
         Ok(bindings) => bindings,
         Err(error) => {
             worker::console_error!("Scheduled cleanup could not load bindings: {error:?}");
@@ -358,7 +440,7 @@ pub async fn scheduled(
         worker::console_error!("Expired public interaction event cleanup failed: {error:?}");
     }
 
-    if eez_storage::stage::StageCapacity::from_env(&env).is_none() {
+    if eez_storage::stage::StageCapacity::from_env(env).is_none() {
         worker::console_warn!(
             "V2 document stage cleanup skipped because orphan budgets are not configured"
         );
