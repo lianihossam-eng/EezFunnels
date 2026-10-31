@@ -4,10 +4,10 @@ use crate::routes::RouteView;
 use eez_domain::document_v2::PublicLanguage;
 use eez_domain::document_v2::{
     is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult,
-    IdKind, IdSource, NewBlock, SectionKind,
+    IdKind, IdSource, NewBlock, SectionKind, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
 };
 #[cfg(feature = "browser")]
-use eez_domain::document_v2::{AssetId, BlockId, ImageAlt, PageId, SectionId};
+use eez_domain::document_v2::{AssetId, BlockId, ImageAlt};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::document_v2::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,

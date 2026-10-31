@@ -12,7 +12,7 @@ pub use model::{
     FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
     FormV2, ImageAlt, PageId, PageV2, PublicLanguage, RevisionIdV2, SectionId, SectionKind,
     SectionV2, StableDocumentId, TextPresentation, V2FunnelId, ValidatedFormSubmission,
-    ValidationRange,
+    ValidationRange, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
 };
 pub use placeholders::{
     GeneratedPlaceholderCode, GeneratedPlaceholderMarker, GeneratedPlaceholderPageField,

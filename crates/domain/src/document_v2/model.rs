@@ -254,7 +254,27 @@ impl BlockV2 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ActionV2 {
     NavigatePage { page_id: PageId },
+    NavigateSection { section_id: SectionId },
     ExternalHttps { url: String },
+    Telephone { number: String },
+    Email { address: String },
+}
+
+pub const SAMPLE_TELEPHONE_NUMBER: &str = "+12025550100";
+pub const SAMPLE_EMAIL_ADDRESS: &str = "contact@example.invalid";
+
+impl ActionV2 {
+    pub fn is_reserved_sample(&self) -> bool {
+        match self {
+            Self::Telephone { number } => number == SAMPLE_TELEPHONE_NUMBER,
+            Self::Email { address } => address
+                .rsplit_once('@')
+                .is_some_and(|(_, domain)| domain.to_ascii_lowercase().ends_with(".invalid")),
+            Self::NavigatePage { .. }
+            | Self::NavigateSection { .. }
+            | Self::ExternalHttps { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

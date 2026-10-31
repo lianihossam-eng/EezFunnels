@@ -9,7 +9,7 @@ use eez_domain::document_v2::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v8";
+pub const RENDERER_VERSION_V2: &str = "renderer-v9";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -47,6 +47,7 @@ enum RendererFeature {
     PublicLanguage,
     FormPresentation,
     MultilineText,
+    ActionDestinations,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +86,16 @@ const RENDERER_V8_FEATURES: &[RendererFeature] = &[
     RendererFeature::FormPresentation,
     RendererFeature::MultilineText,
 ];
+const RENDERER_V9_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+    RendererFeature::Metadata,
+    RendererFeature::PublicLanguage,
+    RendererFeature::FormPresentation,
+    RendererFeature::MultilineText,
+    RendererFeature::ActionDestinations,
+];
 const RENDERER_PROFILES: &[RendererProfile] = &[
     RendererProfile {
         version: "renderer-v3",
@@ -107,8 +118,12 @@ const RENDERER_PROFILES: &[RendererProfile] = &[
         features: RENDERER_V7_FEATURES,
     },
     RendererProfile {
-        version: RENDERER_VERSION_V2,
+        version: "renderer-v8",
         features: RENDERER_V8_FEATURES,
+    },
+    RendererProfile {
+        version: RENDERER_VERSION_V2,
+        features: RENDERER_V9_FEATURES,
     },
 ];
 
@@ -132,6 +147,7 @@ pub enum V2RenderError {
     PublicLanguageNotEnabled,
     FormPresentationNotEnabled,
     MultilineTextNotEnabled,
+    ActionDestinationsNotEnabled,
     SerializationFailed,
 }
 
@@ -149,6 +165,7 @@ impl Display for V2RenderError {
             Self::PublicLanguageNotEnabled => "validation/v2_public_language_not_enabled",
             Self::FormPresentationNotEnabled => "validation/v2_form_presentation_not_enabled",
             Self::MultilineTextNotEnabled => "validation/v2_multiline_text_not_enabled",
+            Self::ActionDestinationsNotEnabled => "validation/v2_action_destinations_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -544,6 +561,25 @@ fn validate_manifest(
     {
         return Err(V2RenderError::MultilineTextNotEnabled);
     }
+    if !profile.supports(RendererFeature::ActionDestinations)
+        && document.pages().iter().any(|page| {
+            page.sections().iter().any(|section| {
+                section.blocks().iter().any(|block| {
+                    matches!(
+                        block,
+                        BlockV2::Button {
+                            action: ActionV2::NavigateSection { .. }
+                                | ActionV2::Telephone { .. }
+                                | ActionV2::Email { .. },
+                            ..
+                        }
+                    )
+                })
+            })
+        })
+    {
+        return Err(V2RenderError::ActionDestinationsNotEnabled);
+    }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let assets = canonical_asset_records(document, assets)?;
@@ -610,6 +646,21 @@ pub fn referenced_asset_ids(document: &DocumentV2) -> Vec<String> {
         }
     }
     asset_ids.into_iter().collect()
+}
+
+fn mailto_uri(address: &str) -> String {
+    let mut uri = String::from("mailto:");
+    for byte in address.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'@' | b'.' | b'-' | b'_' | b'+') {
+            uri.push(char::from(byte));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            uri.push('%');
+            uri.push(char::from(HEX[(byte >> 4) as usize]));
+            uri.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    uri
 }
 
 fn is_lower_sha256(value: &str) -> bool {
@@ -737,9 +788,17 @@ fn render_page(
     for section in page.sections() {
         html.push_str("<section class=\"v2-section v2-section--");
         html.push_str(section_kind_name(section.section_type()));
-        html.push_str("\" data-section-id=\"");
-        html.push_str(&crate::escape_html_attribute(section.id().as_str()));
-        html.push_str("\">");
+        if renderer.supports(RendererFeature::ActionDestinations) {
+            html.push_str("\" id=\"section-");
+            html.push_str(&crate::escape_html_attribute(section.id().as_str()));
+            html.push_str("\" data-section-id=\"");
+            html.push_str(&crate::escape_html_attribute(section.id().as_str()));
+            html.push_str("\">");
+        } else {
+            html.push_str("\" data-section-id=\"");
+            html.push_str(&crate::escape_html_attribute(section.id().as_str()));
+            html.push_str("\">");
+        }
         for block in section.blocks() {
             match block {
                 BlockV2::Heading { level, text, .. } => {
@@ -800,7 +859,43 @@ fn render_page(
                             html.push_str("</span>");
                         }
                     }
+                    ActionV2::NavigateSection { section_id } => {
+                        html.push_str("<a class=\"v2-button\" href=\"#section-");
+                        html.push_str(&crate::escape_html_attribute(section_id.as_str()));
+                        html.push_str("\">");
+                        html.push_str(&crate::escape_html_text(label));
+                        html.push_str("</a>");
+                    }
+                    ActionV2::Telephone { number }
+                        if matches!(
+                            link_mode,
+                            LinkMode::PublishedV3 | LinkMode::Published { .. }
+                        ) =>
+                    {
+                        html.push_str("<a class=\"v2-button\" href=\"tel:");
+                        html.push_str(&crate::escape_html_attribute(number));
+                        html.push_str("\">");
+                        html.push_str(&crate::escape_html_text(label));
+                        html.push_str("</a>");
+                    }
+                    ActionV2::Email { address }
+                        if matches!(
+                            link_mode,
+                            LinkMode::PublishedV3 | LinkMode::Published { .. }
+                        ) =>
+                    {
+                        html.push_str("<a class=\"v2-button\" href=\"");
+                        html.push_str(&crate::escape_html_attribute(&mailto_uri(address)));
+                        html.push_str("\">");
+                        html.push_str(&crate::escape_html_text(label));
+                        html.push_str("</a>");
+                    }
                     ActionV2::ExternalHttps { .. } => {
+                        html.push_str("<span class=\"v2-button\" aria-disabled=\"true\">");
+                        html.push_str(&crate::escape_html_text(label));
+                        html.push_str("</span>");
+                    }
+                    ActionV2::Telephone { .. } | ActionV2::Email { .. } => {
                         html.push_str("<span class=\"v2-button\" aria-disabled=\"true\">");
                         html.push_str(&crate::escape_html_text(label));
                         html.push_str("</span>");

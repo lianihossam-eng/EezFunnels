@@ -397,8 +397,20 @@ fn validate_block(block: &mut BlockV2) -> Result<(), DocumentError> {
         }
         BlockV2::Button { label, action, .. } => {
             validate_nonempty_text(label, 8192, "blocks.label")?;
-            if let ActionV2::ExternalHttps { url } = action {
-                *url = canonical_https_url(url)?;
+            match action {
+                ActionV2::ExternalHttps { url } => *url = canonical_https_url(url)?,
+                ActionV2::Telephone { number } => {
+                    *number = canonical_action_phone(number)?;
+                }
+                ActionV2::Email { address } if !valid_submitted_email(address) => {
+                    return Err(DocumentError::at(
+                        "validation/action_email_invalid",
+                        "blocks.action.address",
+                    ));
+                }
+                ActionV2::NavigatePage { .. }
+                | ActionV2::NavigateSection { .. }
+                | ActionV2::Email { .. } => {}
             }
         }
         BlockV2::Image { alt, .. } => {
@@ -544,6 +556,11 @@ fn validate_forms_and_graph(
     let mut placed_forms = BTreeSet::new();
     for (source_index, page) in data.pages.iter().enumerate() {
         let mut page_forms = BTreeSet::new();
+        let page_sections = page
+            .sections
+            .iter()
+            .map(|section| section.id.clone())
+            .collect::<BTreeSet<_>>();
         for section in &page.sections {
             for block in &section.blocks {
                 match block {
@@ -558,6 +575,15 @@ fn validate_forms_and_graph(
                             ));
                         };
                         graph[source_index].insert(*target_index);
+                    }
+                    BlockV2::Button {
+                        action: ActionV2::NavigateSection { section_id },
+                        ..
+                    } if !page_sections.contains(section_id) => {
+                        return Err(DocumentError::at(
+                            "validation/action_section_missing",
+                            "blocks.action.section_id",
+                        ));
                     }
                     BlockV2::Form { form_id, .. } => {
                         let Some(form_index) = forms.get(form_id) else {
@@ -1032,6 +1058,54 @@ fn valid_submitted_phone(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_digit() || matches!(character, '+' | '-' | '(' | ')' | '.' | ' ')
         })
+}
+
+fn canonical_action_phone(value: &str) -> Result<String, DocumentError> {
+    let value = value.trim();
+    if value.len() > 64 {
+        return Err(DocumentError::at(
+            "validation/action_phone_invalid",
+            "blocks.action.number",
+        ));
+    }
+
+    let mut canonical = String::with_capacity(value.len());
+    let mut digit_count = 0usize;
+    let mut in_parentheses = false;
+    let mut parenthetical_digit_count = 0usize;
+    for (index, character) in value.chars().enumerate() {
+        match character {
+            '+' if index == 0 => canonical.push('+'),
+            digit if digit.is_ascii_digit() => {
+                digit_count += 1;
+                if in_parentheses {
+                    parenthetical_digit_count += 1;
+                }
+                canonical.push(digit);
+            }
+            '(' if !in_parentheses => {
+                in_parentheses = true;
+                parenthetical_digit_count = 0;
+            }
+            ')' if in_parentheses && parenthetical_digit_count > 0 => {
+                in_parentheses = false;
+            }
+            ' ' | '-' | '.' => {}
+            _ => {
+                return Err(DocumentError::at(
+                    "validation/action_phone_invalid",
+                    "blocks.action.number",
+                ));
+            }
+        }
+    }
+    if in_parentheses || !(3..=15).contains(&digit_count) {
+        return Err(DocumentError::at(
+            "validation/action_phone_invalid",
+            "blocks.action.number",
+        ));
+    }
+    Ok(canonical)
 }
 
 fn valid_field_name(value: &str) -> bool {

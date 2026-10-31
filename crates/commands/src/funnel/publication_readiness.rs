@@ -1,5 +1,5 @@
 use eez_domain::document_v2::{
-    DocumentV2, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget,
+    BlockV2, DocumentV2, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget,
 };
 use eez_storage::repository::RevisionRecord;
 use serde::Serialize;
@@ -39,6 +39,7 @@ enum ReadinessSeverity {
 #[serde(rename_all = "snake_case")]
 enum ReadinessAction {
     ReplaceOrRemoveGeneratedText,
+    ReplaceActionDestination,
     AddSearchDescription,
 }
 
@@ -130,6 +131,24 @@ pub(super) fn for_v2(revision_id: &str, document: &DocumentV2) -> PublicationRea
             },
         })
         .collect::<Vec<_>>();
+    for page in document.pages() {
+        for section in page.sections() {
+            for block in section.blocks() {
+                if matches!(block, BlockV2::Button { action, .. } if action.is_reserved_sample()) {
+                    findings.push(ReadinessFinding {
+                        code: "publication/action_destination_unconfigured",
+                        severity: ReadinessSeverity::Blocking,
+                        action: ReadinessAction::ReplaceActionDestination,
+                        target: ReadinessTarget::V2Block {
+                            page_id: page.id().as_str().to_owned(),
+                            section_id: section.id().as_str().to_owned(),
+                            block_id: block.id().as_str().to_owned(),
+                        },
+                    });
+                }
+            }
+        }
+    }
     findings.extend(
         document
             .pages()

@@ -3,7 +3,10 @@ use super::{
     convert_v1_to_v2, decode_snapshot, publication_readiness, FunnelCreateCommand,
     FunnelCreateCommandV2,
 };
-use eez_domain::{document_v2::DocumentV2, FunnelBlueprint};
+use eez_domain::{
+    document_v2::{DocumentV2, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER},
+    FunnelBlueprint,
+};
 use eez_storage::repository::RevisionRecord;
 use serde_json::{json, Value};
 
@@ -250,6 +253,110 @@ fn v2_readiness_blocks_explicit_starter_prompts_and_keeps_editorial_advice_nonbl
         .unwrap()
         .iter()
         .all(|finding| { finding["severity"] == "warning" }));
+}
+
+#[test]
+fn v2_readiness_blocks_reserved_action_samples_until_destinations_are_replaced() {
+    let service = stored_v2(FunnelBlueprint::LeadGen);
+    let mut document_json: Value = serde_json::from_str(&service.data_json).expect("starter JSON");
+    let blocks = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks");
+    blocks.push(json!({
+        "id":"block-sample-phone",
+        "kind":"button",
+        "label":"Call",
+        "action":{"kind":"telephone", "number":SAMPLE_TELEPHONE_NUMBER}
+    }));
+    blocks.push(json!({
+        "id":"block-sample-email",
+        "kind":"button",
+        "label":"Email",
+        "action":{"kind":"email", "address":SAMPLE_EMAIL_ADDRESS}
+    }));
+    blocks.push(json!({
+        "id":"block-uppercase-invalid-email",
+        "kind":"button",
+        "label":"Alternate email",
+        "action":{"kind":"email", "address":"CONTACT@EXAMPLE.INVALID"}
+    }));
+    blocks.push(json!({
+        "id":"block-other-invalid-email",
+        "kind":"button",
+        "label":"Business email",
+        "action":{"kind":"email", "address":"leads@service.invalid"}
+    }));
+
+    let document = DocumentV2::decode(
+        serde_json::to_string(&document_json)
+            .expect("document JSON serializes")
+            .as_bytes(),
+        &service.funnel_id,
+    )
+    .expect("sample action document is valid");
+    let readiness = publication_readiness::for_v2(&service.id, &document);
+    let findings = serde_json::to_value(&readiness).expect("readiness serializes");
+    let blockers = findings["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|finding| finding["severity"] == "blocking")
+        .collect::<Vec<_>>();
+
+    assert!(!readiness.can_publish());
+    assert_eq!(blockers.len(), 4);
+    assert!(blockers.iter().all(|finding| {
+        finding["code"] == "publication/action_destination_unconfigured"
+            && finding["action"] == "replace_action_destination"
+    }));
+    assert!(blockers
+        .iter()
+        .any(|finding| finding["target"]["block_id"] == "block-sample-phone"));
+    assert!(blockers
+        .iter()
+        .any(|finding| finding["target"]["block_id"] == "block-sample-email"));
+    assert!(blockers
+        .iter()
+        .any(|finding| { finding["target"]["block_id"] == "block-uppercase-invalid-email" }));
+    assert!(blockers
+        .iter()
+        .any(|finding| { finding["target"]["block_id"] == "block-other-invalid-email" }));
+
+    let blocks = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks");
+    for block in blocks {
+        match block["id"].as_str() {
+            Some("block-sample-phone") => {
+                block["action"]["number"] = json!("+12025550123");
+            }
+            Some("block-sample-email") => {
+                block["action"]["address"] = json!("contact@service-company.test");
+            }
+            Some("block-uppercase-invalid-email") => {
+                block["action"]["address"] = json!("contact@service-company.test");
+            }
+            Some("block-other-invalid-email") => {
+                block["action"]["address"] = json!("leads@service-company.test");
+            }
+            _ => {}
+        }
+    }
+
+    let updated_document = DocumentV2::decode(
+        serde_json::to_string(&document_json)
+            .expect("updated document JSON serializes")
+            .as_bytes(),
+        &service.funnel_id,
+    )
+    .expect("replaced destinations are valid");
+    let updated_readiness = publication_readiness::for_v2(&service.id, &updated_document);
+    assert!(updated_readiness.can_publish());
+    assert!(serde_json::to_value(updated_readiness).unwrap()["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["severity"] == "warning"));
 }
 
 #[test]
