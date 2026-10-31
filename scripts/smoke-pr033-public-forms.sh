@@ -1118,6 +1118,13 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert interaction_report["command_id"] == "interaction.report.read", interaction_report
         assert interaction_report["funnel_id"] == funnel_id, interaction_report
         assert interaction_report["period_days"] == 7, interaction_report
+        assert interaction_report["as_of"].endswith("Z"), interaction_report
+        assert interaction_report["as_of"][:10] == interaction_report["days"][-1]["utc_day"], interaction_report
+        assert interaction_report["report_context"] == {
+            "collection_state": "enabled",
+            "effective_retention_days": 1,
+            "historical_coverage": "unknown",
+        }, interaction_report
         assert interaction_report["total_events"] == event_summary["events"], interaction_report
         assert len(interaction_report["days"]) == 7, interaction_report
         assert interaction_report["days"][-1]["is_partial_today"] is True, interaction_report
@@ -1130,20 +1137,26 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             {"campaign_id": None, "events": event_summary["events"] - 1},
             {"campaign_id": "spring-launch", "events": 1},
         ], interaction_report
+        assert sum(item["events"] for item in interaction_report["pages"]) == event_summary["events"], interaction_report
+        assert sum(item["events"] for item in interaction_report["revisions"]) == event_summary["events"], interaction_report
+        assert sum(item["events"] for item in interaction_report["forms"]) <= event_summary["events"], interaction_report
+        assert all(item["page_id"] == "page-home" for item in interaction_report["pages"]), interaction_report
+        assert all(item["form_id"] == form_id for item in interaction_report["forms"]), interaction_report
+        assert all(item["revision_id"] == updated_revision_id for item in interaction_report["revisions"]), interaction_report
         for private_value in (
             "event_id",
             "replay_fingerprint",
             "received_at",
             "visitor_id",
             "session_id",
-            "form_id",
             "email",
             "unregistered-campaign",
         ):
             assert private_value.encode() not in interaction_report_body, private_value
         assert set(interaction_report) == {
             "command_id", "correlation_id", "funnel_id", "period_days",
-            "total_events", "days", "campaigns"
+            "as_of", "report_context", "total_events", "days", "pages",
+            "forms", "revisions", "campaigns"
         }, interaction_report
 
         for period_days in (30, 90):
@@ -1573,6 +1586,13 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         completion_report = json.loads(completion_body)
         assert completion_report["funnel_id"] == funnel_id, completion_report
         assert completion_report["period_days"] == 7, completion_report
+        assert completion_report["as_of"].endswith("Z"), completion_report
+        assert completion_report["as_of"][:10] == completion_report["days"][-1]["utc_day"], completion_report
+        assert completion_report["report_context"] == {
+            "collection_state": "enabled",
+            "effective_retention_days": 1,
+            "historical_coverage": "unknown",
+        }, completion_report
         assert completion_report["total_completions"] == 28, completion_report
         assert len(completion_report["days"]) == 7, completion_report
         assert completion_report["days"][-1]["is_partial_today"] is True, completion_report
@@ -1587,6 +1607,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "form_id": form_id,
             "completions": 28,
         }, {"report": completion_report, "expected_form_id": form_id}
+        assert sum(item["completions"] for item in completion_report["pages"]) == 28, completion_report
+        assert completion_report["pages"] == [{
+            "page_id": "page-home", "completions": 28
+        }], completion_report
+        assert sum(item["completions"] for item in completion_report["revisions"]) == 28, completion_report
         assert {
             item["channel"]: item["completions"]
             for item in completion_report["channels"]
@@ -1597,7 +1622,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         ), completion_report
         assert set(completion_report) == {
             "command_id", "correlation_id", "funnel_id", "period_days",
-            "total_completions", "days", "forms", "channels"
+            "as_of", "report_context", "total_completions", "days", "pages",
+            "forms", "revisions", "channels"
         }, completion_report
         assert b"ada@example.test" not in completion_body
         assert b"campaign-fixture" not in completion_body
@@ -1665,6 +1691,9 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
         assert len(isolated_report["days"]) == 7, isolated_report
         assert all(day["completions"] == 0 for day in isolated_report["days"])
         assert isolated_report["forms"] == []
+        assert isolated_report["pages"] == []
+        assert isolated_report["revisions"] == []
+        assert isolated_report["report_context"]["collection_state"] == "enabled"
         assert isolated_report["channels"] == []
         isolated_interaction_status, isolated_interaction_body, isolated_interaction_headers = request(
             "GET", f"/api/funnels/{isolated_funnel_id}/interaction-report?period=7"
@@ -1679,6 +1708,10 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             for day in isolated_interaction_report["days"]
         ), isolated_interaction_report
         assert isolated_interaction_report["campaigns"] == [], isolated_interaction_report
+        assert isolated_interaction_report["pages"] == [], isolated_interaction_report
+        assert isolated_interaction_report["forms"] == [], isolated_interaction_report
+        assert isolated_interaction_report["revisions"] == [], isolated_interaction_report
+        assert isolated_interaction_report["report_context"]["collection_state"] == "enabled"
 
         first_page_status, first_page_body, first_page_headers = request("GET", "/api/submissions")
         assert first_page_status == 200, first_page_body

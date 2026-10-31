@@ -2561,6 +2561,48 @@ h1 {
   line-height: 1.6;
 }
 
+.completion-report-context {
+  display: grid;
+  gap: 8px;
+  padding-block: 12px;
+  border-block: 1px solid #e3e8f0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.completion-report-context dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+}
+
+.completion-report-context dl div {
+  display: grid;
+  gap: 2px;
+}
+
+.completion-report-context dt {
+  color: #68758b;
+  font-size: 11px;
+}
+
+.completion-report-context dd {
+  margin: 0;
+  color: #27344c;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.completion-report-context p,
+.completion-zero-note {
+  margin: 0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .completion-table-wrap {
   width: 100%;
   overflow-x: auto;

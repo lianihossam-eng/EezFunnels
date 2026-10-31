@@ -2,12 +2,21 @@ use dioxus::prelude::*;
 use eez_domain::{FormCompletionPeriod, InteractionReportPeriod};
 
 #[cfg(test)]
-use super::api::interaction_report_is_valid;
+use super::api::{form_completion_report_is_valid, interaction_report_is_valid};
 #[cfg(feature = "browser")]
 use super::api::{load_form_completion_report, load_interaction_report};
 #[cfg(test)]
-use super::api::{CampaignInteractionCountResponse, DailyInteractionReportDayResponse};
-use super::api::{FormCompletionReportResponse, InteractionReportResponse};
+use super::api::{
+    CampaignInteractionCountResponse, DailyFormCompletionCountResponse,
+    DailyInteractionReportDayResponse, FormCompletionCountResponse, FormInteractionCountResponse,
+    FormSubmissionChannelCountResponse, HistoricalCoverage, PageFormCompletionCountResponse,
+    PageInteractionCountResponse, RevisionFormCompletionCountResponse,
+    RevisionInteractionCountResponse,
+};
+use super::api::{
+    FormCompletionReportResponse, InteractionReportResponse, ReportCollectionState,
+    ReportContextResponse,
+};
 use super::RouteView;
 
 #[cfg(any(feature = "browser", test))]
@@ -122,6 +131,45 @@ impl InteractionReportState {
 }
 
 #[component]
+fn ReportContextSummary(as_of: String, period_days: u8, context: ReportContextResponse) -> Element {
+    rsx! {
+        section { class: "completion-report-context", "aria-label": "Report context",
+            dl {
+                div {
+                    dt { "Collection" }
+                    dd {
+                        match context.collection_state {
+                            ReportCollectionState::Enabled => "Currently enabled",
+                            ReportCollectionState::Disabled => "Currently disabled",
+                        }
+                    }
+                }
+                div {
+                    dt { "Current effective retention" }
+                    dd {
+                        match context.effective_retention_days {
+                            Some(days) => rsx! { "{days} days" },
+                            None => rsx! { "Unavailable" },
+                        }
+                    }
+                }
+                div {
+                    dt { "Calculated" }
+                    dd { time { datetime: "{as_of}", "{as_of} UTC" } }
+                }
+            }
+            if context
+                .effective_retention_days
+                .is_some_and(|days| u16::from(period_days) > days)
+            {
+                p { "The selected range exceeds the current retention setting. Some rows may already have expired; a policy change does not restore them or rewrite existing expiry dates." }
+            }
+            p { "Coverage across this selected range is unknown. Collection or retention may have changed; a new retention setting does not restore expired rows or rewrite existing expiry dates." }
+        }
+    }
+}
+
+#[component]
 pub(super) fn FunnelCompletions(id: String) -> Element {
     let mut selected_period = use_signal(|| FormCompletionPeriod::Days30);
     let report_state = use_signal(FormCompletionReportState::default);
@@ -146,7 +194,7 @@ pub(super) fn FunnelCompletions(id: String) -> Element {
         div { class: "completion-report",
             section { class: "page-heading",
                 h1 { "Form completions" }
-                p { class: "page-description", "Successful form submissions still within the configured retention period. These counts do not represent a conversion rate." }
+                p { class: "page-description", "Successful form submissions whose recorded expiry has not passed. These counts do not represent a conversion rate." }
                 p { class: "completion-funnel-id", "Funnel: " code { "{id}" } }
                 Link { to: RouteView::FunnelDetail { id: id.clone() }, class: "completion-back-link", "Back to funnel" }
                 Link { to: RouteView::CampaignLinksPage { id: id.clone() }, class: "completion-report-link", "Manage campaign links" }
@@ -201,7 +249,10 @@ pub(super) fn FunnelCompletions(id: String) -> Element {
                                 strong { "{report.total_completions}" }
                                 " successful submissions in the selected period"
                             }
-                            p { class: "completion-retention-note", "Only submissions that have not expired are counted. The current UTC date is partial." }
+                            ReportContextSummary { as_of: report.as_of.clone(), period_days: report.period_days, context: report.report_context.clone() }
+                            if report.total_completions == 0 {
+                                p { class: "completion-zero-note", "No retained submissions were recorded in this period. This count does not establish how many people visited the page." }
+                            }
                             div { class: "completion-table-wrap", role: "region", "aria-label": "Daily completion counts", tabindex: "0",
                                 table { class: "completion-table",
                                     caption { "Daily completions in UTC" }
@@ -230,6 +281,22 @@ pub(super) fn FunnelCompletions(id: String) -> Element {
                                 }
                             }
                             section { class: "completion-form-section",
+                                h2 { "By page" }
+                                if report.pages.is_empty() {
+                                    p { class: "completion-empty-forms", "No retained form submissions in this period." }
+                                } else {
+                                    div { class: "completion-table-wrap", role: "region", "aria-label": "Completion counts by page", tabindex: "0",
+                                        table { class: "completion-table form-completion-table",
+                                            caption { "Successful submissions grouped by stable page ID" }
+                                            thead { tr { th { scope: "col", "Page ID" } th { scope: "col", "Completions" } } }
+                                            tbody { for page in report.pages.iter() {
+                                                tr { th { scope: "row", code { "{page.page_id}" } } td { class: "completion-number", "{page.completions}" } }
+                                            } }
+                                        }
+                                    }
+                                }
+                            }
+                            section { class: "completion-form-section",
                                 h2 { "By form" }
                                 if report.forms.is_empty() {
                                     p { class: "completion-empty-forms", "No retained form submissions in this period." }
@@ -246,6 +313,22 @@ pub(super) fn FunnelCompletions(id: String) -> Element {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                            section { class: "completion-form-section",
+                                h2 { "By revision" }
+                                if report.revisions.is_empty() {
+                                    p { class: "completion-empty-forms", "No retained form submissions in this period." }
+                                } else {
+                                    div { class: "completion-table-wrap", role: "region", "aria-label": "Completion counts by revision", tabindex: "0",
+                                        table { class: "completion-table form-completion-table",
+                                            caption { "Successful submissions grouped by immutable revision ID" }
+                                            thead { tr { th { scope: "col", "Revision ID" } th { scope: "col", "Completions" } } }
+                                            tbody { for revision in report.revisions.iter() {
+                                                tr { th { scope: "row", code { "{revision.revision_id}" } } td { class: "completion-number", "{revision.completions}" } }
+                                            } }
                                         }
                                     }
                                 }
@@ -357,7 +440,16 @@ pub(super) fn FunnelInteractionReport(id: String) -> Element {
                             strong { "{report.total_events}" }
                             " retained interaction events in the selected period"
                         }
-                        p { class: "completion-retention-note", "Dates use the server receipt time in UTC. Only events that have not expired are counted; the current UTC date is partial." }
+                        ReportContextSummary { as_of: report.as_of.clone(), period_days: report.period_days, context: report.report_context.clone() }
+                        if report.total_events == 0 {
+                            if report.report_context.collection_state == ReportCollectionState::Disabled {
+                                p { class: "completion-zero-note", "No retained events appear in this period, and collection is currently disabled. This does not describe the number of visitors." }
+                            } else {
+                                p { class: "completion-zero-note", "No retained events were recorded in this period. This does not establish that nobody visited the page." }
+                            }
+                        } else if report.report_context.collection_state == ReportCollectionState::Disabled {
+                            p { class: "completion-zero-note", "Collection is currently disabled; retained events already recorded in this period are still included." }
+                        }
                         div { class: "completion-table-wrap", role: "region", "aria-label": "Daily interaction counts", tabindex: "0",
                             table { class: "completion-table interaction-daily-table",
                                 caption { "Consent based event counts by UTC date" }
@@ -378,6 +470,55 @@ pub(super) fn FunnelInteractionReport(id: String) -> Element {
                                             td { class: "completion-number", "{day.form_viewed}" }
                                             td { class: "completion-number", "{day.form_started}" }
                                         }
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "completion-channel-note", "A form is counted as started on its first interaction; focusing a field can trigger this event. It is not a completed form or verified intent." }
+                        section { class: "completion-form-section",
+                            h2 { "By page" }
+                            if report.pages.is_empty() {
+                                p { class: "completion-empty-forms", "No retained interaction events in this period." }
+                            } else {
+                                div { class: "completion-table-wrap", role: "region", "aria-label": "Interaction counts by page", tabindex: "0",
+                                    table { class: "completion-table form-completion-table",
+                                        caption { "Retained events grouped by stable page ID" }
+                                        thead { tr { th { scope: "col", "Page ID" } th { scope: "col", "Events" } } }
+                                        tbody { for page in report.pages.iter() {
+                                            tr { th { scope: "row", code { "{page.page_id}" } } td { class: "completion-number", "{page.events}" } }
+                                        } }
+                                    }
+                                }
+                            }
+                        }
+                        section { class: "completion-form-section",
+                            h2 { "By form" }
+                            if report.forms.is_empty() {
+                                p { class: "completion-empty-forms", "No retained form interaction events in this period." }
+                            } else {
+                                div { class: "completion-table-wrap", role: "region", "aria-label": "Interaction counts by form", tabindex: "0",
+                                    table { class: "completion-table form-completion-table",
+                                        caption { "Form views and starts grouped by stable form ID" }
+                                        thead { tr { th { scope: "col", "Form ID" } th { scope: "col", "Events" } } }
+                                        tbody { for form in report.forms.iter() {
+                                            tr { th { scope: "row", code { "{form.form_id}" } } td { class: "completion-number", "{form.events}" } }
+                                        } }
+                                    }
+                                }
+                            }
+                        }
+                        section { class: "completion-form-section",
+                            h2 { "By revision" }
+                            if report.revisions.is_empty() {
+                                p { class: "completion-empty-forms", "No retained interaction events in this period." }
+                            } else {
+                                div { class: "completion-table-wrap", role: "region", "aria-label": "Interaction counts by revision", tabindex: "0",
+                                    table { class: "completion-table form-completion-table",
+                                        caption { "Retained events grouped by immutable revision ID" }
+                                        thead { tr { th { scope: "col", "Revision ID" } th { scope: "col", "Events" } } }
+                                        tbody { for revision in report.revisions.iter() {
+                                            tr { th { scope: "row", code { "{revision.revision_id}" } } td { class: "completion-number", "{revision.events}" } }
+                                        } }
                                     }
                                 }
                             }
@@ -458,9 +599,13 @@ mod tests {
             Ok(FormCompletionReportResponse {
                 funnel_id: "funnel-old".to_owned(),
                 period_days: 7,
+                as_of: "2026-10-07T12:00:00Z".to_owned(),
+                report_context: test_report_context(ReportCollectionState::Enabled),
                 total_completions: 3,
                 days: Vec::new(),
+                pages: Vec::new(),
                 forms: Vec::new(),
+                revisions: Vec::new(),
                 channels: Vec::new(),
             }),
         );
@@ -471,9 +616,13 @@ mod tests {
             Ok(FormCompletionReportResponse {
                 funnel_id: "funnel-current".to_owned(),
                 period_days: 90,
+                as_of: "2026-10-07T12:00:00Z".to_owned(),
+                report_context: test_report_context(ReportCollectionState::Enabled),
                 total_completions: 0,
                 days: Vec::new(),
+                pages: Vec::new(),
                 forms: Vec::new(),
+                revisions: Vec::new(),
                 channels: Vec::new(),
             }),
         );
@@ -493,9 +642,13 @@ mod tests {
             response: Some(Ok(FormCompletionReportResponse {
                 funnel_id: "funnel-old".to_owned(),
                 period_days: 7,
+                as_of: "2026-10-07T12:00:00Z".to_owned(),
+                report_context: test_report_context(ReportCollectionState::Enabled),
                 total_completions: 3,
                 days: Vec::new(),
+                pages: Vec::new(),
                 forms: Vec::new(),
+                revisions: Vec::new(),
                 channels: Vec::new(),
             })),
             ..FormCompletionReportState::default()
@@ -512,12 +665,76 @@ mod tests {
             .is_none());
     }
 
+    fn completion_report(funnel_id: &str) -> FormCompletionReportResponse {
+        let days = (1..=7)
+            .map(|day| DailyFormCompletionCountResponse {
+                utc_day: test_utc_day(day),
+                completions: if day == 7 { 2 } else { 0 },
+                is_partial_today: day == 7,
+            })
+            .collect();
+        FormCompletionReportResponse {
+            funnel_id: funnel_id.to_owned(),
+            period_days: 7,
+            as_of: format!("{}T12:00:00Z", test_utc_day(7)),
+            report_context: test_report_context(ReportCollectionState::Enabled),
+            total_completions: 2,
+            days,
+            pages: vec![PageFormCompletionCountResponse {
+                page_id: "page-a".to_owned(),
+                completions: 2,
+            }],
+            forms: vec![FormCompletionCountResponse {
+                form_id: "form-a".to_owned(),
+                completions: 2,
+            }],
+            revisions: vec![RevisionFormCompletionCountResponse {
+                revision_id: "revision-a".to_owned(),
+                completions: 2,
+            }],
+            channels: vec![FormSubmissionChannelCountResponse {
+                channel: "unattributed".to_owned(),
+                label: "Unattributed".to_owned(),
+                completions: 2,
+            }],
+        }
+    }
+
+    #[test]
+    fn completion_report_requires_context_and_balanced_unique_groupings() {
+        let report = completion_report("funnel-a");
+        assert!(form_completion_report_is_valid(
+            &report,
+            "funnel-a",
+            FormCompletionPeriod::Days7,
+        ));
+
+        let mut duplicate_page = report.clone();
+        duplicate_page.pages.push(PageFormCompletionCountResponse {
+            page_id: "page-a".to_owned(),
+            completions: 0,
+        });
+        assert!(!form_completion_report_is_valid(
+            &duplicate_page,
+            "funnel-a",
+            FormCompletionPeriod::Days7,
+        ));
+
+        let mut stale_context = report;
+        stale_context.as_of = "2026-10-08T12:00:00Z".to_owned();
+        assert!(!form_completion_report_is_valid(
+            &stale_context,
+            "funnel-a",
+            FormCompletionPeriod::Days7,
+        ));
+    }
+
     fn interaction_report(funnel_id: &str, period_days: u8) -> InteractionReportResponse {
         let days = (1..=period_days)
             .map(|day| DailyInteractionReportDayResponse {
-                utc_day: format!("2026-10-{day:02}"),
+                utc_day: test_utc_day(day),
                 page_viewed: if day == period_days { 1 } else { 0 },
-                form_viewed: 0,
+                form_viewed: if day == period_days { 1 } else { 0 },
                 form_started: 0,
                 is_partial_today: day == period_days,
             })
@@ -525,13 +742,49 @@ mod tests {
         InteractionReportResponse {
             funnel_id: funnel_id.to_owned(),
             period_days,
-            total_events: 1,
+            as_of: format!("{}T12:00:00Z", test_utc_day(period_days)),
+            report_context: test_report_context(ReportCollectionState::Enabled),
+            total_events: 2,
             days,
-            campaigns: vec![CampaignInteractionCountResponse {
-                campaign_id: None,
+            pages: vec![PageInteractionCountResponse {
+                page_id: "page-a".to_owned(),
+                events: 2,
+            }],
+            forms: vec![FormInteractionCountResponse {
+                form_id: "form-a".to_owned(),
                 events: 1,
             }],
+            revisions: vec![RevisionInteractionCountResponse {
+                revision_id: "revision-a".to_owned(),
+                events: 2,
+            }],
+            campaigns: vec![CampaignInteractionCountResponse {
+                campaign_id: None,
+                events: 2,
+            }],
         }
+    }
+
+    fn test_report_context(collection_state: ReportCollectionState) -> ReportContextResponse {
+        ReportContextResponse {
+            collection_state,
+            effective_retention_days: Some(30),
+            historical_coverage: HistoricalCoverage::Unknown,
+        }
+    }
+
+    fn test_utc_day(day: u8) -> String {
+        let mut remaining = day;
+        for (month, month_length) in [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            .into_iter()
+            .enumerate()
+        {
+            if remaining <= month_length {
+                return format!("2026-{:02}-{remaining:02}", month + 1);
+            }
+            remaining -= month_length;
+        }
+        unreachable!("test report period fits within one year")
     }
 
     #[test]
@@ -549,7 +802,7 @@ mod tests {
         ));
 
         let mut invalid = report.clone();
-        invalid.campaigns[0].events = 2;
+        invalid.campaigns[0].events = 3;
         assert!(!interaction_report_is_valid(
             &invalid,
             "funnel-a",

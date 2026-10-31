@@ -2,7 +2,7 @@
 use eez_domain::service_brief::SERVICE_BRIEF_FORMAT_VERSION;
 #[cfg(any(feature = "browser", test))]
 use eez_domain::service_brief::{BriefVersion, ServiceBrief};
-#[cfg(feature = "browser")]
+#[cfg(any(feature = "browser", test))]
 use eez_domain::FormCompletionPeriod;
 use eez_domain::FormSubmissionStatus;
 #[cfg(any(feature = "browser", test))]
@@ -113,10 +113,34 @@ pub(super) struct FormSubmissionField {
 pub(super) struct FormCompletionReportResponse {
     pub(super) funnel_id: String,
     pub(super) period_days: u8,
+    pub(super) as_of: String,
+    pub(super) report_context: ReportContextResponse,
     pub(super) total_completions: u64,
     pub(super) days: Vec<DailyFormCompletionCountResponse>,
+    pub(super) pages: Vec<PageFormCompletionCountResponse>,
     pub(super) forms: Vec<FormCompletionCountResponse>,
+    pub(super) revisions: Vec<RevisionFormCompletionCountResponse>,
     pub(super) channels: Vec<FormSubmissionChannelCountResponse>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReportCollectionState {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum HistoricalCoverage {
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(super) struct ReportContextResponse {
+    pub(super) collection_state: ReportCollectionState,
+    pub(super) effective_retention_days: Option<u16>,
+    pub(super) historical_coverage: HistoricalCoverage,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -133,6 +157,18 @@ pub(super) struct FormCompletionCountResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct PageFormCompletionCountResponse {
+    pub(super) page_id: String,
+    pub(super) completions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct RevisionFormCompletionCountResponse {
+    pub(super) revision_id: String,
+    pub(super) completions: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(super) struct FormSubmissionChannelCountResponse {
     pub(super) channel: String,
     pub(super) label: String,
@@ -143,8 +179,13 @@ pub(super) struct FormSubmissionChannelCountResponse {
 pub(super) struct InteractionReportResponse {
     pub(super) funnel_id: String,
     pub(super) period_days: u8,
+    pub(super) as_of: String,
+    pub(super) report_context: ReportContextResponse,
     pub(super) total_events: u64,
     pub(super) days: Vec<DailyInteractionReportDayResponse>,
+    pub(super) pages: Vec<PageInteractionCountResponse>,
+    pub(super) forms: Vec<FormInteractionCountResponse>,
+    pub(super) revisions: Vec<RevisionInteractionCountResponse>,
     pub(super) campaigns: Vec<CampaignInteractionCountResponse>,
 }
 
@@ -160,6 +201,24 @@ pub(super) struct DailyInteractionReportDayResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(super) struct CampaignInteractionCountResponse {
     pub(super) campaign_id: Option<String>,
+    pub(super) events: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct PageInteractionCountResponse {
+    pub(super) page_id: String,
+    pub(super) events: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct FormInteractionCountResponse {
+    pub(super) form_id: String,
+    pub(super) events: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct RevisionInteractionCountResponse {
+    pub(super) revision_id: String,
     pub(super) events: u64,
 }
 
@@ -246,22 +305,212 @@ pub(super) fn interaction_report_is_valid(
         }
         total.checked_add(campaign.events)
     });
-    let dates_are_valid = report.days.len() == usize::from(period.days())
-        && !report.days.is_empty()
-        && !report
+    let page_total = unique_group_total(
+        report
+            .pages
+            .iter()
+            .map(|page| (page.page_id.as_str(), page.events)),
+    );
+    let form_total = unique_group_total(
+        report
+            .forms
+            .iter()
+            .map(|form| (form.form_id.as_str(), form.events)),
+    );
+    let revision_total = unique_group_total(
+        report
+            .revisions
+            .iter()
+            .map(|revision| (revision.revision_id.as_str(), revision.events)),
+    );
+    let dates_are_valid = report_dates_are_valid(
+        report
             .days
             .iter()
-            .enumerate()
-            .any(|(index, day)| day.is_partial_today != (index + 1 == report.days.len()))
-        && !report
-            .days
-            .windows(2)
-            .any(|days| days[0].utc_day >= days[1].utc_day);
+            .map(|day| (&day.utc_day, day.is_partial_today)),
+        &report.as_of,
+        period.days(),
+    );
     report.funnel_id == funnel_id
         && report.period_days == period.days()
         && dates_are_valid
+        && report_context_is_valid(&report.report_context)
         && daily_total == Some(report.total_events)
         && campaign_total == Some(report.total_events)
+        && page_total == Some(report.total_events)
+        && form_total.is_some_and(|total| total <= report.total_events)
+        && revision_total == Some(report.total_events)
+}
+
+#[cfg(any(feature = "browser", test))]
+pub(super) fn form_completion_report_is_valid(
+    report: &FormCompletionReportResponse,
+    funnel_id: &str,
+    period: FormCompletionPeriod,
+) -> bool {
+    let daily_total = report
+        .days
+        .iter()
+        .try_fold(0_u64, |total, day| total.checked_add(day.completions));
+    let page_total = unique_group_total(
+        report
+            .pages
+            .iter()
+            .map(|page| (page.page_id.as_str(), page.completions)),
+    );
+    let form_total = unique_group_total(
+        report
+            .forms
+            .iter()
+            .map(|form| (form.form_id.as_str(), form.completions)),
+    );
+    let revision_total = unique_group_total(
+        report
+            .revisions
+            .iter()
+            .map(|revision| (revision.revision_id.as_str(), revision.completions)),
+    );
+    let channel_total = report.channels.iter().try_fold(0_u64, |total, channel| {
+        total.checked_add(channel.completions)
+    });
+    report.funnel_id == funnel_id
+        && report.period_days == period.days()
+        && report_dates_are_valid(
+            report
+                .days
+                .iter()
+                .map(|day| (&day.utc_day, day.is_partial_today)),
+            &report.as_of,
+            period.days(),
+        )
+        && report_context_is_valid(&report.report_context)
+        && daily_total == Some(report.total_completions)
+        && page_total == Some(report.total_completions)
+        && form_total == Some(report.total_completions)
+        && revision_total == Some(report.total_completions)
+        && channel_total == Some(report.total_completions)
+}
+
+#[cfg(any(feature = "browser", test))]
+fn unique_group_total<'a>(mut groups: impl Iterator<Item = (&'a str, u64)>) -> Option<u64> {
+    let mut ids = BTreeSet::new();
+    groups.try_fold(0_u64, |total, (id, count)| {
+        if id.is_empty() || id.len() > 128 || !ids.insert(id) {
+            return None;
+        }
+        total.checked_add(count)
+    })
+}
+
+#[cfg(any(feature = "browser", test))]
+fn report_context_is_valid(context: &ReportContextResponse) -> bool {
+    context.historical_coverage == HistoricalCoverage::Unknown
+        && match context.collection_state {
+            ReportCollectionState::Enabled => context
+                .effective_retention_days
+                .is_some_and(|days| (1..=3650).contains(&days)),
+            ReportCollectionState::Disabled => context
+                .effective_retention_days
+                .is_none_or(|days| (1..=3650).contains(&days)),
+        }
+}
+
+#[cfg(any(feature = "browser", test))]
+fn report_dates_are_valid<'a>(
+    days: impl Iterator<Item = (&'a String, bool)>,
+    as_of: &str,
+    period_days: u8,
+) -> bool {
+    let days = days.collect::<Vec<_>>();
+    let Some(as_of_day) = report_as_of_day(as_of) else {
+        return false;
+    };
+    days.len() == usize::from(period_days)
+        && days
+            .last()
+            .is_some_and(|(day, _)| day.as_str() == as_of_day)
+        && days.iter().all(|(day, partial)| {
+            report_day_is_valid(day) && *partial == (day.as_str() == as_of_day)
+        })
+        && !days.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+}
+
+#[cfg(any(feature = "browser", test))]
+fn report_as_of_day(as_of: &str) -> Option<&str> {
+    let bytes = as_of.as_bytes();
+    if !(bytes.len() == 20
+        && bytes.get(10) == Some(&b'T')
+        && bytes.get(13) == Some(&b':')
+        && bytes.get(16) == Some(&b':')
+        && bytes.get(19) == Some(&b'Z')
+        && bytes[..10].iter().enumerate().all(|(index, byte)| {
+            if index == 4 || index == 7 {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+        && bytes[11..19]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 2 || index == 5 || byte.is_ascii_digit()))
+    {
+        return None;
+    }
+    let day = as_of.get(..10)?;
+    if !report_day_is_valid(day)
+        || decimal(&bytes[11..13])? > 23
+        || decimal(&bytes[14..16])? > 59
+        || decimal(&bytes[17..19])? > 59
+    {
+        return None;
+    }
+    Some(day)
+}
+
+#[cfg(any(feature = "browser", test))]
+fn report_day_is_valid(day: &str) -> bool {
+    let bytes = day.as_bytes();
+    let shape_is_valid = bytes.len() == 10
+        && bytes.get(4) == Some(&b'-')
+        && bytes.get(7) == Some(&b'-')
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if index == 4 || index == 7 {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        });
+    if !shape_is_valid {
+        return false;
+    }
+    let Some(year) = decimal(&bytes[..4]) else {
+        return false;
+    };
+    let Some(month) = decimal(&bytes[5..7]) else {
+        return false;
+    };
+    let Some(day) = decimal(&bytes[8..10]) else {
+        return false;
+    };
+    let month_length = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day > 0 && day <= month_length
+}
+
+#[cfg(any(feature = "browser", test))]
+fn decimal(bytes: &[u8]) -> Option<u32> {
+    bytes.iter().try_fold(0_u32, |value, byte| {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value.checked_mul(10)?.checked_add(u32::from(byte - b'0'))
+    })
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -542,31 +791,7 @@ pub(super) async fn load_form_completion_report(
     }
     let report =
         serde_json::from_str::<FormCompletionReportResponse>(&response.body).map_err(|_| ())?;
-    let daily_total = report
-        .days
-        .iter()
-        .try_fold(0_u64, |total, day| total.checked_add(day.completions));
-    let form_total = report
-        .forms
-        .iter()
-        .try_fold(0_u64, |total, form| total.checked_add(form.completions));
-    let dates_are_valid = report.days.len() == usize::from(period.days())
-        && !report.days.is_empty()
-        && !report
-            .days
-            .iter()
-            .enumerate()
-            .any(|(index, day)| day.is_partial_today != (index + 1 == report.days.len()))
-        && !report
-            .days
-            .windows(2)
-            .any(|days| days[0].utc_day >= days[1].utc_day);
-    if report.funnel_id != funnel_id
-        || report.period_days != period.days()
-        || !dates_are_valid
-        || daily_total != Some(report.total_completions)
-        || form_total != Some(report.total_completions)
-    {
+    if !form_completion_report_is_valid(&report, funnel_id, period) {
         return Err(());
     }
     Ok(report)

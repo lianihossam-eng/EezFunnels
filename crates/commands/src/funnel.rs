@@ -1240,9 +1240,12 @@ struct FormCompletionReportResult {
     command_id: &'static str,
     funnel_id: String,
     period_days: u8,
+    as_of: String,
     total_completions: u64,
     days: Vec<DailyFormCompletionCount>,
+    pages: Vec<PageFormCompletionCount>,
     forms: Vec<FormCompletionCount>,
+    revisions: Vec<RevisionFormCompletionCount>,
     channels: Vec<FormSubmissionChannelCount>,
 }
 
@@ -1251,8 +1254,12 @@ struct InteractionReportResult {
     command_id: &'static str,
     funnel_id: String,
     period_days: u8,
+    as_of: String,
     total_events: u64,
     days: Vec<DailyInteractionReportDay>,
+    pages: Vec<PageInteractionCount>,
+    forms: Vec<FormInteractionCount>,
+    revisions: Vec<RevisionInteractionCount>,
     campaigns: Vec<CampaignInteractionCount>,
 }
 
@@ -1289,6 +1296,36 @@ struct DailyFormCompletionCount {
 struct FormCompletionCount {
     form_id: String,
     completions: u64,
+}
+
+#[derive(Serialize)]
+struct PageFormCompletionCount {
+    page_id: String,
+    completions: u64,
+}
+
+#[derive(Serialize)]
+struct RevisionFormCompletionCount {
+    revision_id: String,
+    completions: u64,
+}
+
+#[derive(Serialize)]
+struct PageInteractionCount {
+    page_id: String,
+    events: u64,
+}
+
+#[derive(Serialize)]
+struct FormInteractionCount {
+    form_id: String,
+    events: u64,
+}
+
+#[derive(Serialize)]
+struct RevisionInteractionCount {
+    revision_id: String,
+    events: u64,
 }
 
 #[derive(Serialize)]
@@ -3491,24 +3528,68 @@ fn build_form_completion_report(
     rows: Vec<FormCompletionCountRow>,
 ) -> Result<FormCompletionReportResult, FunnelCommandError> {
     let mut daily_counts = BTreeMap::<String, u64>::new();
+    let mut page_counts = BTreeMap::<String, u64>::new();
     let mut form_counts = BTreeMap::<String, u64>::new();
+    let mut revision_counts = BTreeMap::<String, u64>::new();
     let mut channel_counts = BTreeMap::<FormSubmissionChannel, u64>::new();
+    let mut as_of = None;
     for row in rows {
         let count = u64::try_from(row.completions).map_err(|_| FunnelCommandError::Internal)?;
+        record_report_as_of(&mut as_of, row.as_of)?;
         match row.row_type.as_str() {
-            "day" if row.form_id.is_none() && row.submission_channel.is_none() => {
+            "day"
+                if row.page_id.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none()
+                    && row.submission_channel.is_none() =>
+            {
                 let utc_day = row.utc_day.ok_or(FunnelCommandError::Internal)?;
                 if daily_counts.insert(utc_day, count).is_some() {
                     return Err(FunnelCommandError::Internal);
                 }
             }
-            "form" if row.utc_day.is_none() && row.submission_channel.is_none() => {
+            "page"
+                if row.utc_day.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none()
+                    && row.submission_channel.is_none() =>
+            {
+                let page_id = row.page_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&page_id).map_err(|_| FunnelCommandError::Internal)?;
+                if page_counts.insert(page_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "form"
+                if row.utc_day.is_none()
+                    && row.page_id.is_none()
+                    && row.revision_id.is_none()
+                    && row.submission_channel.is_none() =>
+            {
                 let form_id = row.form_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&form_id).map_err(|_| FunnelCommandError::Internal)?;
                 if form_counts.insert(form_id, count).is_some() {
                     return Err(FunnelCommandError::Internal);
                 }
             }
-            "channel" if row.utc_day.is_none() && row.form_id.is_none() => {
+            "revision"
+                if row.utc_day.is_none()
+                    && row.page_id.is_none()
+                    && row.form_id.is_none()
+                    && row.submission_channel.is_none() =>
+            {
+                let revision_id = row.revision_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&revision_id).map_err(|_| FunnelCommandError::Internal)?;
+                if revision_counts.insert(revision_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "channel"
+                if row.utc_day.is_none()
+                    && row.page_id.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none() =>
+            {
                 let channel = row
                     .submission_channel
                     .as_deref()
@@ -3524,7 +3605,11 @@ fn build_form_completion_report(
     if daily_counts.len() != usize::from(period.days()) {
         return Err(FunnelCommandError::Internal);
     }
-    let day_count = daily_counts.len();
+    let as_of = as_of.ok_or(FunnelCommandError::Internal)?;
+    let current_utc_day = report_utc_day(&as_of)?;
+    if !daily_counts.contains_key(current_utc_day) {
+        return Err(FunnelCommandError::Internal);
+    }
     let total_completions = daily_counts.values().try_fold(0_u64, |total, count| {
         total
             .checked_add(*count)
@@ -3540,22 +3625,49 @@ fn build_form_completion_report(
             .checked_add(*count)
             .ok_or(FunnelCommandError::Internal)
     })?;
-    if form_total != total_completions || channel_total != total_completions {
+    let page_total = page_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    let revision_total = revision_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    if form_total != total_completions
+        || channel_total != total_completions
+        || page_total != total_completions
+        || revision_total != total_completions
+    {
         return Err(FunnelCommandError::Internal);
     }
     let days = daily_counts
         .into_iter()
-        .enumerate()
-        .map(|(index, (utc_day, completions))| DailyFormCompletionCount {
+        .map(|(utc_day, completions)| DailyFormCompletionCount {
+            is_partial_today: utc_day == current_utc_day,
             utc_day,
             completions,
-            is_partial_today: index + 1 == day_count,
+        })
+        .collect();
+    let pages = page_counts
+        .into_iter()
+        .map(|(page_id, completions)| PageFormCompletionCount {
+            page_id,
+            completions,
         })
         .collect();
     let forms = form_counts
         .into_iter()
         .map(|(form_id, completions)| FormCompletionCount {
             form_id,
+            completions,
+        })
+        .collect();
+    let revisions = revision_counts
+        .into_iter()
+        .map(|(revision_id, completions)| RevisionFormCompletionCount {
+            revision_id,
             completions,
         })
         .collect();
@@ -3571,9 +3683,12 @@ fn build_form_completion_report(
         command_id: FormCompletionReportCommand::ID,
         funnel_id,
         period_days: period.days(),
+        as_of,
         total_completions,
         days,
+        pages,
         forms,
+        revisions,
         channels,
     })
 }
@@ -3586,11 +3701,21 @@ fn build_interaction_report(
     let mut daily_counts = BTreeMap::<String, InteractionDailyCounts>::new();
     let mut daily_kinds = BTreeSet::<(String, String)>::new();
     let mut campaign_counts = BTreeMap::<Option<String>, u64>::new();
+    let mut page_counts = BTreeMap::<String, u64>::new();
+    let mut form_counts = BTreeMap::<String, u64>::new();
+    let mut revision_counts = BTreeMap::<String, u64>::new();
+    let mut as_of = None;
 
     for row in rows {
         let count = u64::try_from(row.events).map_err(|_| FunnelCommandError::Internal)?;
+        record_report_as_of(&mut as_of, row.as_of)?;
         match row.row_type.as_str() {
-            "day_kind" if row.campaign_id.is_none() => {
+            "day_kind"
+                if row.campaign_id.is_none()
+                    && row.page_id.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none() =>
+            {
                 let utc_day = row.utc_day.ok_or(FunnelCommandError::Internal)?;
                 let event_kind = row.event_kind.ok_or(FunnelCommandError::Internal)?;
                 if !daily_kinds.insert((utc_day.clone(), event_kind.clone())) {
@@ -3604,11 +3729,56 @@ fn build_interaction_report(
                     _ => return Err(FunnelCommandError::Internal),
                 }
             }
-            "campaign" if row.utc_day.is_none() && row.event_kind.is_none() => {
+            "campaign"
+                if row.utc_day.is_none()
+                    && row.event_kind.is_none()
+                    && row.page_id.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none() =>
+            {
                 if let Some(campaign_id) = row.campaign_id.as_deref() {
                     validate_route_id(campaign_id).map_err(|_| FunnelCommandError::Internal)?;
                 }
                 if campaign_counts.insert(row.campaign_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "page"
+                if row.utc_day.is_none()
+                    && row.event_kind.is_none()
+                    && row.campaign_id.is_none()
+                    && row.form_id.is_none()
+                    && row.revision_id.is_none() =>
+            {
+                let page_id = row.page_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&page_id).map_err(|_| FunnelCommandError::Internal)?;
+                if page_counts.insert(page_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "form"
+                if row.utc_day.is_none()
+                    && row.event_kind.is_none()
+                    && row.campaign_id.is_none()
+                    && row.page_id.is_none()
+                    && row.revision_id.is_none() =>
+            {
+                let form_id = row.form_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&form_id).map_err(|_| FunnelCommandError::Internal)?;
+                if form_counts.insert(form_id, count).is_some() {
+                    return Err(FunnelCommandError::Internal);
+                }
+            }
+            "revision"
+                if row.utc_day.is_none()
+                    && row.event_kind.is_none()
+                    && row.campaign_id.is_none()
+                    && row.page_id.is_none()
+                    && row.form_id.is_none() =>
+            {
+                let revision_id = row.revision_id.ok_or(FunnelCommandError::Internal)?;
+                validate_route_id(&revision_id).map_err(|_| FunnelCommandError::Internal)?;
+                if revision_counts.insert(revision_id, count).is_some() {
                     return Err(FunnelCommandError::Internal);
                 }
             }
@@ -3621,12 +3791,16 @@ fn build_interaction_report(
         return Err(FunnelCommandError::Internal);
     }
 
-    let day_count = daily_counts.len();
+    let as_of = as_of.ok_or(FunnelCommandError::Internal)?;
+    let current_utc_day = report_utc_day(&as_of)?;
+    if !daily_counts.contains_key(current_utc_day) {
+        return Err(FunnelCommandError::Internal);
+    }
     let mut total_events = 0_u64;
     let days = daily_counts
         .into_iter()
-        .enumerate()
-        .map(|(index, (utc_day, counts))| {
+        .map(|(utc_day, counts)| {
+            let is_partial_today = utc_day == current_utc_day;
             total_events = total_events
                 .checked_add(counts.page_viewed)
                 .and_then(|total| total.checked_add(counts.form_viewed))
@@ -3637,7 +3811,7 @@ fn build_interaction_report(
                 page_viewed: counts.page_viewed,
                 form_viewed: counts.form_viewed,
                 form_started: counts.form_started,
-                is_partial_today: index + 1 == day_count,
+                is_partial_today,
             })
         })
         .collect::<Result<Vec<_>, FunnelCommandError>>()?;
@@ -3650,10 +3824,43 @@ fn build_interaction_report(
     if campaign_total != total_events {
         return Err(FunnelCommandError::Internal);
     }
+    let page_total = page_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    let form_total = form_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    let revision_total = revision_counts.values().try_fold(0_u64, |total, count| {
+        total
+            .checked_add(*count)
+            .ok_or(FunnelCommandError::Internal)
+    })?;
+    if page_total != total_events || revision_total != total_events || form_total > total_events {
+        return Err(FunnelCommandError::Internal);
+    }
     let campaigns = campaign_counts
         .into_iter()
         .map(|(campaign_id, events)| CampaignInteractionCount {
             campaign_id,
+            events,
+        })
+        .collect();
+    let pages = page_counts
+        .into_iter()
+        .map(|(page_id, events)| PageInteractionCount { page_id, events })
+        .collect();
+    let forms = form_counts
+        .into_iter()
+        .map(|(form_id, events)| FormInteractionCount { form_id, events })
+        .collect();
+    let revisions = revision_counts
+        .into_iter()
+        .map(|(revision_id, events)| RevisionInteractionCount {
+            revision_id,
             events,
         })
         .collect();
@@ -3662,10 +3869,32 @@ fn build_interaction_report(
         command_id: InteractionReportReadCommand::ID,
         funnel_id,
         period_days: period.days(),
+        as_of,
         total_events,
         days,
+        pages,
+        forms,
+        revisions,
         campaigns,
     })
+}
+
+fn record_report_as_of(
+    current: &mut Option<String>,
+    row_as_of: String,
+) -> Result<(), FunnelCommandError> {
+    if current.as_ref().is_some_and(|as_of| as_of != &row_as_of) {
+        return Err(FunnelCommandError::Internal);
+    }
+    *current = Some(row_as_of);
+    Ok(())
+}
+
+fn report_utc_day(as_of: &str) -> Result<&str, FunnelCommandError> {
+    if as_of.len() != 20 || as_of.as_bytes().get(10) != Some(&b'T') || !as_of.ends_with('Z') {
+        return Err(FunnelCommandError::Internal);
+    }
+    Ok(&as_of[..10])
 }
 
 #[derive(Debug)]
