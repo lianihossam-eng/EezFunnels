@@ -5,6 +5,7 @@ use super::orchestration::*;
 #[cfg(feature = "browser")]
 use super::state::*;
 use super::*;
+use eez_domain::document_v2::{PageId, SectionId};
 
 fn section_kind_label(kind: SectionKind) -> &'static str {
     match kind {
@@ -77,6 +78,43 @@ fn block_value_with_action(block: &BlockV2, action: ActionV2) -> Option<NewBlock
         BlockV2::Button { label, .. } => Some(NewBlock::Button {
             label: label.clone(),
             action,
+        }),
+        _ => None,
+    }
+}
+
+fn button_action_kind(action: &ActionV2) -> &'static str {
+    match action {
+        ActionV2::NavigatePage { .. } => "page",
+        ActionV2::NavigateSection { .. } => "section",
+        ActionV2::ExternalHttps { .. } => "external",
+        ActionV2::Telephone { .. } => "telephone",
+        ActionV2::Email { .. } => "email",
+    }
+}
+
+fn button_action_for_kind(
+    kind: &str,
+    page_options: &[(String, String)],
+    section_options: &[(String, String)],
+) -> Option<ActionV2> {
+    match kind {
+        "page" => page_options
+            .first()
+            .and_then(|(id, _)| PageId::parse(id.clone()).ok())
+            .map(|page_id| ActionV2::NavigatePage { page_id }),
+        "section" => section_options
+            .first()
+            .and_then(|(id, _)| SectionId::parse(id.clone()).ok())
+            .map(|section_id| ActionV2::NavigateSection { section_id }),
+        "external" => Some(ActionV2::ExternalHttps {
+            url: "https://example.invalid".to_owned(),
+        }),
+        "telephone" => Some(ActionV2::Telephone {
+            number: SAMPLE_TELEPHONE_NUMBER.to_owned(),
+        }),
+        "email" => Some(ActionV2::Email {
+            address: SAMPLE_EMAIL_ADDRESS.to_owned(),
         }),
         _ => None,
     }
@@ -641,6 +679,21 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
             .pages()
             .iter()
             .map(|page| (page.id().as_str().to_owned(), page.title().to_owned()))
+            .collect()
+    });
+    let section_options = current_page.as_ref().map_or_else(Vec::new, |page| {
+        page.sections()
+            .iter()
+            .map(|section| {
+                (
+                    section.id().as_str().to_owned(),
+                    format!(
+                        "{} — {}",
+                        section_kind_label(section.section_type()),
+                        section.id().as_str()
+                    ),
+                )
+            })
             .collect()
     });
 
@@ -1345,6 +1398,7 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                                         V2BlockEditor {
                                             state,
                                             page_options: page_options.clone(),
+                                            section_options: section_options.clone(),
                                             section_id: section.id().clone(),
                                             block: block.clone(),
                                             index,
@@ -1720,6 +1774,7 @@ fn block_value_with_image(block: &BlockV2, asset_id: AssetId, alt: ImageAlt) -> 
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     page_options: Vec<(String, String)>,
+    section_options: Vec<(String, String)>,
     section_id: SectionId,
     block: BlockV2,
     index: usize,
@@ -1750,7 +1805,10 @@ fn V2BlockEditor(
     let block_for_text_edit = block.clone();
     let block_for_destination_type = block.clone();
     let block_for_page_edit = block.clone();
+    let block_for_section_edit = block.clone();
     let block_for_url_edit = block.clone();
+    let block_for_phone_edit = block.clone();
+    let block_for_email_edit = block.clone();
     let button_destination = match &block {
         BlockV2::Button { action, .. } => Some(action.clone()),
         _ => None,
@@ -1786,11 +1844,9 @@ fn V2BlockEditor(
             }
             if let (BlockV2::Button { .. }, Some(action)) = (&block, button_destination) {
                 {
-                    let action_kind = match action {
-                        ActionV2::NavigatePage { .. } => "page",
-                        ActionV2::ExternalHttps { .. } => "external",
-                    };
+                    let action_kind = button_action_kind(&action);
                     let type_page_options = page_options.clone();
+                    let type_section_options = section_options.clone();
                     rsx! {
                         label { class: "editor-setting-control",
                             "Button destination type"
@@ -1799,11 +1855,11 @@ fn V2BlockEditor(
                                 disabled: locked,
                                 "aria-label": "Button destination type for {block.id().as_str()}",
                                 onchange: move |event| {
-                                    let next_action = match event.value().as_str() {
-                                        "page" => type_page_options.first().and_then(|(id, _)| PageId::parse(id.clone()).ok()).map(|page_id| ActionV2::NavigatePage { page_id }),
-                                        "external" => Some(ActionV2::ExternalHttps { url: "https://example.invalid".to_owned() }),
-                                        _ => None,
-                                    };
+                                    let next_action = button_action_for_kind(
+                                        event.value().as_str(),
+                                        &type_page_options,
+                                        &type_section_options,
+                                    );
                                     if let Some(next_action) = next_action {
                                         if let Some(value) = block_value_with_action(&block_for_destination_type, next_action) {
                                             dispatch_v2_edit(state, Edit::SetBlock { block: block_for_destination_type.id().clone(), value });
@@ -1811,7 +1867,10 @@ fn V2BlockEditor(
                                     }
                                 },
                                 option { value: "page", "Internal page" }
+                                option { value: "section", "Page section" }
                                 option { value: "external", "External HTTPS URL" }
+                                option { value: "telephone", "Phone number" }
+                                option { value: "email", "Email address" }
                             }
                         }
                         match action {
@@ -1838,6 +1897,29 @@ fn V2BlockEditor(
                                     }
                                 }
                             }
+                            ActionV2::NavigateSection { section_id } => {
+                                let selected_section = section_id.as_str().to_owned();
+                                rsx! {
+                                    label { class: "editor-setting-control",
+                                        "Destination section"
+                                        select {
+                                            value: "{selected_section}",
+                                            disabled: locked,
+                                            "aria-label": "Destination section for button {block.id().as_str()}",
+                                            onchange: move |event| {
+                                                if let Ok(section_id) = SectionId::parse(event.value()) {
+                                                    if let Some(value) = block_value_with_action(&block_for_section_edit, ActionV2::NavigateSection { section_id }) {
+                                                        dispatch_v2_edit(state, Edit::SetBlock { block: block_for_section_edit.id().clone(), value });
+                                                    }
+                                                }
+                                            },
+                                            for (section_id, title) in section_options.clone() {
+                                                option { value: "{section_id}", "{title}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             ActionV2::ExternalHttps { url } => {
                                 rsx! {
                                     label { class: "editor-setting-control",
@@ -1853,6 +1935,57 @@ fn V2BlockEditor(
                                                 }
                                             },
                                         }
+                                    }
+                                }
+                            }
+                            ActionV2::Telephone { number } => {
+                                let is_sample_number = number == SAMPLE_TELEPHONE_NUMBER;
+                                rsx! {
+                                    label { class: "editor-setting-control",
+                                        "Phone number"
+                                        input {
+                                            r#type: "tel",
+                                            value: "{number}",
+                                            disabled: locked,
+                                            autocomplete: "tel",
+                                            "aria-label": "Phone number for button {block.id().as_str()}",
+                                            onchange: move |event| {
+                                                if let Some(value) = block_value_with_action(&block_for_phone_edit, ActionV2::Telephone { number: event.value() }) {
+                                                    dispatch_v2_edit(state, Edit::SetBlock { block: block_for_phone_edit.id().clone(), value });
+                                                }
+                                            },
+                                        }
+                                    }
+                                    p { class: "editor-keyboard-help",
+                                        if is_sample_number { "Reserved sample number; replace it before publishing." }
+                                        else { "Visitors can use this button to open their phone dialer." }
+                                    }
+                                }
+                            }
+                            ActionV2::Email { address } => {
+                                let is_sample_address = ActionV2::Email {
+                                    address: address.clone(),
+                                }
+                                .is_reserved_sample();
+                                rsx! {
+                                    label { class: "editor-setting-control",
+                                        "Email address"
+                                        input {
+                                            r#type: "email",
+                                            value: "{address}",
+                                            disabled: locked,
+                                            autocomplete: "email",
+                                            "aria-label": "Email address for button {block.id().as_str()}",
+                                            onchange: move |event| {
+                                                if let Some(value) = block_value_with_action(&block_for_email_edit, ActionV2::Email { address: event.value() }) {
+                                                    dispatch_v2_edit(state, Edit::SetBlock { block: block_for_email_edit.id().clone(), value });
+                                                }
+                                            },
+                                        }
+                                    }
+                                    p { class: "editor-keyboard-help",
+                                        if is_sample_address { "Reserved sample address; replace it before publishing." }
+                                        else { "Visitors can use this button to compose an email." }
                                     }
                                 }
                             }
@@ -2129,6 +2262,39 @@ mod tests {
                 url: "https://example.invalid".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn button_destination_choices_build_typed_actions_for_available_targets() {
+        let pages = vec![("page-home".to_owned(), "Home".to_owned())];
+        let sections = vec![("section-hero".to_owned(), "Hero — section-hero".to_owned())];
+
+        assert_eq!(
+            button_action_for_kind("page", &pages, &sections),
+            Some(ActionV2::NavigatePage {
+                page_id: PageId::parse("page-home").expect("page ID"),
+            })
+        );
+        assert_eq!(
+            button_action_for_kind("section", &pages, &sections),
+            Some(ActionV2::NavigateSection {
+                section_id: SectionId::parse("section-hero").expect("section ID"),
+            })
+        );
+        assert_eq!(
+            button_action_for_kind("telephone", &pages, &sections),
+            Some(ActionV2::Telephone {
+                number: SAMPLE_TELEPHONE_NUMBER.to_owned(),
+            })
+        );
+        assert_eq!(
+            button_action_for_kind("email", &pages, &sections),
+            Some(ActionV2::Email {
+                address: SAMPLE_EMAIL_ADDRESS.to_owned(),
+            })
+        );
+        assert_eq!(button_action_for_kind("section", &pages, &[]), None);
+        assert_eq!(button_action_for_kind("unknown", &pages, &sections), None);
     }
 
     #[test]

@@ -1376,6 +1376,25 @@ mod tests {
         DocumentV2::decode(&raw, "funnel-a").expect("valid document with a secondary page")
     }
 
+    fn document_with_section_action() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document().canonical_bytes()).expect("starter document JSON");
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks")
+            .push(serde_json::json!({
+                "id":"block-to-features",
+                "kind":"button",
+                "label":"View features",
+                "action":{"kind":"navigate_section", "section_id":"section-features"}
+            }));
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid same-page section action")
+    }
+
     fn stage_capacity() -> V2StageCapacity {
         V2StageCapacity {
             orphan_byte_budget: 1024,
@@ -1627,6 +1646,51 @@ mod tests {
             "checkbox".to_owned(),
         );
         assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn deleting_a_section_and_its_anchor_action_is_undone_as_one_change() {
+        let document = document_with_section_action();
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document, Some(stage_capacity()))),
+        );
+
+        let edit = state.apply_local_edit(
+            Edit::DeleteSection {
+                page: PageId::parse("page-home").expect("page ID"),
+                section: SectionId::parse("section-features").expect("section ID"),
+            },
+            "delete-linked-section".to_owned(),
+        );
+        assert!(edit.is_some());
+        let deleted = state.document.as_ref().expect("edited document");
+        assert!(!deleted.pages()[0]
+            .sections()
+            .iter()
+            .any(|section| section.id().as_str() == "section-features"));
+        assert!(!deleted.pages()[0]
+            .sections()
+            .iter()
+            .flat_map(|section| section.blocks())
+            .any(|block| matches!(block, BlockV2::Button { action: ActionV2::NavigateSection { section_id }, .. } if section_id.as_str() == "section-features")));
+
+        state.pending = false;
+        state
+            .apply_history(-1)
+            .expect("undo restores the previous document snapshot");
+        let restored = state.document.as_ref().expect("restored document");
+        assert!(restored.pages()[0]
+            .sections()
+            .iter()
+            .any(|section| section.id().as_str() == "section-features"));
+        assert!(restored.pages()[0]
+            .sections()
+            .iter()
+            .flat_map(|section| section.blocks())
+            .any(|block| matches!(block, BlockV2::Button { action: ActionV2::NavigateSection { section_id }, .. } if section_id.as_str() == "section-features")));
     }
 
     #[test]

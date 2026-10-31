@@ -1118,6 +1118,144 @@ fn external_urls_are_validated_then_persisted_in_whatwg_canonical_form() {
 }
 
 #[test]
+fn button_destinations_validate_targets_and_canonicalize_contact_values() {
+    let section = with_button_action(serde_json::json!({
+        "kind": "navigate_section",
+        "section_id": "section-hero"
+    }))
+    .expect("same-page section destination");
+    assert!(matches!(
+        section.pages()[0].sections()[0].blocks()[2],
+        BlockV2::Button {
+            action: ActionV2::NavigateSection { ref section_id },
+            ..
+        } if section_id.as_str() == "section-hero"
+    ));
+
+    let telephone = with_button_action(serde_json::json!({
+        "kind": "telephone",
+        "number": " +1 (555) 555-1212 "
+    }))
+    .expect("formatted phone destination");
+    assert!(matches!(
+        telephone.pages()[0].sections()[0].blocks()[2],
+        BlockV2::Button {
+            action: ActionV2::Telephone { ref number },
+            ..
+        } if number == "+15555551212"
+    ));
+
+    let email = with_button_action(serde_json::json!({
+        "kind": "email",
+        "address": "owner+leads@example.test"
+    }))
+    .expect("email destination");
+    assert!(matches!(
+        email.pages()[0].sections()[0].blocks()[2],
+        BlockV2::Button {
+            action: ActionV2::Email { ref address },
+            ..
+        } if address == "owner+leads@example.test"
+    ));
+
+    for action in [
+        serde_json::json!({"kind":"navigate_section", "section_id":"section-missing"}),
+        serde_json::json!({"kind":"telephone", "number":"tel:+15555551212"}),
+        serde_json::json!({"kind":"telephone", "number":"12+3456"}),
+        serde_json::json!({"kind":"telephone", "number":"1234567890123456"}),
+        serde_json::json!({"kind":"telephone", "number":"(555"}),
+        serde_json::json!({"kind":"email", "address":"owner@example.test?subject=leak"}),
+        serde_json::json!({"kind":"email", "address":"not-an-address"}),
+    ] {
+        assert!(
+            with_button_action(action).is_err(),
+            "invalid destination should be rejected"
+        );
+    }
+}
+
+#[test]
+fn reserved_email_destinations_include_case_insensitive_invalid_domains() {
+    for address in [
+        "contact@example.invalid",
+        "CONTACT@EXAMPLE.INVALID",
+        "leads@service.invalid",
+    ] {
+        assert!(ActionV2::Email {
+            address: address.to_owned(),
+        }
+        .is_reserved_sample());
+    }
+    assert!(!ActionV2::Email {
+        address: "contact@service-company.test".to_owned(),
+    }
+    .is_reserved_sample());
+}
+
+#[test]
+fn section_destinations_cannot_cross_page_boundaries() {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-section-link", "kind":"button", "label":"Details", "action":{"kind":"navigate_section", "section_id":"section-thanks"}},
+        {"id":"block-page-link", "kind":"button", "label":"Continue", "action":{"kind":"navigate_page", "page_id":"page-thanks"}}
+    ]);
+    value
+        ["pages"]
+        .as_array_mut()
+        .expect("pages array")
+        .push(serde_json::json!({
+            "id":"page-thanks",
+            "slug":"thanks",
+            "title":"Thanks",
+            "sections":[{"id":"section-thanks", "type":"cta", "blocks":[{"id":"block-thanks", "kind":"heading", "level":1, "text":"Thanks"}]}]
+        }));
+    let serialized = serde_json::to_vec(&value).expect("JSON serialization");
+
+    let error = DocumentV2::decode(&serialized, "funnel-01")
+        .expect_err("section links stay on their own page");
+
+    assert_eq!(error.code(), "validation/action_section_missing");
+    assert_eq!(error.path(), Some("blocks.action.section_id"));
+}
+
+#[test]
+fn deleting_a_section_removes_its_incoming_anchor_actions() {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("fixture JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-title", "kind":"heading", "level":1, "text":"Hello"},
+        {"id":"block-copy", "kind":"text", "text":"Body copy"},
+        {"id":"block-section-link", "kind":"button", "label":"Details", "action":{"kind":"navigate_section", "section_id":"section-details"}}
+    ]);
+    value["pages"][0]["sections"]
+        .as_array_mut()
+        .expect("sections array")
+        .push(serde_json::json!({
+            "id":"section-details",
+            "type":"features",
+            "blocks":[{"id":"block-detail-title", "kind":"heading", "level":2, "text":"Details"}]
+        }));
+    let serialized = serde_json::to_vec(&value).expect("JSON serialization");
+    let document = DocumentV2::decode(&serialized, "funnel-01").expect("valid section link");
+
+    let deleted = document
+        .apply(
+            Edit::DeleteSection {
+                page: eez_domain::document_v2::PageId::parse("page-home").expect("page ID"),
+                section: SectionId::parse("section-details").expect("section ID"),
+            },
+            &mut TestIds(0),
+        )
+        .expect("section and its incoming anchor can be deleted");
+
+    assert_eq!(deleted.document.pages()[0].sections().len(), 1);
+    assert_eq!(deleted.document.pages()[0].sections()[0].blocks().len(), 2);
+    assert!(matches!(
+        &deleted.document.pages()[0].sections()[0].blocks()[0],
+        BlockV2::Heading { text, .. } if text == "Hello"
+    ));
+}
+
+#[test]
 fn optional_fields_reject_null_and_closed_node_shapes_reject_extra_fields() {
     let null_override = MINIMAL.replace("\"overrides\":{}", "\"overrides\":{\"type_scale\":null}");
     assert!(DocumentV2::decode(null_override.as_bytes(), "funnel-01").is_err());
@@ -1196,6 +1334,23 @@ fn with_external_url_result(
         .expect("pages array")
         .push(serde_json::json!({
             "id":"page-next", "slug":"next", "title":"Next", "sections":[]
+        }));
+    let serialized = serde_json::to_vec(&value).expect("JSON serialization");
+    DocumentV2::decode(&serialized, "funnel-01")
+}
+
+fn with_button_action(
+    action: serde_json::Value,
+) -> Result<DocumentV2, eez_domain::document_v2::DocumentError> {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("valid JSON fixture");
+    value["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("blocks array")
+        .push(serde_json::json!({
+            "id":"block-action",
+            "kind":"button",
+            "label":"Contact",
+            "action":action
         }));
     let serialized = serde_json::to_vec(&value).expect("JSON serialization");
     DocumentV2::decode(&serialized, "funnel-01")

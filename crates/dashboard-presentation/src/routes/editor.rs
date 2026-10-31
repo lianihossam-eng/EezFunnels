@@ -78,6 +78,9 @@ impl PublicationReadinessFinding {
             "publication/generated_placeholder_unresolved" => {
                 "Replace or remove this generated text before publishing."
             }
+            "publication/action_destination_unconfigured" => {
+                "Replace this reserved sample destination before publishing."
+            }
             "editorial/search_description_missing" => {
                 "Add a search description when it is useful for this page."
             }

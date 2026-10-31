@@ -404,13 +404,28 @@ impl DocumentV2 {
                 FocusTarget::Section(sections[insertion].id.clone())
             }
             Edit::DeleteSection { page, section } => {
-                let sections = &mut page_mut(&mut data, &page)?.sections;
-                let index = sections
-                    .iter()
-                    .position(|candidate| candidate.id == section)
-                    .ok_or_else(|| DocumentError::at("validation/section_missing", "section_id"))?;
-                sections.remove(index);
-                let focus = select_after_delete(sections, index, page);
+                let focus = {
+                    let sections = &mut page_mut(&mut data, &page)?.sections;
+                    let index = sections
+                        .iter()
+                        .position(|candidate| candidate.id == section)
+                        .ok_or_else(|| {
+                            DocumentError::at("validation/section_missing", "section_id")
+                        })?;
+                    sections.remove(index);
+                    for source_section in sections.iter_mut() {
+                        source_section.blocks.retain(|block| {
+                            !matches!(
+                                block,
+                                BlockV2::Button {
+                                    action: super::ActionV2::NavigateSection { section_id },
+                                    ..
+                                } if section_id == &section
+                            )
+                        });
+                    }
+                    select_after_delete(sections, index, page)
+                };
                 prune_unplaced_forms(&mut data);
                 focus
             }

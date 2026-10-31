@@ -36,7 +36,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v8_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v9_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -45,7 +45,7 @@ fn exact_renderer_v8_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v8");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v9");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -78,6 +78,84 @@ fn exact_renderer_v8_manifest_binds_row_document_theme_and_assets() {
     ));
     assert!(html.contains("Choose a real destination before adding a call to action."));
     assert!(!html.contains("example.com"));
+}
+
+#[test]
+fn renderer_v9_renders_safe_actions_and_keeps_sensitive_actions_inert_in_preview() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {"id":"block-section-link", "kind":"button", "label":"View details", "action":{"kind":"navigate_section", "section_id":"section-details"}},
+        {"id":"block-phone-link", "kind":"button", "label":"Call", "action":{"kind":"telephone", "number":"+1 (555) 555-0100"}},
+        {"id":"block-email-link", "kind":"button", "label":"Email", "action":{"kind":"email", "address":"sales?filter=none#x%25@example.test"}}
+    ]);
+    value["pages"][0]["sections"]
+        .as_array_mut()
+        .expect("sections array")
+        .push(serde_json::json!({
+            "id":"section-details",
+            "type":"features",
+            "blocks":[{"id":"block-details-title", "kind":"heading", "level":2, "text":"Details"}]
+        }));
+    let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
+        .expect("valid action document");
+    let prepared = prepare_revision(&document, "revision-actions").expect("revision");
+    let published = render_published(
+        2,
+        "funnel-01",
+        "revision-actions",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("published actions");
+    let preview = render_owner_preview(&document, document.entry_page_id()).expect("preview");
+
+    assert!(published.contains("href=\"#section-section-details\">View details</a>"));
+    assert!(
+        published.contains("id=\"section-section-details\" data-section-id=\"section-details\"")
+    );
+    assert!(published.contains("href=\"tel:+15555550100\">Call</a>"));
+    assert!(
+        published.contains("href=\"mailto:sales%3Ffilter%3Dnone%23x%2525@example.test\">Email</a>")
+    );
+    assert!(preview.contains("href=\"#section-section-details\">View details</a>"));
+    assert!(preview.contains("<span class=\"v2-button\" aria-disabled=\"true\">Call</span>"));
+    assert!(preview.contains("<span class=\"v2-button\" aria-disabled=\"true\">Email</span>"));
+    assert!(!preview.contains("href=\"tel:"));
+    assert!(!preview.contains("href=\"mailto:"));
+
+    let renderer_v8 = manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v8");
+    assert_eq!(
+        validate_revision_v2(
+            2,
+            "funnel-01",
+            "revision-actions",
+            &prepared.data_json,
+            &renderer_v8,
+        )
+        .expect_err("v8 does not claim the new action capability"),
+        V2RenderError::ActionDestinationsNotEnabled
+    );
+}
+
+#[test]
+fn renderer_v8_keeps_the_historical_section_markup() {
+    let document = document();
+    let prepared = prepare_revision(&document, "revision-v8-section").expect("revision");
+    let renderer_v8 = manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v8");
+    let html = render_published(
+        2,
+        "funnel-01",
+        "revision-v8-section",
+        &prepared.data_json,
+        &renderer_v8,
+    )
+    .expect("historical renderer output");
+
+    assert!(html.contains(
+        "<section class=\"v2-section v2-section--hero\" data-section-id=\"section-hero\">"
+    ));
+    assert!(!html.contains("id=\"section-section-hero\""));
 }
 
 #[test]
@@ -174,7 +252,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v8", "renderer-v8-next");
+        .replace("renderer-v9", "renderer-v9-next");
     assert!(matches!(
         render_published(
             2,
@@ -443,7 +521,7 @@ fn published_forms_render_native_accessible_posts_and_escape_all_author_copy() {
 }
 
 #[test]
-fn renderer_v8_localizes_forms_and_keeps_multiline_fields_and_information_links_inert_in_preview() {
+fn renderer_v9_localizes_forms_and_keeps_multiline_fields_and_information_links_inert_in_preview() {
     let mut value: serde_json::Value =
         serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
     value["language"] = serde_json::json!("fr");
@@ -491,6 +569,26 @@ fn renderer_v8_localizes_forms_and_keeps_multiline_fields_and_information_links_
     assert!(published.contains("Informations sur cette demande"));
     assert!(preview.contains("<span aria-disabled=\"true\">Informations sur cette demande</span>"));
     assert!(!preview.contains("<a href=\"https://example.test/privacy\""));
+
+    let renderer_v8 = manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v8");
+    let renderer_v8_html = render_published_route_with_assets(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-fr-form",
+            data_json: &prepared.data_json,
+            render_manifest_json: &renderer_v8,
+        },
+        "lead-funnel",
+        None,
+        &[],
+    )
+    .expect("renderer v8 keeps its language and form capabilities");
+    assert!(renderer_v8_html.contains("<html lang=\"fr\">"));
+    assert!(renderer_v8_html.contains("<textarea id=\"form-form-one-field-field-name\""));
+    assert!(renderer_v8_html.contains("Envoyer ma demande"));
+    assert!(renderer_v8_html.contains("Informations sur cette demande"));
+    assert!(!renderer_v8_html.contains("id=\"section-section-hero\""));
 
     let form_id = FormId::parse("form-one").expect("form id");
     let issues = [FormSubmissionIssue {
@@ -768,7 +866,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn renderer_v8_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
+fn renderer_v9_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
     let mut value: serde_json::Value =
         serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
     value["pages"][0]["seo_title"] = serde_json::json!("Offer <sale> & \"launch\"");
@@ -777,7 +875,7 @@ fn renderer_v8_metadata_escapes_title_and_attributes_in_preview_and_public_html(
     let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
         .expect("metadata document");
     let prepared = prepare_revision(&document, "revision-seo").expect("metadata revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v8");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v9");
     let published = render_published(
         2,
         "funnel-01",
@@ -820,7 +918,7 @@ fn renderer_v8_metadata_escapes_title_and_attributes_in_preview_and_public_html(
 }
 
 #[test]
-fn renderer_v8_falls_back_to_page_title_and_omits_unset_description_and_robots() {
+fn renderer_v9_falls_back_to_page_title_and_omits_unset_description_and_robots() {
     let document = document();
     let prepared = prepare_revision(&document, "revision-default-seo").expect("revision");
     let html = render_published(
