@@ -18,6 +18,9 @@ pub mod submission_follow_up;
 pub mod submission_lifecycle;
 
 pub use eez_domain::FunnelBlueprint;
+pub use funnel::document_portability::{
+    PortableTemplateImportResult, PortableTemplateInspection, PortableTemplateMediaAvailability,
+};
 #[cfg(test)]
 pub(crate) use funnel::{render_published_revision, v2_page_projection};
 pub use funnel::{

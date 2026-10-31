@@ -30,8 +30,13 @@ use eez_storage::stage::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use self::document_portability::{PortableTemplateImportResult, PortableTemplateInspection};
+
 #[path = "funnel/editor_settings.rs"]
 pub(super) mod inspector;
+
+#[path = "funnel/template_portability.rs"]
+pub(super) mod document_portability;
 
 #[path = "funnel/publication_readiness.rs"]
 mod publication_readiness;
@@ -1505,6 +1510,30 @@ impl<'repo, 'database> Session<'repo, 'database> {
             document_stages: Some(document_stages),
             media_assets: Some(media_assets),
         }
+    }
+
+    pub async fn export_portable_template(
+        &self,
+        funnel_id: &str,
+    ) -> Result<Vec<u8>, FunnelCommandError> {
+        document_portability::export(self, funnel_id).await
+    }
+
+    pub async fn inspect_portable_template(
+        &self,
+        raw_template: &[u8],
+    ) -> Result<PortableTemplateInspection, FunnelCommandError> {
+        document_portability::inspect(self, raw_template).await
+    }
+
+    pub async fn import_portable_template(
+        &self,
+        name: &str,
+        raw_template: &[u8],
+        replacements: &BTreeMap<String, String>,
+        idempotency_key: &str,
+    ) -> Result<PortableTemplateImportResult, FunnelCommandError> {
+        document_portability::import(self, name, raw_template, replacements, idempotency_key).await
     }
 
     async fn image_asset_digests(
@@ -4097,6 +4126,8 @@ pub enum FunnelCommandError {
     Render(RenderError),
     Storage(RepositoryError),
     MediaAsset(MediaAssetError),
+    PortableTemplate(eez_domain::document_v2::PortableTemplateError),
+    TemplateMediaMissing,
     Internal,
 }
 
@@ -4125,6 +4156,8 @@ impl FunnelCommandError {
             Self::UnknownCommand => "validation/operation_not_supported",
             Self::Storage(error) => error.code(),
             Self::MediaAsset(error) => error.code(),
+            Self::PortableTemplate(error) => error.code(),
+            Self::TemplateMediaMissing => "conflict/template_media_missing",
             Self::Internal => "internal/unexpected",
         }
     }
@@ -4165,6 +4198,12 @@ impl From<RepositoryError> for FunnelCommandError {
 impl From<MediaAssetError> for FunnelCommandError {
     fn from(error: MediaAssetError) -> Self {
         Self::MediaAsset(error)
+    }
+}
+
+impl From<eez_domain::document_v2::PortableTemplateError> for FunnelCommandError {
+    fn from(error: eez_domain::document_v2::PortableTemplateError) -> Self {
+        Self::PortableTemplate(error)
     }
 }
 

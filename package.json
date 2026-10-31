@@ -17,6 +17,7 @@
     "test:pub011:migration": "python3 scripts/test-pub011-migration.py",
     "test:pub005:browser": "bash scripts/smoke-pub005-service-brief.sh",
     "test:pub019:browser": "node scripts/test-pub019-service-recipes-browser.mjs",
+    "test:pub020:browser": "node scripts/test-pub020-portability-browser.mjs",
     "test:pr010:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr011:browser": "node scripts/test-pr010-browser.mjs",
     "test:pr012:browser": "node scripts/test-pr010-browser.mjs",

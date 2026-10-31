@@ -50,7 +50,10 @@ impl ApiError {
             | "validation/service_brief_invalid"
             | "validation/campaign_id_invalid"
             | "validation/submission_follow_up_invalid"
-            | "validation/service_brief_format_unsupported" => (
+            | "validation/service_brief_format_unsupported"
+            | "validation/template_invalid"
+            | "validation/template_version_unsupported"
+            | "validation/template_media_invalid" => (
                 code.to_owned(),
                 ErrorCategory::Validation,
                 400,
@@ -69,6 +72,13 @@ impl ApiError {
                 ErrorCategory::Validation,
                 413,
                 "The service brief exceeds the size limit.",
+                false,
+            ),
+            "validation/template_too_large" => (
+                code.to_owned(),
+                ErrorCategory::Validation,
+                413,
+                "The template exceeds the import size limit.",
                 false,
             ),
             "validation/operation_not_supported" => (
@@ -136,7 +146,8 @@ impl ApiError {
             | "conflict/campaign_registry_changed"
             | "conflict/service_brief_stale"
             | "conflict/submission_follow_up_stale"
-            | "conflict/submission_follow_up_correction_target" => (
+            | "conflict/submission_follow_up_correction_target"
+            | "conflict/template_media_missing" => (
                 code.to_owned(),
                 ErrorCategory::Conflict,
                 409,
@@ -266,6 +277,26 @@ mod tests {
             ErrorCategory::Validation,
             413,
         ),
+        (
+            "validation/template_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/template_version_unsupported",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/template_media_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
+        (
+            "validation/template_too_large",
+            ErrorCategory::Validation,
+            413,
+        ),
         ("validation/missing_field", ErrorCategory::Validation, 400),
         ("validation/order_duplicate", ErrorCategory::Validation, 400),
         (
@@ -385,6 +416,11 @@ mod tests {
         ),
         (
             "conflict/submission_follow_up_correction_target",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/template_media_missing",
             ErrorCategory::Conflict,
             409,
         ),

@@ -6,6 +6,7 @@ mod campaigns;
 mod delivery;
 mod editor;
 mod funnels;
+mod funnels_import;
 mod idempotency;
 mod reports;
 mod service_brief;

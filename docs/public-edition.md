@@ -22,6 +22,10 @@ V2 funnel creation offers contact, estimate-request, and diagnostic-request reci
 
 Contact asks for a message, estimate requests collect scope and an optional timeline, and diagnostic requests collect the current situation and a goal to clarify. Request acknowledgement remains required and marketing consent remains off. An estimate request does not promise a price or response date. A diagnostic request does not book a session, score the applicant, or provide a diagnosis.
 
+## Portable templates
+
+The dashboard exports the saved V2 revision as a versioned JSON template with a manifest for every referenced image. Export does not include an unsaved editor draft. Import validates the package and target media library, remaps internal funnel, page, section, block, form, field, and consent-copy identifiers, then atomically creates a new unpublished V2 funnel. Images already present in the target library keep their references; an unavailable image requires an explicit replacement from that library. The importer does not fetch external URLs. V1 revisions, private briefs, submissions, delivery configuration, and secrets are excluded.
+
 ## Capability snapshot
 
 This table records the capabilities on the series baseline, commit 65feaeee, and the boundaries maintained by the public improvement series. It is a baseline snapshot; issue 82 is the live source for delivery progress.
@@ -33,7 +37,7 @@ This table records the capabilities on the series baseline, commit 65feaeee, and
 | Inbox | Private owner access to retained submissions and the statuses new, contacted, qualified, and closed. | Status records follow-up. Closed or completed never implies payment. |
 | Delivery | No built-in external delivery integration on the baseline. | The planned integration is an operator-configured, disabled-by-default, signed webhook with bounded retries and no visitor-supplied destination. |
 | Reports | Retained form-completion counts and optional, consent-based page/form interaction aggregates; the initial baseline has no owner campaign registry. | Exact owner-registered campaign IDs group consented interaction events only; no visitor or session identity, visitor-to-submission rate, or commercial attribution is inferred. |
-| Portability | No funnel JSON import/export on the baseline. | The planned template format excludes private briefs, submissions, and secrets; import creates a new unpublished funnel. |
+| Portability | No funnel JSON import/export on the baseline. | The series adds versioned V2 templates with exact media manifests; import creates a new unpublished draft and never overwrites or publishes a funnel. |
 | Runtime | Cloudflare Workers with D1, R2, and KV bindings. | The series adds no Cloudflare service and does not verify a remote production deployment. |
 
 ## Outcome limits
