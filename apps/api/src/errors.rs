@@ -48,6 +48,7 @@ impl ApiError {
             | "validation/generated_placeholder_marker_invalid"
             | "validation/media_asset_invalid"
             | "validation/service_brief_invalid"
+            | "validation/campaign_id_invalid"
             | "validation/submission_follow_up_invalid"
             | "validation/service_brief_format_unsupported" => (
                 code.to_owned(),
@@ -131,6 +132,8 @@ impl ApiError {
             | "conflict/v2_typed_command_required"
             | "conflict/v2_stage_active"
             | "conflict/media_asset_conflict"
+            | "conflict/campaign_registry_full"
+            | "conflict/campaign_registry_changed"
             | "conflict/service_brief_stale"
             | "conflict/submission_follow_up_stale"
             | "conflict/submission_follow_up_correction_target" => (
@@ -227,6 +230,11 @@ mod tests {
 
     const CONTRACT_CODES: &[(&str, ErrorCategory, u16)] = &[
         ("validation/invalid_json", ErrorCategory::Validation, 400),
+        (
+            "validation/campaign_id_invalid",
+            ErrorCategory::Validation,
+            400,
+        ),
         ("validation/invalid_cursor", ErrorCategory::Validation, 400),
         (
             "validation/media_asset_invalid",
@@ -360,6 +368,16 @@ mod tests {
             409,
         ),
         ("conflict/service_brief_stale", ErrorCategory::Conflict, 409),
+        (
+            "conflict/campaign_registry_full",
+            ErrorCategory::Conflict,
+            409,
+        ),
+        (
+            "conflict/campaign_registry_changed",
+            ErrorCategory::Conflict,
+            409,
+        ),
         (
             "conflict/submission_follow_up_stale",
             ErrorCategory::Conflict,

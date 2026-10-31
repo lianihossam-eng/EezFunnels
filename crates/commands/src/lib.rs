@@ -6,6 +6,7 @@ use eez_domain::{DomainError, Revision, RevisionId, ThemePreset};
 use eez_render::{RenderError, ThemeTokens, RENDERER_VERSION};
 use serde::{Deserialize, Serialize};
 
+pub mod campaign_registry;
 mod funnel;
 pub mod public_delivery;
 pub mod public_delivery_controls;

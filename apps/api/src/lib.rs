@@ -31,6 +31,7 @@ use worker::{event, Context, Env, HttpRequest};
 use crate::errors::ApiError;
 use crate::json::{validate_unique_json, JsonValidationError};
 
+mod campaign_registry;
 mod canonical;
 mod custom_hosts;
 mod delivery_controls;
@@ -204,6 +205,10 @@ pub async fn fetch(
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/interaction-report") {
         funnel_interaction_report_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(route) = campaign_registry::item_from_path(&request_path) {
+        campaign_registry::item_response(&env, request, route, &correlation_id).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/campaigns") {
+        campaign_registry::collection_response(&env, request, funnel_id, &correlation_id).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/service-brief") {
         service_brief::response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/webhook-delivery") {
@@ -1997,8 +2002,12 @@ async fn public_interaction_events_response(
     };
     let bindings = eez_storage::Bindings::from_env(env).ok();
     let repository = bindings.as_ref().map(eez_storage::Bindings::repository);
+    let campaigns = bindings
+        .as_ref()
+        .map(eez_storage::Bindings::campaign_registry_repository);
     let result = record_interaction(
         repository.as_ref(),
+        campaigns.as_ref(),
         RecordInteractionInput {
             funnel_slug: route.funnel_slug,
             payload,

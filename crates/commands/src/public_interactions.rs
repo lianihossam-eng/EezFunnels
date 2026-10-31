@@ -3,6 +3,7 @@ use eez_domain::interaction_event::{
     decode_interaction_event_payload, CampaignRegistry, InteractionConsent, InteractionEvent,
     InteractionEventKind, InteractionEventPayload,
 };
+use eez_storage::campaign_registry::{CampaignRegistryRepository, CampaignRegistryStorageError};
 use eez_storage::repository::{
     NewPublicInteractionEvent, PublicInteractionEventResult, Repository, RepositoryError,
     RevisionRecord,
@@ -35,10 +36,11 @@ pub enum RecordInteractionError {
 
 pub async fn record_interaction(
     repository: Option<&Repository<'_>>,
+    campaigns: Option<&CampaignRegistryRepository<'_>>,
     input: RecordInteractionInput<'_>,
 ) -> Result<RecordInteractionOutcome, RecordInteractionError> {
     let event = decode_interaction_event_payload(
-        input.payload,
+        input.payload.clone(),
         InteractionConsent::Granted,
         &CampaignRegistry::default(),
         input.replay_key,
@@ -61,6 +63,22 @@ pub async fn record_interaction(
     if !interaction_event_matches_revision(&event, &revision) {
         return Err(RecordInteractionError::NotFound);
     }
+
+    let Some(campaigns) = campaigns else {
+        return Err(RecordInteractionError::RepositoryUnavailable);
+    };
+    let registry = campaigns
+        .read(event.funnel_id().as_str())
+        .await
+        .map_err(map_campaign_registry_error)?;
+    let event = decode_interaction_event_payload(
+        input.payload,
+        InteractionConsent::Granted,
+        &registry,
+        input.replay_key,
+    )
+    .map_err(|_| RecordInteractionError::InvalidEvent)?
+    .ok_or(RecordInteractionError::InvalidEvent)?;
 
     let fingerprint = interaction_fingerprint_hex(event.replay_fingerprint().as_bytes());
     let storage_result = repository
@@ -86,6 +104,21 @@ pub async fn record_interaction(
         PublicInteractionEventResult::KeyReuseMismatch
         | PublicInteractionEventResult::NotCurrent => Ok(RecordInteractionOutcome::Conflict),
         PublicInteractionEventResult::RateLimited => Ok(RecordInteractionOutcome::RateLimited),
+    }
+}
+
+fn map_campaign_registry_error(error: CampaignRegistryStorageError) -> RecordInteractionError {
+    match error {
+        CampaignRegistryStorageError::NotFound => RecordInteractionError::NotFound,
+        CampaignRegistryStorageError::Database | CampaignRegistryStorageError::InvalidRecord => {
+            RecordInteractionError::Storage {
+                code: "external/unavailable",
+            }
+        }
+        CampaignRegistryStorageError::CapacityReached
+        | CampaignRegistryStorageError::ConcurrentChange => RecordInteractionError::Storage {
+            code: "external/unavailable",
+        },
     }
 }
 

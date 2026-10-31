@@ -16,7 +16,7 @@ This table records the capabilities on the series baseline, commit 65feaeee, and
 | Public forms | Native text, email, phone, checkbox, and select fields; required request acknowledgement; optional marketing consent; bounded and idempotent submission. | Inbox and owner APIs remain private. Only fields explicitly selected for an activated operator-configured webhook may be sent to its destination. Measurement and marketing consent remain separate from request acknowledgement. |
 | Inbox | Private owner access to retained submissions and the statuses new, contacted, qualified, and closed. | Status records follow-up. Closed or completed never implies payment. |
 | Delivery | No built-in external delivery integration on the baseline. | The planned integration is an operator-configured, disabled-by-default, signed webhook with bounded retries and no visitor-supplied destination. |
-| Reports | Retained form-completion counts and optional, consent-based page/form interaction aggregates. | No visitor or session identity, person-level attribution, visitor-to-submission rate, or commercial attribution is inferred. |
+| Reports | Retained form-completion counts and optional, consent-based page/form interaction aggregates; the initial baseline has no owner campaign registry. | Exact owner-registered campaign IDs group consented interaction events only; no visitor or session identity, visitor-to-submission rate, or commercial attribution is inferred. |
 | Portability | No funnel JSON import/export on the baseline. | The planned template format excludes private briefs, submissions, and secrets; import creates a new unpublished funnel. |
 | Runtime | Cloudflare Workers with D1, R2, and KV bindings. | The series adds no Cloudflare service and does not verify a remote production deployment. |
 
@@ -49,6 +49,14 @@ The system has three independent choices:
 - Request acknowledgement is required to process a submission.
 - Marketing consent is optional and starts unchecked.
 - Measurement consent is optional and controls supported aggregate interaction collection.
+
+## Campaign links and measurement
+
+The owner can register up to 100 campaign IDs per funnel from the dashboard's Campaign links page. IDs use 1–64 ASCII letters, digits, hyphens, or underscores, start with a letter or digit, and match case-sensitively. Generated entry-page links use `?campaign_id=<registered-id>`; a configured custom funnel host takes precedence over `PUBLIC_BASE_URL`. Without a trusted absolute origin, the dashboard displays the relative path and does not invent a hostname.
+
+The interaction collector records a campaign only when measurement consent is granted and the exact ID is registered for that funnel when the event is accepted. Unknown values remain unattributed. This applies to interactions on the current page only; the campaign does not follow the visitor to another page, domain, form submission, or person. `utm_medium` continues to set the separate submission channel and `utm_campaign` does not create campaign attribution.
+
+Adding or removing an ID affects future events. Retained event rows are not backfilled or rewritten when the registry changes, so a replay after registration remains a duplicate with its original attribution. Removing an ID does not erase campaign groups already recorded in retained events. Campaigns are not stored on form submissions, and reports do not join campaign events to people or requests.
 
 ## Compatibility and data handling
 

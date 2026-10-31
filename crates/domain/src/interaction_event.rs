@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ pub const INTERACTION_EVENT_SCHEMA_VERSION: u16 = 1;
 pub const MAX_INTERACTION_EVENT_BYTES: usize = 2_048;
 pub const DEFAULT_INTERACTION_RETENTION_DAYS: u8 = 30;
 pub const MAX_INTERACTION_RETENTION_DAYS: u8 = 90;
+pub const MAX_CAMPAIGN_IDS_PER_FUNNEL: usize = 100;
 
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const MIN_REPLAY_KEY_BYTES: usize = 32;
@@ -64,7 +65,7 @@ impl InteractionResourceId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct CampaignId(String);
 
@@ -85,7 +86,7 @@ impl CampaignId {
 /// Exact owner-configured campaign IDs. Unregistered visitor values are never retained.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CampaignRegistry {
-    ids: HashSet<CampaignId>,
+    ids: BTreeSet<CampaignId>,
 }
 
 impl CampaignRegistry {
@@ -94,11 +95,22 @@ impl CampaignRegistry {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let ids = ids
-            .into_iter()
-            .map(CampaignId::parse)
-            .collect::<Result<HashSet<_>, _>>()?;
+        let mut registry = BTreeSet::new();
+        for value in ids {
+            let id = CampaignId::parse(value)?;
+            if !registry.insert(id) {
+                return Err(InteractionContractError::DuplicateCampaignId);
+            }
+            if registry.len() > MAX_CAMPAIGN_IDS_PER_FUNNEL {
+                return Err(InteractionContractError::CampaignRegistryFull);
+            }
+        }
+        let ids = registry;
         Ok(Self { ids })
+    }
+
+    pub fn campaign_ids(&self) -> impl Iterator<Item = &CampaignId> {
+        self.ids.iter()
     }
 
     fn resolve(&self, visitor_value: Option<String>) -> Option<CampaignId> {
@@ -188,6 +200,8 @@ pub enum InteractionContractError {
     InvalidEventId,
     InvalidResourceId,
     InvalidCampaignId,
+    DuplicateCampaignId,
+    CampaignRegistryFull,
     InvalidEventTimestamp,
     FormReferenceMismatch,
     InvalidRetentionDays,
@@ -730,6 +744,33 @@ mod tests {
         assert_eq!(
             CampaignRegistry::new(["contains space"]),
             Err(InteractionContractError::InvalidCampaignId)
+        );
+    }
+
+    #[test]
+    fn campaign_registry_is_bounded_unique_and_sorted() {
+        let ids = (0..MAX_CAMPAIGN_IDS_PER_FUNNEL)
+            .map(|index| format!("campaign-{index:03}"))
+            .collect::<Vec<_>>();
+        let registry = CampaignRegistry::new(ids.clone()).expect("bounded registry");
+        let sorted_ids = registry
+            .campaign_ids()
+            .map(CampaignId::as_str)
+            .collect::<Vec<_>>();
+        let mut expected_ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        expected_ids.sort_unstable();
+        assert_eq!(sorted_ids, expected_ids);
+
+        let too_many = (0..=MAX_CAMPAIGN_IDS_PER_FUNNEL)
+            .map(|index| format!("campaign-{index:03}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            CampaignRegistry::new(too_many),
+            Err(InteractionContractError::CampaignRegistryFull)
+        );
+        assert_eq!(
+            CampaignRegistry::new(["spring-launch", "spring-launch"]),
+            Err(InteractionContractError::DuplicateCampaignId)
         );
     }
 }

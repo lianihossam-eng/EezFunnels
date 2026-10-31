@@ -185,6 +185,20 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
         assert request("HEAD", "/", host="custom.example")[0] == 200
         assert request("GET", "/f/pr061-smoke", host="custom.example")[0] == 200
 
+        campaign_registry_path = f"/api/funnels/{funnel_id}/campaigns"
+        register_status, register_body, _ = post_json(
+            campaign_registry_path,
+            {"campaign_id": "custom-campaign"},
+            "pr061-campaign-register",
+        )
+        assert register_status == 200, (register_status, register_body)
+        campaign_registry = json.loads(register_body)
+        assert campaign_registry["campaign_links"] == [{
+            "campaign_id": "custom-campaign",
+            "url": "https://custom.example/f/pr061-smoke?campaign_id=custom-campaign",
+            "relative_path": "/f/pr061-smoke?campaign_id=custom-campaign",
+        }], campaign_registry
+
         interaction_event_id = str(uuid.uuid4())
         interaction_event = {
             "schema_version": 1,
@@ -194,6 +208,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
             "funnel_id": funnel_id,
             "revision_id": revision_id,
             "page_id": "legacy-entry",
+            "campaign_id": "custom-campaign",
         }
         interaction_status, interaction_body, _ = request(
             "POST",
@@ -208,13 +223,15 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr061-custom-hosts-") as dire
         )
         assert interaction_status == 204, (interaction_status, interaction_body)
         assert d1_query(
-            "SELECT COUNT(*) AS events FROM public_interaction_events "
+            "SELECT COUNT(*) AS events, MIN(campaign_id) AS campaign_id "
+            "FROM public_interaction_events "
             f"WHERE event_id = '{interaction_event_id}'",
             "events",
-        )["events"] == 1
+        ) == {"events": 1, "campaign_id": "custom-campaign"}
 
         for blocked in [
             "/api/funnels",
+            f"/api/funnels/{funnel_id}/campaigns",
             "/api/submissions",
             "/mcp",
             "/admin",
