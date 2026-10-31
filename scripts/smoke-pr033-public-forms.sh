@@ -37,7 +37,7 @@ import uuid
 import xml.etree.ElementTree as ElementTree
 from urllib.parse import urlencode
 
-INTERACTION_EVENT_LIMIT = 20
+INTERACTION_EVENT_LIMIT = 20 if os.environ.get("PR033_BROWSER") == "1" else 10
 
 root = Path(sys.argv[1])
 wrangler = root / "node_modules" / ".bin" / "wrangler"
