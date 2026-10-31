@@ -205,6 +205,9 @@ pub async fn fetch(
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/interaction-report") {
         funnel_interaction_report_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/service-outcomes") {
+        funnel_service_outcome_report_response(&env, request, funnel_id, correlation_id.clone())
+            .await
     } else if let Some(route) = campaign_registry::item_from_path(&request_path) {
         campaign_registry::item_response(&env, request, route, &correlation_id).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/campaigns") {
@@ -307,6 +310,7 @@ pub async fn fetch(
 
     if funnel_subroute(&request_path, "/completions").is_some()
         || funnel_subroute(&request_path, "/interaction-report").is_some()
+        || funnel_subroute(&request_path, "/service-outcomes").is_some()
         || funnel_subroute(&request_path, "/service-brief").is_some()
         || funnel_subroute(&request_path, "/webhook-delivery").is_some()
         || request_path == "/api/webhook-delivery"
@@ -2404,6 +2408,7 @@ fn submission_recovery_gated_path(path: &str) -> bool {
     path == "/api/submissions"
         || (path.starts_with("/api/submissions/") && path != "/api/submissions/recovery")
         || funnel_subroute(path, "/completions").is_some()
+        || funnel_subroute(path, "/service-outcomes").is_some()
         || public_form_submission_route_from_path(path).is_some()
 }
 
@@ -3184,6 +3189,48 @@ async fn funnel_interaction_report_response(
             let retention_days = interaction_retention_days(env).map(u16::from);
             let result =
                 attach_report_context(result, interaction_collection_enabled(env), retention_days);
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
+        Err(error) => {
+            let error = ApiError::from_code(error.code());
+            log_api_error(&error, &correlation_id, error.code());
+            error_response(&error, correlation_id)
+        }
+    }
+}
+
+async fn funnel_service_outcome_report_response(
+    env: &Env,
+    request: HttpRequest,
+    funnel_id: &str,
+    correlation_id: String,
+) -> Response<axum::body::Body> {
+    if request.method() != Method::GET {
+        return method_not_allowed_for(&correlation_id, "GET");
+    }
+    let period = match form_completion_period(request.uri().query()) {
+        Ok(period) => period,
+        Err(()) => {
+            let error = ApiError::from_code("validation/invalid_json");
+            return error_response(&error, correlation_id);
+        }
+    };
+    let parameters = serde_json::json!({
+        "funnel_id": funnel_id,
+        "period_days": period.days(),
+    })
+    .to_string();
+    match execute_funnel_command(
+        env,
+        command_ids::SERVICE_OUTCOME_REPORT_READ,
+        &parameters,
+        None,
+    )
+    .await
+    {
+        Ok(result) => {
+            let retention_days = u16::try_from(public_form_retention_seconds(env) / 86_400).ok();
+            let result = attach_report_context(result, true, retention_days);
             json_success_response(result, StatusCode::OK, &correlation_id, None)
         }
         Err(error) => {
@@ -5348,6 +5395,13 @@ mod tests {
             funnel_subroute("/api/funnels/funnel-a/convert-v2", "/convert-v2"),
             Some("funnel-a")
         );
+        assert_eq!(
+            funnel_subroute(
+                "/api/funnels/funnel-a/service-outcomes",
+                "/service-outcomes"
+            ),
+            Some("funnel-a")
+        );
 
         assert_eq!(
             v2_preview_command_parameters(
@@ -5858,6 +5912,9 @@ mod tests {
         ));
         assert!(submission_recovery_gated_path(
             "/api/funnels/11111111-1111-4111-8111-111111111111/completions"
+        ));
+        assert!(submission_recovery_gated_path(
+            "/api/funnels/11111111-1111-4111-8111-111111111111/service-outcomes"
         ));
         assert!(!submission_recovery_gated_path("/api/submissions/recovery"));
         assert!(!submission_recovery_gated_path(

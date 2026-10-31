@@ -9,6 +9,7 @@ mod funnels;
 mod idempotency;
 mod reports;
 mod service_brief;
+mod service_outcomes;
 mod submissions;
 
 use campaigns::CampaignLinksPage;
@@ -16,6 +17,7 @@ use editor::FunnelDetail;
 use funnels::Funnels;
 use reports::{FunnelCompletions, FunnelInteractionReport};
 use service_brief::ServiceBriefPage;
+use service_outcomes::FunnelServiceOutcomes;
 use submissions::Submissions;
 
 #[derive(Clone, PartialEq, Routable)]
@@ -46,6 +48,10 @@ pub(crate) enum RouteView {
     FunnelInteractionReport { id: String },
     #[end_layout]
     #[layout(DashboardShell)]
+    #[route("/funnels/:id/service-outcomes")]
+    FunnelServiceOutcomes { id: String },
+    #[end_layout]
+    #[layout(DashboardShell)]
     #[route("/funnels/:id/campaigns")]
     CampaignLinksPage { id: String },
     #[end_layout]
@@ -63,6 +69,7 @@ fn DashboardShell() -> Element {
         RouteView::ServiceBriefPage { .. } => "Workspace / Service brief",
         RouteView::FunnelCompletions { .. } => "Workspace / Form completions",
         RouteView::FunnelInteractionReport { .. } => "Workspace / Interaction counts",
+        RouteView::FunnelServiceOutcomes { .. } => "Workspace / Service outcomes",
         RouteView::CampaignLinksPage { .. } => "Workspace / Campaign links",
         RouteView::Submissions {} => "Workspace / Submissions",
     };

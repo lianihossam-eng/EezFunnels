@@ -2257,7 +2257,8 @@ h1 {
 }
 
 .completion-report,
-.interaction-report {
+.interaction-report,
+.service-outcome-report {
   display: grid;
   gap: 22px;
   max-width: 1040px;
@@ -2268,6 +2269,10 @@ h1 {
 }
 
 .interaction-report .page-heading {
+  margin-bottom: 0;
+}
+
+.service-outcome-report .page-heading {
   margin-bottom: 0;
 }
 
@@ -2539,6 +2544,12 @@ h1 {
   min-width: 0;
 }
 
+.service-outcome-results {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
 .completion-total {
   margin: 0;
   color: #25324a;
@@ -2596,7 +2607,11 @@ h1 {
 }
 
 .completion-report-context p,
-.completion-zero-note {
+.completion-zero-note,
+.service-outcome-context,
+.service-outcome-coverage,
+.service-outcome-delay,
+.service-outcome-note {
   margin: 0;
   color: #526078;
   font-size: 12px;
@@ -2707,6 +2722,46 @@ h1 {
 
 .form-completion-table {
   min-width: 380px;
+}
+
+.service-outcome-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+  padding-block: 12px;
+  border-block: 1px solid #e3e8f0;
+}
+
+.service-outcome-context div {
+  display: grid;
+  gap: 2px;
+}
+
+.service-outcome-context dt {
+  color: #526078;
+  font-size: 11px;
+}
+
+.service-outcome-context dd {
+  margin: 0;
+  color: #27344c;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.service-outcome-coverage,
+.service-outcome-delay,
+.service-outcome-note {
+  margin: 0;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.service-outcome-table {
+  min-width: 460px;
 }
 
 .form-completion-table code {
@@ -3079,7 +3134,8 @@ h1 {
   }
 
   .completion-report,
-  .interaction-report {
+  .interaction-report,
+  .service-outcome-report {
     gap: 18px;
   }
 

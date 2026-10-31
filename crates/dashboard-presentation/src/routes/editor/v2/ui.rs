@@ -656,6 +656,7 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                 Link { to: RouteView::CampaignLinksPage { id: id.clone() }, class: "secondary-button completion-report-link", "Campaign links" }
                 Link { to: RouteView::FunnelCompletions { id: id.clone() }, class: "secondary-button completion-report-link", "View form completions" }
                 Link { to: RouteView::FunnelInteractionReport { id: id.clone() }, class: "secondary-button completion-report-link", "View interaction counts" }
+                Link { to: RouteView::FunnelServiceOutcomes { id: id.clone() }, class: "secondary-button completion-report-link", "View service outcomes" }
             }
             if view.loading {
                 section { class: "empty-state editor-loading", role: "status", "aria-label": "Typed funnel editor",

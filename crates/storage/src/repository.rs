@@ -106,6 +106,128 @@ FROM retained CROSS JOIN report_clock
 GROUP BY retained.revision_id
 ORDER BY 1 ASC, 2 ASC, 3 ASC, 4 ASC, 5 ASC, 6 ASC, 7 ASC
 "#;
+const PUBLIC_SERVICE_OUTCOME_REPORT_QUERY: &str = r#"
+WITH
+clock(now) AS (
+    SELECT unixepoch()
+),
+funnel(id) AS (
+    SELECT id FROM funnels WHERE id = ?
+),
+bounds(now, start_at, end_at) AS (
+    SELECT
+        clock.now,
+        unixepoch(date(clock.now, 'unixepoch', printf('-%d days', ?))),
+        unixepoch(date(clock.now, 'unixepoch', '+1 day'))
+    FROM clock
+),
+history(started_at) AS (
+    SELECT history_started_at
+    FROM public_submission_follow_up_history
+    WHERE history_id = 1
+),
+retained AS MATERIALIZED (
+    SELECT
+        submissions.submission_id,
+        submissions.submitted_at,
+        submissions.triage_status
+    FROM public_form_submissions AS submissions
+    JOIN funnel ON funnel.id = submissions.funnel_id
+    CROSS JOIN bounds
+    WHERE submissions.submitted_at >= bounds.start_at
+      AND submissions.submitted_at < bounds.end_at
+      AND submissions.expires_at > bounds.now
+      AND NOT EXISTS (
+          SELECT 1
+          FROM public_submission_erasure_intents AS intent
+          WHERE intent.submission_id = submissions.submission_id
+      )
+),
+covered AS MATERIALIZED (
+    SELECT retained.*
+    FROM retained CROSS JOIN history
+    WHERE retained.submitted_at > history.started_at
+),
+effective_events AS MATERIALIZED (
+    SELECT
+        events.submission_id,
+        events.version,
+        events.status,
+        events.close_reason,
+        events.recorded_at,
+        covered.submitted_at
+    FROM public_submission_follow_up_events AS events
+    JOIN covered ON covered.submission_id = events.submission_id
+    CROSS JOIN bounds
+    WHERE events.recorded_at >= covered.submitted_at
+      AND events.recorded_at <= bounds.now
+      AND NOT EXISTS (
+          SELECT 1
+          FROM public_submission_follow_up_events AS correction
+          WHERE correction.submission_id = events.submission_id
+            AND correction.corrects_version = events.version
+      )
+),
+per_submission AS (
+    SELECT
+        covered.submission_id,
+        MAX(effective_events.status = 'contacted') AS has_contacted_event,
+        MAX(effective_events.status = 'qualified') AS has_qualified_event,
+        MAX(effective_events.status = 'closed') AS has_closed_event,
+        MAX(effective_events.status = 'closed' AND effective_events.close_reason IS NOT NULL)
+            AS has_closed_with_reason,
+        MIN(CASE
+            WHEN effective_events.status = 'contacted'
+            THEN effective_events.recorded_at - covered.submitted_at
+        END) AS first_contact_delay_seconds
+    FROM covered
+    LEFT JOIN effective_events ON effective_events.submission_id = covered.submission_id
+    GROUP BY covered.submission_id
+),
+stock AS (
+    SELECT
+        COUNT(*) AS retained_submissions,
+        COALESCE(SUM(triage_status = 'new'), 0) AS current_new,
+        COALESCE(SUM(triage_status = 'contacted'), 0) AS current_contacted,
+        COALESCE(SUM(triage_status = 'qualified'), 0) AS current_qualified,
+        COALESCE(SUM(triage_status = 'closed'), 0) AS current_closed
+    FROM retained
+),
+outcomes AS (
+    SELECT
+        COUNT(*) AS history_covered_submissions,
+        COALESCE(SUM(has_contacted_event), 0) AS submissions_taken_in_charge,
+        COALESCE(SUM(has_qualified_event), 0) AS submissions_qualified,
+        COALESCE(SUM(has_closed_event), 0) AS submissions_closed,
+        COALESCE(SUM(has_closed_with_reason), 0) AS submissions_closed_with_reason,
+        COALESCE(SUM(first_contact_delay_seconds IS NOT NULL), 0) AS first_contact_count,
+        COALESCE(CAST(ROUND(AVG(first_contact_delay_seconds)) AS INTEGER), 0)
+            AS average_first_contact_delay_seconds
+    FROM per_submission
+)
+SELECT
+    'summary' AS row_type,
+    strftime('%Y-%m-%dT%H:%M:%SZ', clock.now, 'unixepoch') AS as_of,
+    strftime('%Y-%m-%dT%H:%M:%SZ', history.started_at, 'unixepoch') AS history_started_at,
+    stock.retained_submissions,
+    outcomes.history_covered_submissions,
+    stock.current_new,
+    stock.current_contacted,
+    stock.current_qualified,
+    stock.current_closed,
+    outcomes.submissions_taken_in_charge,
+    outcomes.submissions_qualified,
+    outcomes.submissions_closed,
+    outcomes.submissions_closed_with_reason,
+    outcomes.first_contact_count,
+    outcomes.average_first_contact_delay_seconds
+FROM funnel
+CROSS JOIN clock
+CROSS JOIN history
+CROSS JOIN stock
+CROSS JOIN outcomes
+"#;
+
 pub const PUBLIC_FORM_SUBMISSION_PAGE_SIZE: usize = 25;
 
 pub type RepositoryResult<T> = std::result::Result<T, RepositoryError>;
@@ -495,6 +617,25 @@ pub struct PublicInteractionReportRow {
     pub revision_id: Option<String>,
     pub as_of: String,
     pub events: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PublicServiceOutcomeReportRow {
+    pub row_type: String,
+    pub as_of: String,
+    pub history_started_at: String,
+    pub retained_submissions: i64,
+    pub history_covered_submissions: i64,
+    pub current_new: i64,
+    pub current_contacted: i64,
+    pub current_qualified: i64,
+    pub current_closed: i64,
+    pub submissions_taken_in_charge: i64,
+    pub submissions_qualified: i64,
+    pub submissions_closed: i64,
+    pub submissions_closed_with_reason: i64,
+    pub first_contact_count: i64,
+    pub average_first_contact_delay_seconds: i64,
 }
 
 pub enum MutationResult {
@@ -2067,6 +2208,24 @@ ORDER BY 1 ASC, 2 ASC, 3 ASC, 4 ASC, 5 ASC, 6 ASC
             .all()
             .await?
             .results::<PublicInteractionReportRow>()?;
+        Ok(rows)
+    }
+
+    pub async fn public_service_outcome_report_rows(
+        &self,
+        funnel_id: &str,
+        period: FormCompletionPeriod,
+    ) -> RepositoryResult<Vec<PublicServiceOutcomeReportRow>> {
+        validate_required_field(funnel_id, "funnel_id")?;
+        let funnel_id = D1Type::Text(funnel_id);
+        let start_offset = D1Type::Integer(i32::from(period.days() - 1));
+        let rows = self
+            .database
+            .prepare(PUBLIC_SERVICE_OUTCOME_REPORT_QUERY)
+            .bind_refs([&funnel_id, &start_offset])?
+            .all()
+            .await?
+            .results::<PublicServiceOutcomeReportRow>()?;
         Ok(rows)
     }
 

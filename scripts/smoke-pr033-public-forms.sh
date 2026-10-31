@@ -17,6 +17,7 @@ python3 "$repo_root/scripts/test-pub009-migration.py"
 python3 "$repo_root/scripts/test-pub010-migration.py"
 python3 "$repo_root/scripts/test-pub011-migration.py"
 python3 "$repo_root/scripts/test-pub012-migration.py"
+python3 "$repo_root/scripts/test-pub014-service-outcomes.py"
 
 python3 - "$repo_root" <<'PY'
 import concurrent.futures

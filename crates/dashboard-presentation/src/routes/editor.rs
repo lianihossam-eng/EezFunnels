@@ -2071,6 +2071,7 @@ fn FunnelDetailV1(id: String) -> Element {
             Link { to: RouteView::ServiceBriefPage { id: id.clone() }, class: "secondary-button completion-report-link", "Service brief" }
             Link { to: RouteView::CampaignLinksPage { id: id.clone() }, class: "secondary-button completion-report-link", "Campaign links" }
             Link { to: RouteView::FunnelInteractionReport { id: id.clone() }, class: "secondary-button completion-report-link", "View interaction counts" }
+            Link { to: RouteView::FunnelServiceOutcomes { id: id.clone() }, class: "secondary-button completion-report-link", "View service outcomes" }
         }
         if view.loading {
             section { class: "empty-state editor-loading", role: "status", "aria-label": "Funnel editor",

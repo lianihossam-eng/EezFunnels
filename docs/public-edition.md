@@ -36,6 +36,8 @@ The dashboard keeps follow-up drafts and retry operations in route memory. Draft
 
 Submissions that predate this journal start at version zero with no history event. Their existing status is preserved, and the system does not infer when contact or qualification occurred. `closed` records an owner follow-up outcome; it never means a sale or payment.
 
+Outcome reports include every still-retained submission in the selected date range in current-status stock. Transition proportions and first-contact delays use one cohort: retained submissions received strictly after the immutable follow-up history boundary. Older records remain visible in stock, while transitions before that boundary are unknown and excluded. A correction replaces its target in report counts at the correction's recorded time; reasons are summarized as counts and are not included in the report response.
+
 The service journey is a working product hypothesis, not a validated result from user research. Test fixtures, sample funnels, and reference receivers use fictional scenarios; demos are not evidence of customer outcomes or conversion uplift.
 
 ## Private service brief

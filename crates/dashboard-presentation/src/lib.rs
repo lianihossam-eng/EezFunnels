@@ -161,6 +161,17 @@ mod tests {
     }
 
     #[test]
+    fn service_outcome_report_route_renders_on_direct_ssr_navigation() {
+        let html = render_document("/funnels/demo-1/service-outcomes")
+            .expect("service outcome dashboard route");
+
+        assert!(html.contains("Service outcomes"));
+        assert!(html.contains("Workspace / Service outcomes"));
+        assert!(html.contains("Submission date range (UTC)"));
+        assert_valid_hydration_data(&html);
+    }
+
+    #[test]
     fn private_service_brief_route_renders_on_direct_ssr_navigation() {
         let html = render_document("/funnels/demo-1/brief")
             .expect("private service brief dashboard route");
@@ -203,6 +214,7 @@ mod tests {
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/completions",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/interaction-report",
+            "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/service-outcomes",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/campaigns",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");
@@ -220,6 +232,7 @@ mod tests {
             "/funnels/demo/extra",
             "/funnels/demo/completions/extra",
             "/funnels/demo/interaction-report/extra",
+            "/funnels/demo/service-outcomes/extra",
             "/funnels/demo/brief/extra",
             "/funnels/demo/campaigns/extra",
             "/unknown",

@@ -198,7 +198,7 @@ fn tool_inventory_is_fixed_and_command_discovery_matches_registry() {
         .get("commands")
         .and_then(Value::as_array)
         .expect("command list array");
-    assert_eq!(commands.len(), 22);
+    assert_eq!(commands.len(), 23);
     assert_eq!(listed.len(), 9);
     let ids = listed
         .iter()
@@ -217,6 +217,7 @@ fn tool_inventory_is_fixed_and_command_discovery_matches_registry() {
         "form.submission.status.set",
         "form.completion.report",
         "interaction.report.read",
+        "service.outcome.report.read",
         "funnel.revision.save.v2",
         "funnel.revision.history.read.v2",
     ] {

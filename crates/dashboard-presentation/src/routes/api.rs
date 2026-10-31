@@ -123,6 +123,43 @@ pub(super) struct FormCompletionReportResponse {
     pub(super) channels: Vec<FormSubmissionChannelCountResponse>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct ServiceOutcomeReportResponse {
+    pub(super) funnel_id: String,
+    pub(super) period_days: u8,
+    pub(super) as_of: String,
+    pub(super) history_started_at: String,
+    pub(super) report_context: ReportContextResponse,
+    pub(super) retained_submissions: u64,
+    pub(super) history_covered_submissions: u64,
+    pub(super) history_uncovered_submissions: u64,
+    pub(super) current_stock: ServiceOutcomeStatusCountsResponse,
+    pub(super) recorded_outcomes: ServiceOutcomeCountsResponse,
+    pub(super) first_contact: FirstContactDelaySummaryResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(super) struct ServiceOutcomeStatusCountsResponse {
+    pub(super) new: u64,
+    pub(super) contacted: u64,
+    pub(super) qualified: u64,
+    pub(super) closed: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(super) struct ServiceOutcomeCountsResponse {
+    pub(super) taken_in_charge: u64,
+    pub(super) qualified: u64,
+    pub(super) closed: u64,
+    pub(super) closed_with_reason: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(super) struct FirstContactDelaySummaryResponse {
+    pub(super) submission_count: u64,
+    pub(super) average_delay_seconds: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ReportCollectionState {
@@ -389,6 +426,49 @@ pub(super) fn form_completion_report_is_valid(
         && form_total == Some(report.total_completions)
         && revision_total == Some(report.total_completions)
         && channel_total == Some(report.total_completions)
+}
+
+#[cfg(any(feature = "browser", test))]
+pub(super) fn service_outcome_report_is_valid(
+    report: &ServiceOutcomeReportResponse,
+    funnel_id: &str,
+    period: FormCompletionPeriod,
+) -> bool {
+    let stock_total = report
+        .current_stock
+        .new
+        .checked_add(report.current_stock.contacted)
+        .and_then(|total| total.checked_add(report.current_stock.qualified))
+        .and_then(|total| total.checked_add(report.current_stock.closed));
+    let outcomes_fit_covered_cohort = [
+        report.recorded_outcomes.taken_in_charge,
+        report.recorded_outcomes.qualified,
+        report.recorded_outcomes.closed,
+        report.recorded_outcomes.closed_with_reason,
+        report.first_contact.submission_count,
+    ]
+    .into_iter()
+    .all(|count| count <= report.history_covered_submissions);
+    let history_boundary_is_valid = report_as_of_day(&report.history_started_at)
+        .zip(report_as_of_day(&report.as_of))
+        .is_some_and(|(history_day, as_of_day)| {
+            report.history_started_at <= report.as_of && history_day <= as_of_day
+        });
+
+    report.funnel_id == funnel_id
+        && report.period_days == period.days()
+        && report_as_of_day(&report.as_of).is_some()
+        && history_boundary_is_valid
+        && report_context_is_valid(&report.report_context)
+        && report.history_covered_submissions <= report.retained_submissions
+        && report.history_uncovered_submissions
+            == report.retained_submissions - report.history_covered_submissions
+        && stock_total == Some(report.retained_submissions)
+        && outcomes_fit_covered_cohort
+        && report.recorded_outcomes.closed_with_reason <= report.recorded_outcomes.closed
+        && report.first_contact.submission_count == report.recorded_outcomes.taken_in_charge
+        && (report.first_contact.submission_count > 0
+            || report.first_contact.average_delay_seconds == 0)
 }
 
 #[cfg(any(feature = "browser", test))]
@@ -792,6 +872,27 @@ pub(super) async fn load_form_completion_report(
     let report =
         serde_json::from_str::<FormCompletionReportResponse>(&response.body).map_err(|_| ())?;
     if !form_completion_report_is_valid(&report, funnel_id, period) {
+        return Err(());
+    }
+    Ok(report)
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_service_outcome_report(
+    funnel_id: &str,
+    period: FormCompletionPeriod,
+) -> Result<ServiceOutcomeReportResponse, ()> {
+    let path = format!(
+        "/api/funnels/{funnel_id}/service-outcomes?period={}",
+        period.days()
+    );
+    let response = api_request("GET", &path, None, None).await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let report =
+        serde_json::from_str::<ServiceOutcomeReportResponse>(&response.body).map_err(|_| ())?;
+    if !service_outcome_report_is_valid(&report, funnel_id, period) {
         return Err(());
     }
     Ok(report)

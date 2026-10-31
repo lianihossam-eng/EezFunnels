@@ -21,15 +21,15 @@ use super::RouteView;
 
 #[cfg(any(feature = "browser", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct CompletionRequestVersion(u64);
+pub(super) struct ReportRequestVersion(u64);
 
 #[cfg(any(feature = "browser", test))]
-impl CompletionRequestVersion {
-    fn next(self) -> Self {
+impl ReportRequestVersion {
+    pub(super) fn next(self) -> Self {
         Self(self.0.wrapping_add(1))
     }
 
-    fn is_current(self, latest: Self) -> bool {
+    pub(super) fn is_current(self, latest: Self) -> bool {
         self == latest
     }
 }
@@ -37,7 +37,7 @@ impl CompletionRequestVersion {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct FormCompletionReportState {
     #[cfg(any(feature = "browser", test))]
-    latest: CompletionRequestVersion,
+    latest: ReportRequestVersion,
     funnel_id: Option<String>,
     period_days: Option<u8>,
     response: Option<Result<FormCompletionReportResponse, ()>>,
@@ -57,11 +57,7 @@ impl FormCompletionReportState {
     }
 
     #[cfg(any(feature = "browser", test))]
-    fn begin(
-        &mut self,
-        funnel_id: String,
-        period: FormCompletionPeriod,
-    ) -> CompletionRequestVersion {
+    fn begin(&mut self, funnel_id: String, period: FormCompletionPeriod) -> ReportRequestVersion {
         let request = self.latest.next();
         self.latest = request;
         self.funnel_id = Some(funnel_id);
@@ -73,7 +69,7 @@ impl FormCompletionReportState {
     #[cfg(any(feature = "browser", test))]
     fn complete(
         &mut self,
-        request: CompletionRequestVersion,
+        request: ReportRequestVersion,
         response: Result<FormCompletionReportResponse, ()>,
     ) {
         if request.is_current(self.latest) {
@@ -85,7 +81,7 @@ impl FormCompletionReportState {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct InteractionReportState {
     #[cfg(any(feature = "browser", test))]
-    latest: CompletionRequestVersion,
+    latest: ReportRequestVersion,
     funnel_id: Option<String>,
     period_days: Option<u8>,
     response: Option<Result<InteractionReportResponse, ()>>,
@@ -109,7 +105,7 @@ impl InteractionReportState {
         &mut self,
         funnel_id: String,
         period: InteractionReportPeriod,
-    ) -> CompletionRequestVersion {
+    ) -> ReportRequestVersion {
         let request = self.latest.next();
         self.latest = request;
         self.funnel_id = Some(funnel_id);
@@ -121,7 +117,7 @@ impl InteractionReportState {
     #[cfg(any(feature = "browser", test))]
     fn complete(
         &mut self,
-        request: CompletionRequestVersion,
+        request: ReportRequestVersion,
         response: Result<InteractionReportResponse, ()>,
     ) {
         if request.is_current(self.latest) {
