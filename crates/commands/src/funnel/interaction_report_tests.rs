@@ -2,18 +2,90 @@ use super::{build_interaction_report, FunnelCommandError, InteractionReportReadC
 use eez_domain::InteractionReportPeriod;
 use eez_storage::repository::PublicInteractionReportRow;
 
-fn day_row(utc_day: &str, event_kind: &str, events: i64) -> PublicInteractionReportRow {
+const AS_OF: &str = "2026-10-17T12:00:00Z";
+
+#[derive(Default)]
+struct RowDimensions<'a> {
+    utc_day: Option<&'a str>,
+    event_kind: Option<&'a str>,
+    campaign_id: Option<&'a str>,
+    page_id: Option<&'a str>,
+    form_id: Option<&'a str>,
+    revision_id: Option<&'a str>,
+}
+
+fn row(row_type: &str, dimensions: RowDimensions<'_>, events: i64) -> PublicInteractionReportRow {
     PublicInteractionReportRow {
-        row_type: "day_kind".to_owned(),
-        utc_day: Some(utc_day.to_owned()),
-        event_kind: Some(event_kind.to_owned()),
-        campaign_id: None,
+        row_type: row_type.to_owned(),
+        utc_day: dimensions.utc_day.map(str::to_owned),
+        event_kind: dimensions.event_kind.map(str::to_owned),
+        campaign_id: dimensions.campaign_id.map(str::to_owned),
+        page_id: dimensions.page_id.map(str::to_owned),
+        form_id: dimensions.form_id.map(str::to_owned),
+        revision_id: dimensions.revision_id.map(str::to_owned),
+        as_of: AS_OF.to_owned(),
         events,
     }
 }
 
+fn day_row(utc_day: &str, event_kind: &str, events: i64) -> PublicInteractionReportRow {
+    row(
+        "day_kind",
+        RowDimensions {
+            utc_day: Some(utc_day),
+            event_kind: Some(event_kind),
+            ..RowDimensions::default()
+        },
+        events,
+    )
+}
+
+fn campaign_row(campaign_id: Option<&str>, events: i64) -> PublicInteractionReportRow {
+    row(
+        "campaign",
+        RowDimensions {
+            campaign_id,
+            ..RowDimensions::default()
+        },
+        events,
+    )
+}
+
+fn page_row(page_id: &str, events: i64) -> PublicInteractionReportRow {
+    row(
+        "page",
+        RowDimensions {
+            page_id: Some(page_id),
+            ..RowDimensions::default()
+        },
+        events,
+    )
+}
+
+fn form_row(form_id: &str, events: i64) -> PublicInteractionReportRow {
+    row(
+        "form",
+        RowDimensions {
+            form_id: Some(form_id),
+            ..RowDimensions::default()
+        },
+        events,
+    )
+}
+
+fn revision_row(revision_id: &str, events: i64) -> PublicInteractionReportRow {
+    row(
+        "revision",
+        RowDimensions {
+            revision_id: Some(revision_id),
+            ..RowDimensions::default()
+        },
+        events,
+    )
+}
+
 #[test]
-fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
+fn report_builder_sorts_zero_fills_groups_and_returns_aggregate_counts_only() {
     let mut rows = Vec::new();
     for day in 11..=17 {
         let date = format!("2026-10-{day:02}");
@@ -25,20 +97,13 @@ fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
             if day == 14 { 1 } else { 0 },
         ));
     }
-    rows.push(PublicInteractionReportRow {
-        row_type: "campaign".to_owned(),
-        utc_day: None,
-        event_kind: None,
-        campaign_id: None,
-        events: 3,
-    });
-    rows.push(PublicInteractionReportRow {
-        row_type: "campaign".to_owned(),
-        utc_day: None,
-        event_kind: None,
-        campaign_id: Some("spring-launch".to_owned()),
-        events: 1,
-    });
+    rows.extend([
+        campaign_row(None, 3),
+        campaign_row(Some("spring-launch"), 1),
+        page_row("page-a", 4),
+        form_row("form-contact", 3),
+        revision_row("revision-a", 4),
+    ]);
     rows.reverse();
 
     let report =
@@ -47,6 +112,7 @@ fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
 
     assert_eq!(report.funnel_id, "funnel-a");
     assert_eq!(report.period_days, 7);
+    assert_eq!(report.as_of, AS_OF);
     assert_eq!(report.total_events, 4);
     assert_eq!(report.days.len(), 7);
     assert_eq!(report.days[0].utc_day, "2026-10-11");
@@ -62,7 +128,12 @@ fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
         report.campaigns[1].campaign_id.as_deref(),
         Some("spring-launch")
     );
-    assert_eq!(report.campaigns[1].events, 1);
+    assert_eq!(report.pages[0].page_id, "page-a");
+    assert_eq!(report.pages[0].events, 4);
+    assert_eq!(report.forms[0].form_id, "form-contact");
+    assert_eq!(report.forms[0].events, 3);
+    assert_eq!(report.revisions[0].revision_id, "revision-a");
+    assert_eq!(report.revisions[0].events, 4);
 
     let value = serde_json::to_value(report).expect("report serializes");
     let encoded = value.to_string();
@@ -74,7 +145,6 @@ fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
         "received_at",
         "visitor_id",
         "session_id",
-        "form_id",
         "email",
     ] {
         assert!(
@@ -91,6 +161,24 @@ fn report_builder_sorts_zero_fills_and_returns_aggregate_counts_only() {
 #[test]
 fn report_builder_rejects_incomplete_or_inconsistent_aggregates() {
     let rows = vec![day_row("2026-10-17", "page_viewed", 1)];
+    assert!(matches!(
+        build_interaction_report("funnel-a".to_owned(), InteractionReportPeriod::Days7, rows),
+        Err(FunnelCommandError::Internal)
+    ));
+
+    let mut rows = Vec::new();
+    for day in 11..=17 {
+        let date = format!("2026-10-{day:02}");
+        rows.push(day_row(&date, "page_viewed", if day == 17 { 1 } else { 0 }));
+        rows.push(day_row(&date, "form_viewed", 0));
+        rows.push(day_row(&date, "form_started", 0));
+    }
+    rows.extend([
+        campaign_row(None, 1),
+        page_row("page-a", 1),
+        revision_row("revision-a", 1),
+    ]);
+    rows[0].as_of = "2026-10-17T12:01:00Z".to_owned();
     assert!(matches!(
         build_interaction_report("funnel-a".to_owned(), InteractionReportPeriod::Days7, rows),
         Err(FunnelCommandError::Internal)

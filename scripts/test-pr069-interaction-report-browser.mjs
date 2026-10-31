@@ -29,7 +29,13 @@ try {
   await page.getByRole("heading", { name: "Interaction counts" }).waitFor();
   await page.getByText(/retained interaction events in the selected period/).waitFor();
   await page.getByRole("columnheader", { name: "Pages viewed" }).waitFor();
+  await page.getByRole("heading", { name: "By page" }).waitFor();
+  await page.getByRole("heading", { name: "By form" }).waitFor();
+  await page.getByRole("heading", { name: "By revision" }).waitFor();
   await page.getByRole("heading", { name: "By campaign ID" }).waitFor();
+  await page.getByText("Current effective retention").waitFor();
+  await page.getByText(/Coverage across this selected range is unknown/).waitFor();
+  await page.getByText(/focusing a field can trigger this event/).waitFor();
   await page.getByRole("rowheader", { name: "Unattributed" }).waitFor();
   assert.equal(await page.locator(".interaction-daily-table tbody tr").count(), 30);
   assert.equal(await page.getByRole("button", { name: "30 days" }).getAttribute("aria-pressed"), "true");
@@ -58,6 +64,7 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll(".interaction-daily-table tbody tr").length === 90,
   );
+  await page.getByText(/selected range exceeds the current retention setting/).waitFor();
   assert.equal(await page.getByRole("button", { name: "90 days" }).getAttribute("aria-pressed"), "true");
 
   await page.addScriptTag({ content: axeSource });

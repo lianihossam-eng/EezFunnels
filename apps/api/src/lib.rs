@@ -3144,7 +3144,11 @@ async fn funnel_completion_report_response(
     .to_string();
     match execute_funnel_command(env, command_ids::FORM_COMPLETION_REPORT, &parameters, None).await
     {
-        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Ok(result) => {
+            let retention_days = u16::try_from(public_form_retention_seconds(env) / 86_400).ok();
+            let result = attach_report_context(result, true, retention_days);
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
         Err(error) => {
             let error = ApiError::from_code(error.code());
             log_api_error(&error, &correlation_id, error.code());
@@ -3176,13 +3180,36 @@ async fn funnel_interaction_report_response(
     .to_string();
     match execute_funnel_command(env, command_ids::INTERACTION_REPORT_READ, &parameters, None).await
     {
-        Ok(result) => json_success_response(result, StatusCode::OK, &correlation_id, None),
+        Ok(result) => {
+            let retention_days = interaction_retention_days(env).map(u16::from);
+            let result =
+                attach_report_context(result, interaction_collection_enabled(env), retention_days);
+            json_success_response(result, StatusCode::OK, &correlation_id, None)
+        }
         Err(error) => {
             let error = ApiError::from_code(error.code());
             log_api_error(&error, &correlation_id, error.code());
             error_response(&error, correlation_id)
         }
     }
+}
+
+fn attach_report_context(
+    mut result: Value,
+    collection_enabled: bool,
+    effective_retention_days: Option<u16>,
+) -> Value {
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "report_context".to_owned(),
+            serde_json::json!({
+                "collection_state": if collection_enabled { "enabled" } else { "disabled" },
+                "effective_retention_days": effective_retention_days,
+                "historical_coverage": "unknown",
+            }),
+        );
+    }
+    result
 }
 
 async fn funnel_collection_response(
@@ -4765,13 +4792,13 @@ fn log_request(method: &str, path: &str, status: u16, correlation_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_interaction_script, bind_public_form_submission_identity, correlation_id,
-        custom_host_route_from_path, editor_command_parameters, form_completion_period,
-        form_submission_delete_id_from_path, form_submission_export_id_from_path,
-        form_submission_status_command_parameters, form_submission_status_id_from_path,
-        funnel_subroute, interaction_consent, interaction_origin_matches,
-        interaction_report_period, is_json_content_type, normalize_correlation_id,
-        parse_public_form_body, prefers_public_form_html_accept_values,
+        append_interaction_script, attach_report_context, bind_public_form_submission_identity,
+        correlation_id, custom_host_route_from_path, editor_command_parameters,
+        form_completion_period, form_submission_delete_id_from_path,
+        form_submission_export_id_from_path, form_submission_status_command_parameters,
+        form_submission_status_id_from_path, funnel_subroute, interaction_consent,
+        interaction_origin_matches, interaction_report_period, is_json_content_type,
+        normalize_correlation_id, parse_public_form_body, prefers_public_form_html_accept_values,
         public_form_submission_channel_from_page_query, public_form_submission_identity,
         public_form_submission_query, public_form_submission_route_from_path, public_html_etag,
         public_interaction_events_route_from_path, public_route_from_path,
@@ -4788,6 +4815,25 @@ mod tests {
     use eez_domain::{FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus};
     use eez_storage::repository::{PublishedRevisionRecord, RevisionRecord};
     use serde_json::Value;
+
+    #[test]
+    fn report_context_explains_disabled_collection_without_rewriting_aggregates() {
+        let result = attach_report_context(
+            serde_json::json!({"total_events": 4, "as_of": "2026-10-17T12:00:00Z"}),
+            false,
+            None,
+        );
+        assert_eq!(result["total_events"], 4);
+        assert_eq!(result["as_of"], "2026-10-17T12:00:00Z");
+        assert_eq!(
+            result["report_context"],
+            serde_json::json!({
+                "collection_state": "disabled",
+                "effective_retention_days": null,
+                "historical_coverage": "unknown",
+            })
+        );
+    }
 
     #[test]
     fn deterministic_request_json_fuzzes_ten_thousand_cases_without_panicking() {
