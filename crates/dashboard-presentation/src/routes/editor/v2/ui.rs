@@ -1,6 +1,8 @@
 #[cfg(feature = "browser")]
 use super::drafts::*;
 #[cfg(feature = "browser")]
+use super::offers::{offer_choices, V2OfferCardEditor, V2OfferComparisonEditor};
+#[cfg(feature = "browser")]
 use super::orchestration::*;
 #[cfg(feature = "browser")]
 use super::state::*;
@@ -42,6 +44,8 @@ fn block_kind_label(block: &BlockV2) -> &'static str {
         BlockV2::Form { .. } => "Form",
         BlockV2::Faq { .. } => "FAQ",
         BlockV2::Steps { .. } => "Steps",
+        BlockV2::OfferCard { .. } => "Offer card",
+        BlockV2::OfferComparison { .. } => "Offer comparison",
     }
 }
 
@@ -62,6 +66,16 @@ fn block_text(block: &BlockV2) -> String {
             .map(|item| item.title.as_str())
             .collect::<Vec<_>>()
             .join("\n"),
+        BlockV2::OfferCard { title, .. } => {
+            if title.is_empty() {
+                "Edit the offer details".to_owned()
+            } else {
+                title.clone()
+            }
+        }
+        BlockV2::OfferComparison { offer_ids, .. } => {
+            format!("Compares {} offers", offer_ids.len())
+        }
     }
 }
 
@@ -86,7 +100,10 @@ fn block_value_with_text(block: &BlockV2, text: String) -> Option<NewBlock> {
         BlockV2::Form { form_id, .. } => Some(NewBlock::Form {
             form_id: form_id.clone(),
         }),
-        BlockV2::Faq { .. } | BlockV2::Steps { .. } => None,
+        BlockV2::Faq { .. }
+        | BlockV2::Steps { .. }
+        | BlockV2::OfferCard { .. }
+        | BlockV2::OfferComparison { .. } => None,
     }
 }
 
@@ -720,6 +737,17 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
         )
     });
     let add_form_location = add_block_location.clone();
+    let available_offers = view
+        .document
+        .as_ref()
+        .map(offer_choices)
+        .unwrap_or_default();
+    let comparison_offer_ids = available_offers
+        .iter()
+        .take(MAX_OFFER_COMPARISON_ITEMS)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let can_add_comparison = comparison_offer_ids.len() >= 2;
     let locked = !view.can_edit();
     let dirty = view.has_unsaved_changes();
     let recovered_document = view
@@ -1472,14 +1500,21 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                                                 }
                                             },
                                             for kind in V2NewBlockKind::ALL {
-                                                option { value: "{kind.id()}", "{kind.label()}" }
+                                                option {
+                                                    value: "{kind.id()}",
+                                                    disabled: kind == V2NewBlockKind::OfferComparison && !can_add_comparison,
+                                                    "{kind.label()}"
+                                                }
                                             }
                                         }
+                                    }
+                                    if view.new_block_kind == V2NewBlockKind::OfferComparison && !can_add_comparison {
+                                        p { class: "editor-keyboard-help", "Add at least two offer cards before creating a comparison." }
                                     }
                                     button {
                                         class: "secondary-button",
                                         r#type: "button",
-                                        disabled: locked,
+                                        disabled: locked || (view.new_block_kind == V2NewBlockKind::OfferComparison && !can_add_comparison),
                                         onclick: move |_| {
                                             let kind = state.with(|state| state.new_block_kind);
                                             let language = state.with(|state| {
@@ -1489,7 +1524,11 @@ pub(in crate::routes::editor) fn V2FunnelDetail(id: String) -> Element {
                                                     .map(DocumentV2::public_language)
                                                     .unwrap_or(PublicLanguage::English)
                                             });
-                                            let block = kind.create(language);
+                                            let block = if kind == V2NewBlockKind::OfferComparison {
+                                                NewBlock::OfferComparison { offer_ids: comparison_offer_ids.clone() }
+                                            } else {
+                                                kind.create(language)
+                                            };
                                             if let Some((section, after)) = add_block_location.clone() {
                                                 dispatch_v2_edit(state, Edit::AddBlock { section, after, block });
                                             }
@@ -2176,6 +2215,10 @@ fn V2BlockEditor(
                 V2FaqBlockEditor { state, block: block.clone(), locked }
             } else if matches!(block, BlockV2::Steps { .. }) {
                 V2StepsBlockEditor { state, block: block.clone(), locked }
+            } else if matches!(block, BlockV2::OfferCard { .. }) {
+                V2OfferCardEditor { state, block: block.clone(), locked }
+            } else if matches!(block, BlockV2::OfferComparison { .. }) {
+                V2OfferComparisonEditor { state, block: block.clone(), locked }
             } else {
                 label { class: "editor-setting-control",
                     "{control_label}"

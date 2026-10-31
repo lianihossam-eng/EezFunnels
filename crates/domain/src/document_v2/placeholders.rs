@@ -165,6 +165,25 @@ fn block_contains_text(data: &DocumentData, block: &BlockV2, expected_text: &str
         BlockV2::Steps { items, .. } => items
             .iter()
             .any(|item| item.title.contains(expected_text) || item.detail.contains(expected_text)),
+        BlockV2::OfferCard {
+            title,
+            scope,
+            price,
+            conditions,
+            ..
+        } => {
+            title.contains(expected_text)
+                || scope.contains(expected_text)
+                || conditions.contains(expected_text)
+                || price.as_ref().is_some_and(|price| {
+                    let unit = match price {
+                        super::model::OfferPriceV2::OneTime { unit, .. }
+                        | super::model::OfferPriceV2::Recurring { unit, .. } => unit,
+                    };
+                    unit.contains(expected_text)
+                })
+        }
+        BlockV2::OfferComparison { .. } => false,
         BlockV2::Image {
             alt: ImageAlt::Text { value },
             ..

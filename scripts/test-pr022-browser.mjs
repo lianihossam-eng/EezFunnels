@@ -299,6 +299,105 @@ try {
   assert.equal((await frenchBlockResponsePromise).status(), 200);
   await frenchPreview.getByRole("heading", { name: "Nouveau titre" }).waitFor();
 
+  async function editV2Field(locator, edit) {
+    const responsePromise = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    );
+    await edit();
+    await locator.evaluate((element) => element.blur());
+    assert.equal((await responsePromise).status(), 200);
+  }
+
+  async function addOffer(title, scope, priceMode, amountFields) {
+    await page.getByLabel("Block type").selectOption("offer_card");
+    const responsePromise = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    );
+    await page.getByRole("button", { name: "Add block" }).focus();
+    await pressKeyboard(page, "Enter");
+    assert.equal((await responsePromise).status(), 200);
+    const row = page.locator(".editor-block-row").filter({ hasText: "Offer details" }).last();
+    await row.getByLabel(/^Offer name for /).waitFor();
+    const name = row.getByLabel(/^Offer name for /);
+    await editV2Field(name, () => name.fill(title));
+    const includedScope = row.getByLabel(/^Included scope for /);
+    await editV2Field(includedScope, () => includedScope.fill(scope));
+    const conditions = row.getByLabel(/^Conditions for /);
+    await editV2Field(conditions, () => conditions.fill("Agreed in writing before work begins"));
+    const priceStructure = row.getByLabel(/^Price structure for /);
+    await editV2Field(priceStructure, () => priceStructure.selectOption(priceMode));
+    const currency = row.getByLabel(/^Currency code for /);
+    await editV2Field(currency, () => currency.fill("EUR"));
+    const unit = row.getByLabel(/^Price unit for /);
+    await editV2Field(unit, () => unit.fill("project"));
+    for (const [fieldName, amount] of Object.entries(amountFields)) {
+      const amountInput = row.getByLabel(fieldName);
+      await editV2Field(amountInput, () => amountInput.fill(amount));
+    }
+    return row;
+  }
+
+  await addOffer("Starter support", "One planning workshop and written notes", "one_time", {
+    "One-time amount": "1250.50",
+  });
+  await addOffer("Extended support", "Three planning sessions with follow-up", "recurring", {
+    "Initial amount (optional)": "500.00",
+    "Recurring amount": "250.00",
+    "Announced total (optional; never calculated)": "3500.00",
+  });
+  await page.getByLabel("Block type").selectOption("offer_comparison");
+  const comparisonResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+  );
+  await page.getByRole("button", { name: "Add block" }).focus();
+  await pressKeyboard(page, "Enter");
+  assert.equal((await comparisonResponsePromise).status(), 200);
+  const comparison = page.locator(".editor-block-row").filter({ hasText: "Offers in comparison" }).last();
+  await comparison.getByRole("checkbox", { name: "Include offer Starter support in comparison" }).waitFor();
+  assert.equal(await comparison.getByRole("checkbox", { name: "Include offer Starter support in comparison" }).isChecked(), true);
+  assert.equal(await comparison.getByRole("checkbox", { name: "Include offer Extended support in comparison" }).isChecked(), true);
+  await frenchPreview.getByRole("table", { name: "Comparaison des offres" }).waitFor();
+  const offerComparison = frenchPreview.getByRole("table", { name: "Comparaison des offres" });
+  await offerComparison.getByText("EUR 1250.50 par project").waitFor();
+  await offerComparison.getByText("EUR 250.00 par project / mois").waitFor();
+  await offerComparison.getByText("EUR 3500.00 par project").waitFor();
+  await assertCriticalAxeFindingsAbsent(page, "Offer editor and preview");
+
+  const v2StagePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(`/api/funnels/${createdV2FunnelId}/stages-v2`),
+  );
+  const v2SavePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(`/api/funnels/${createdV2FunnelId}/revisions-v2`),
+  );
+  await page.getByRole("button", { name: "Save revision" }).focus();
+  await pressKeyboard(page, "Enter");
+  await responseJson(await v2StagePromise, 201, "Stage structured offer revision");
+  await responseJson(await v2SavePromise, 201, "Save structured offer revision");
+  await page.getByText("All changes saved").waitFor();
+  const v2PublishPromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" && response.url().endsWith(`/api/funnels/${createdV2FunnelId}/publish`),
+  );
+  await page.getByRole("button", { name: "Publish saved revision" }).focus();
+  await pressKeyboard(page, "Enter");
+  await responseJson(await v2PublishPromise, 200, "Publish structured offer revision");
+  const publishedOffers = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const publicOffersResponse = await publishedOffers.goto(`${worker.origin}/f/${created.funnel.slug}`, {
+    waitUntil: "networkidle",
+  });
+  assert.equal(publicOffersResponse?.status(), 200);
+  await publishedOffers.getByRole("heading", { name: "Starter support" }).waitFor();
+  await publishedOffers.getByRole("table", { name: "Comparaison des offres" }).waitFor();
+  const comparisonScroll = publishedOffers.locator(".v2-offer-comparison-scroll");
+  const scrollDimensions = await comparisonScroll.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  assert.ok(scrollDimensions.scrollWidth > scrollDimensions.clientWidth, "mobile comparison can scroll horizontally");
+  await comparisonScroll.focus();
+  assert.equal(await comparisonScroll.evaluate((element) => element === document.activeElement), true);
+  await assertCriticalAxeFindingsAbsent(publishedOffers, "Published structured offers at mobile width");
+  await publishedOffers.close();
+
   const funnelNameV1 = "PR-022 V1 publication journey";
   const createV1Response = await fetch(`${worker.origin}/api/funnels`, {
     method: "POST",

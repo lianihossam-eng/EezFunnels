@@ -81,6 +81,9 @@ impl PublicationReadinessFinding {
             "publication/action_destination_unconfigured" => {
                 "Replace this reserved sample destination before publishing."
             }
+            "publication/offer_incomplete" => {
+                "Complete the offer name, included scope, currency, price unit, required amount, and conditions before publishing."
+            }
             "editorial/search_description_missing" => {
                 "Add a search description when it is useful for this page."
             }
@@ -2881,6 +2884,24 @@ async fn save_editor_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_offer_readiness_suggests_the_details_required_for_publication() {
+        let finding = PublicationReadinessFinding {
+            code: "publication/offer_incomplete".to_owned(),
+            severity: PublicationReadinessSeverity::Blocking,
+            target: PublicationReadinessTarget::V2Block {
+                page_id: "page-home".to_owned(),
+                section_id: "section-offers".to_owned(),
+                block_id: "offer-service".to_owned(),
+            },
+        };
+
+        assert_eq!(
+            finding.message(),
+            "Complete the offer name, included scope, currency, price unit, required amount, and conditions before publishing."
+        );
+    }
 
     fn fixture_settings() -> (EditorSettingsSchema, BTreeMap<String, EditorSettingValue>) {
         let schema = EditorSettingsSchema {

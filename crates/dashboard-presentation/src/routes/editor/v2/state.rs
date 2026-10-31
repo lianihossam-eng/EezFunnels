@@ -182,6 +182,8 @@ pub(super) enum V2NewBlockKind {
     Button,
     Faq,
     Steps,
+    OfferCard,
+    OfferComparison,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -192,13 +194,15 @@ pub(super) enum V2SavePhase {
 }
 
 impl V2NewBlockKind {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 8] = [
         Self::Heading,
         Self::Text,
         Self::List,
         Self::Button,
         Self::Faq,
         Self::Steps,
+        Self::OfferCard,
+        Self::OfferComparison,
     ];
 
     pub(super) const fn id(self) -> &'static str {
@@ -209,6 +213,8 @@ impl V2NewBlockKind {
             Self::Button => "button",
             Self::Faq => "faq",
             Self::Steps => "steps",
+            Self::OfferCard => "offer_card",
+            Self::OfferComparison => "offer_comparison",
         }
     }
 
@@ -220,6 +226,8 @@ impl V2NewBlockKind {
             Self::Button => "Button",
             Self::Faq => "FAQ",
             Self::Steps => "Steps",
+            Self::OfferCard => "Offer card",
+            Self::OfferComparison => "Offer comparison",
         }
     }
 
@@ -257,6 +265,15 @@ impl V2NewBlockKind {
             },
             Self::Steps => NewBlock::Steps {
                 items: vec![new_step_item(language)],
+            },
+            Self::OfferCard => NewBlock::OfferCard {
+                title: String::new(),
+                scope: String::new(),
+                price: None,
+                conditions: String::new(),
+            },
+            Self::OfferComparison => NewBlock::OfferComparison {
+                offer_ids: Vec::new(),
             },
         }
     }
@@ -591,6 +608,48 @@ impl V2EditorState {
 
     pub(super) fn prune_form_ui_state(&mut self, document: &DocumentV2) {
         let is_active = |key: &str, allow_type_setting: bool| {
+            if let Some(rest) = key.strip_prefix("offer:") {
+                let mut parts = rest.split(':');
+                let Some(offer_id) = parts.next() else {
+                    return false;
+                };
+                let Some(setting) = parts.next() else {
+                    return false;
+                };
+                if parts.next().is_some()
+                    || !matches!(
+                        setting,
+                        "currency"
+                            | "unit"
+                            | "amount"
+                            | "initial_amount"
+                            | "recurring_amount"
+                            | "announced_total"
+                    )
+                {
+                    return false;
+                }
+                return document
+                    .pages()
+                    .iter()
+                    .flat_map(|page| page.sections())
+                    .flat_map(|section| section.blocks())
+                    .find_map(|block| match block {
+                        BlockV2::OfferCard { id, price, .. } if id.as_str() == offer_id => {
+                            let active = match setting {
+                                "currency" | "unit" => price.is_some(),
+                                "amount" => matches!(price, Some(OfferPriceV2::OneTime { .. })),
+                                "initial_amount" | "recurring_amount" | "announced_total" => {
+                                    matches!(price, Some(OfferPriceV2::Recurring { .. }))
+                                }
+                                _ => false,
+                            };
+                            Some(active)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+            }
             let mut parts = key.split(':');
             if parts.next() != Some("form") {
                 return false;
@@ -789,6 +848,8 @@ impl V2EditorState {
                         "validation/functional_block_text_length",
                     ) => "This FAQ or steps block exceeds 16 KiB of UTF-8 text. Shorten an entry or remove one before continuing.".to_owned(),
                     (_, "validation/page_unreachable") => "This page cannot be deleted because it is the only route to a later step. Reconnect those steps before deleting it.".to_owned(),
+                    (_, "validation/offer_in_use") => "This offer is used in a comparison. Remove it from every comparison before deleting it.".to_owned(),
+                    (_, "validation/offer_comparison_offer_missing") => "This change removes an offer used by a comparison. Restore the offer or update/remove the comparison before continuing.".to_owned(),
                     (_, code) => format!("This change cannot be applied yet ({code})"),
                 });
                 self.status = None;
@@ -1363,7 +1424,7 @@ pub(super) struct V2LoadedEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eez_domain::document_v2::{BlueprintId, PageId, SectionId};
+    use eez_domain::document_v2::{BlockId, BlueprintId, PageId, SectionId};
 
     struct TestIds(u32);
 
@@ -1409,6 +1470,125 @@ mod tests {
             }));
         let raw = serde_json::to_vec(&value).expect("updated document JSON");
         DocumentV2::decode(&raw, "funnel-a").expect("valid document with a secondary page")
+    }
+
+    fn document_with_offer() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document().canonical_bytes()).expect("starter document JSON");
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks")
+            .push(serde_json::json!({
+                "id":"offer-service",
+                "kind":"offer_card",
+                "title":"Service support",
+                "scope":"Three sessions",
+                "price":{"kind":"one_time", "amount":"1200.00", "currency":"EUR", "unit":"project"},
+                "conditions":"Agreed in writing"
+            }));
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid offer document")
+    }
+
+    fn document_with_offer_comparison() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document_with_offer().canonical_bytes())
+                .expect("offer document JSON");
+        let blocks = value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks");
+        blocks.push(serde_json::json!({
+            "id":"offer-second",
+            "kind":"offer_card",
+            "title":"Second offer",
+            "scope":"Two sessions",
+            "price":{"kind":"one_time", "amount":"800.00", "currency":"EUR", "unit":"project"},
+            "conditions":"Agreed in writing"
+        }));
+        blocks.push(serde_json::json!({
+            "id":"offer-comparison",
+            "kind":"offer_comparison",
+            "offer_ids":["offer-service", "offer-second"]
+        }));
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid offer comparison document")
+    }
+
+    fn document_with_offer_comparison_on_later_page() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document_with_offer().canonical_bytes())
+                .expect("offer document JSON");
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("home blocks")
+            .push(serde_json::json!({
+                "id":"offer-second",
+                "kind":"offer_card",
+                "title":"Second offer",
+                "scope":"Two sessions",
+                "price":{"kind":"one_time", "amount":"800.00", "currency":"EUR", "unit":"project"},
+                "conditions":"Agreed in writing"
+            }));
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("home blocks")
+            .push(serde_json::json!({
+                "id":"block-to-thanks",
+                "kind":"button",
+                "label":"Continue",
+                "action":{"kind":"navigate_page", "page_id":"page-thanks"}
+            }));
+        value["pages"]
+            .as_array_mut()
+            .expect("pages")
+            .push(serde_json::json!({
+                "id":"page-thanks",
+                "slug":"thanks",
+                "title":"Thanks",
+                "sections":[{
+                    "id":"section-thanks",
+                    "type":"hero",
+                    "blocks":[{
+                        "id":"offer-comparison",
+                        "kind":"offer_comparison",
+                        "offer_ids":["offer-service", "offer-second"]
+                    }]
+                }]
+            }));
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid cross-page offer comparison document")
+    }
+
+    fn document_with_recurring_offer() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document_with_offer().canonical_bytes())
+                .expect("offer document JSON");
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks")
+            .iter_mut()
+            .find(|block| block["id"] == "offer-service")
+            .expect("offer block")["price"] = serde_json::json!({
+            "kind":"recurring",
+            "recurring_amount":"250.00",
+            "period":"monthly",
+            "currency":"EUR",
+            "unit":"project"
+        });
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid recurring offer document")
     }
 
     fn document_with_section_action() -> DocumentV2 {
@@ -1814,6 +1994,104 @@ mod tests {
             .blocks()
             .iter()
             .any(|block| matches!(block, BlockV2::Faq { .. })));
+    }
+
+    #[test]
+    fn offer_unit_input_drafts_survive_edits_and_are_pruned_with_their_source_offer() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document_with_offer(), Some(stage_capacity()))),
+        );
+        let key = "offer:offer-service:unit".to_owned();
+        let amount_key = "offer:offer-service:amount".to_owned();
+        let recurring_key = "offer:offer-service:recurring_amount".to_owned();
+        state.form_input_drafts.insert(key.clone(), "p".repeat(81));
+        state
+            .form_input_errors
+            .insert(key.clone(), "unit is too long".to_owned());
+        state
+            .form_input_drafts
+            .insert(amount_key.clone(), "1e3".to_owned());
+        state
+            .form_input_errors
+            .insert(amount_key.clone(), "invalid exact amount".to_owned());
+
+        let offer_document = state
+            .document
+            .as_ref()
+            .expect("loaded offer document")
+            .clone();
+        state.prune_form_ui_state(&offer_document);
+        assert!(state.form_input_drafts.contains_key(&key));
+        assert!(state.form_input_drafts.contains_key(&amount_key));
+        assert!(state.has_uncommitted_editor_inputs());
+
+        state.prune_form_ui_state(&document_with_recurring_offer());
+        assert!(state.form_input_drafts.contains_key(&key));
+        assert!(!state.form_input_drafts.contains_key(&amount_key));
+        assert!(!state.form_input_errors.contains_key(&amount_key));
+        state
+            .form_input_drafts
+            .insert(recurring_key.clone(), "2e3".to_owned());
+        state
+            .form_input_errors
+            .insert(recurring_key.clone(), "invalid exact amount".to_owned());
+
+        state.prune_form_ui_state(&document());
+        assert!(!state.form_input_drafts.contains_key(&key));
+        assert!(!state.form_input_errors.contains_key(&key));
+        assert!(!state.form_input_drafts.contains_key(&recurring_key));
+        assert!(!state.form_input_errors.contains_key(&recurring_key));
+        assert!(!state.has_uncommitted_editor_inputs());
+    }
+
+    #[test]
+    fn offer_reference_edit_errors_explain_how_to_repair_the_comparison() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(
+                document_with_offer_comparison(),
+                Some(stage_capacity()),
+            )),
+        );
+        let result = state.apply_local_edit(
+            Edit::DeleteBlock {
+                section: SectionId::parse("section-hero").expect("section ID"),
+                block: BlockId::parse("offer-service").expect("offer ID"),
+            },
+            "delete-referenced-offer".to_owned(),
+        );
+        assert!(result.is_none());
+        assert_eq!(
+            state.error.as_deref(),
+            Some("This offer is used in a comparison. Remove it from every comparison before deleting it.")
+        );
+
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(
+                document_with_offer_comparison_on_later_page(),
+                Some(stage_capacity()),
+            )),
+        );
+        let result = state.apply_local_edit(
+            Edit::DeleteSection {
+                page: PageId::parse("page-home").expect("home page ID"),
+                section: SectionId::parse("section-hero").expect("hero section ID"),
+            },
+            "delete-offer-source-section".to_owned(),
+        );
+        assert!(result.is_none());
+        assert_eq!(
+            state.error.as_deref(),
+            Some("This change removes an offer used by a comparison. Restore the offer or update/remove the comparison before continuing.")
+        );
     }
 
     #[test]
@@ -2392,6 +2670,25 @@ mod tests {
         };
         assert_eq!(items[0].title, "Titre de l’étape");
         assert_eq!(items[0].detail, "Décrivez ce qui se passe à cette étape.");
+
+        let NewBlock::OfferCard {
+            title,
+            scope,
+            price,
+            conditions,
+        } = V2NewBlockKind::OfferCard.create(PublicLanguage::French)
+        else {
+            panic!("offer card kind creates a typed offer draft");
+        };
+        assert!(title.is_empty() && scope.is_empty() && conditions.is_empty());
+        assert!(price.is_none());
+
+        let NewBlock::OfferComparison { offer_ids } =
+            V2NewBlockKind::OfferComparison.create(PublicLanguage::French)
+        else {
+            panic!("offer comparison kind creates an editable source selection");
+        };
+        assert!(offer_ids.is_empty());
     }
 
     #[test]

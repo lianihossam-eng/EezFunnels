@@ -22,6 +22,21 @@ A typed layout area on a page, such as a hero, features, testimonials, call to a
 **Block**:
 A typed content or interaction item within a section.
 
+**Offer**:
+An owner-defined service with a stated scope, price, and conditions. An offer describes terms; it is not a reservation, sale, or payment.
+
+**Price unit**:
+The unit to which an amount applies, such as a project, session, or package. The unit is needed to explain what an exact amount covers.
+
+**Recurring price**:
+An amount charged for each stated period, such as a month or year. Any initial amount and announced total are separate terms.
+
+**Announced total**:
+A total amount explicitly stated by the owner for an offer. It is not calculated from recurring charges or a duration.
+
+**Offer comparison**:
+A side-by-side presentation of selected offers that shows their existing scope, price, and conditions together. It does not recommend a choice or create an order.
+
 **Form definition**:
 A description of a form's purpose, fields, and completion result.
 

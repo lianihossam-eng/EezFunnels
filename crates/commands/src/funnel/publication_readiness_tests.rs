@@ -360,6 +360,77 @@ fn v2_readiness_blocks_reserved_action_samples_until_destinations_are_replaced()
 }
 
 #[test]
+fn v2_readiness_blocks_incomplete_offer_details_and_accepts_complete_exact_prices() {
+    let service = stored_v2(FunnelBlueprint::LeadGen);
+    let mut document_json: Value = serde_json::from_str(&service.data_json).expect("starter JSON");
+    let blocks = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks");
+    blocks.push(json!({
+        "id":"offer-service",
+        "kind":"offer_card",
+        "title":"",
+        "scope":"",
+        "price":{"kind":"recurring", "period":"monthly", "unit":""},
+        "conditions":""
+    }));
+    let incomplete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("incomplete document JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("incomplete offers are valid editable drafts");
+    let readiness = publication_readiness::for_v2(&service.id, &incomplete);
+    let findings = serde_json::to_value(&readiness).expect("readiness serializes");
+    assert!(!readiness.can_publish());
+    assert!(findings["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["code"] == "publication/offer_incomplete"
+                && finding["severity"] == "blocking"
+                && finding["action"] == "complete_offer_details"
+                && finding["target"]["block_id"] == "offer-service"
+        }));
+
+    let blocks = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks");
+    blocks.last_mut().unwrap().clone_from(&json!({
+        "id":"offer-service",
+        "kind":"offer_card",
+        "title":"Service support",
+        "scope":"Three planning sessions",
+        "price":{
+            "kind":"recurring",
+            "initial_amount":"500.00",
+            "recurring_amount":"250.00",
+            "period":"monthly",
+            "announced_total":"3500.00",
+            "currency":"EUR",
+            "unit":"project"
+        },
+        "conditions":"A twelve month term is agreed in writing"
+    }));
+    let complete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("complete document JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("complete offer decodes");
+    let readiness = publication_readiness::for_v2(&service.id, &complete);
+    assert!(readiness.can_publish());
+    assert!(serde_json::to_value(readiness).unwrap()["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["code"] != "publication/offer_incomplete"));
+}
+
+#[test]
 fn v2_readiness_exposes_page_metadata_placeholder_targets() {
     let generated = FunnelCreateCommandV2::from_json(
         &json!({"name":"Readiness metadata target","blueprint":"tripwire"}).to_string(),

@@ -194,6 +194,8 @@ pub enum BlockKind {
     Form,
     Faq,
     Steps,
+    OfferCard,
+    OfferComparison,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -210,9 +212,144 @@ pub struct StepItem {
     pub detail: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ExactPriceAmount(String);
+
+impl ExactPriceAmount {
+    pub fn parse(value: impl Into<String>) -> Result<Self, DocumentError> {
+        let value = value.into();
+        if !is_valid_exact_price_amount(&value) {
+            return Err(DocumentError::new("validation/offer_price_amount_invalid"));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ExactPriceAmount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn is_valid_exact_price_amount(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let Some(whole) = parts.next() else {
+        return false;
+    };
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || !(1..=12).contains(&whole.len())
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || (whole.len() > 1 && whole.starts_with('0'))
+    {
+        return false;
+    }
+    fraction.is_none_or(|digits| {
+        (1..=3).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CurrencyCode(String);
+
+impl CurrencyCode {
+    pub fn parse(value: impl Into<String>) -> Result<Self, DocumentError> {
+        let value = value.into();
+        if value.len() != 3 || !value.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return Err(DocumentError::new("validation/offer_currency_invalid"));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CurrencyCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricePeriod {
+    Weekly,
+    Monthly,
+    Quarterly,
+    Yearly,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OfferPriceV2 {
+    OneTime {
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        amount: Option<ExactPriceAmount>,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        currency: Option<CurrencyCode>,
+        unit: String,
+    },
+    Recurring {
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        initial_amount: Option<ExactPriceAmount>,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        recurring_amount: Option<ExactPriceAmount>,
+        period: PricePeriod,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        announced_total: Option<ExactPriceAmount>,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        currency: Option<CurrencyCode>,
+        unit: String,
+    },
+}
+
 pub const MAX_FUNCTIONAL_BLOCK_ITEMS: usize = 12;
 pub const MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES: usize = 2048;
 pub const MAX_FUNCTIONAL_BLOCK_TEXT_BYTES: usize = 16_384;
+pub const MAX_OFFER_TEXT_BYTES: usize = 8192;
+pub const MAX_OFFER_UNIT_BYTES: usize = 80;
+pub const MIN_OFFER_COMPARISON_ITEMS: usize = 2;
+pub const MAX_OFFER_COMPARISON_ITEMS: usize = 4;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -252,6 +389,22 @@ pub enum BlockV2 {
         id: BlockId,
         items: Vec<StepItem>,
     },
+    OfferCard {
+        id: BlockId,
+        title: String,
+        scope: String,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        price: Option<OfferPriceV2>,
+        conditions: String,
+    },
+    OfferComparison {
+        id: BlockId,
+        offer_ids: Vec<BlockId>,
+    },
 }
 
 impl BlockV2 {
@@ -264,7 +417,9 @@ impl BlockV2 {
             | Self::Image { id, .. }
             | Self::Form { id, .. }
             | Self::Faq { id, .. }
-            | Self::Steps { id, .. } => id,
+            | Self::Steps { id, .. }
+            | Self::OfferCard { id, .. }
+            | Self::OfferComparison { id, .. } => id,
         }
     }
 
@@ -278,6 +433,8 @@ impl BlockV2 {
             Self::Form { .. } => BlockKind::Form,
             Self::Faq { .. } => BlockKind::Faq,
             Self::Steps { .. } => BlockKind::Steps,
+            Self::OfferCard { .. } => BlockKind::OfferCard,
+            Self::OfferComparison { .. } => BlockKind::OfferComparison,
         }
     }
 }
@@ -843,6 +1000,10 @@ impl DocumentV2 {
 
     pub fn public_language(&self) -> PublicLanguage {
         self.data.language.unwrap_or(PublicLanguage::English)
+    }
+
+    pub fn offer_comparison_render_bytes_upper_bound(&self) -> usize {
+        super::validate::offer_comparison_render_bytes_upper_bound(&self.data)
     }
 
     pub fn explicit_language(&self) -> Option<PublicLanguage> {

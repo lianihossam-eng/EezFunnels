@@ -1,5 +1,5 @@
 use eez_domain::document_v2::{
-    BlockV2, DocumentV2, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget,
+    BlockV2, DocumentV2, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget, OfferPriceV2,
 };
 use eez_storage::repository::RevisionRecord;
 use serde::Serialize;
@@ -41,6 +41,7 @@ enum ReadinessAction {
     ReplaceOrRemoveGeneratedText,
     ReplaceActionDestination,
     AddSearchDescription,
+    CompleteOfferDetails,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -146,6 +147,20 @@ pub(super) fn for_v2(revision_id: &str, document: &DocumentV2) -> PublicationRea
                         },
                     });
                 }
+                if matches!(block, BlockV2::OfferCard { title, scope, price, conditions, .. }
+                    if !offer_is_complete(title, scope, price.as_ref(), conditions))
+                {
+                    findings.push(ReadinessFinding {
+                        code: "publication/offer_incomplete",
+                        severity: ReadinessSeverity::Blocking,
+                        action: ReadinessAction::CompleteOfferDetails,
+                        target: ReadinessTarget::V2Block {
+                            page_id: page.id().as_str().to_owned(),
+                            section_id: section.id().as_str().to_owned(),
+                            block_id: block.id().as_str().to_owned(),
+                        },
+                    });
+                }
             }
         }
     }
@@ -167,5 +182,31 @@ pub(super) fn for_v2(revision_id: &str, document: &DocumentV2) -> PublicationRea
     PublicationReadiness {
         revision_id: revision_id.to_owned(),
         findings,
+    }
+}
+
+fn offer_is_complete(
+    title: &str,
+    scope: &str,
+    price: Option<&OfferPriceV2>,
+    conditions: &str,
+) -> bool {
+    if title.trim().is_empty() || scope.trim().is_empty() || conditions.trim().is_empty() {
+        return false;
+    }
+    match price {
+        Some(OfferPriceV2::OneTime {
+            amount: Some(_),
+            currency: Some(_),
+            unit,
+            ..
+        }) => !unit.trim().is_empty(),
+        Some(OfferPriceV2::Recurring {
+            recurring_amount: Some(_),
+            currency: Some(_),
+            unit,
+            ..
+        }) => !unit.trim().is_empty(),
+        Some(OfferPriceV2::OneTime { .. }) | Some(OfferPriceV2::Recurring { .. }) | None => false,
     }
 }
