@@ -21,7 +21,8 @@ use eez_storage::media::{MediaAssetError, MediaAssetRepository};
 use eez_storage::repository::{
     EditorSaveMutation, FormCompletionCountRow, FunnelRecord, MutationResult, NewFunnel,
     NewRevision, PublicFormSubmissionCursor, PublicFormSubmissionRecord,
-    PublicInteractionReportRow, PublicationMutation, Repository, RepositoryError, RevisionRecord,
+    PublicInteractionReportRow, PublicServiceOutcomeReportRow, PublicationMutation, Repository,
+    RepositoryError, RevisionRecord,
 };
 use eez_storage::stage::{
     DocumentStageRepository, StageFinalizeMutation, StageMintMutation, V2_DOCUMENT_STAGE_MAX_BYTES,
@@ -54,6 +55,10 @@ mod form_completion_tests;
 #[cfg(test)]
 #[path = "funnel/interaction_report_tests.rs"]
 mod interaction_report_tests;
+
+#[cfg(test)]
+#[path = "funnel/service_outcome_report_tests.rs"]
+mod service_outcome_report_tests;
 
 #[cfg(test)]
 #[path = "funnel/form_submission_status_tests.rs"]
@@ -850,6 +855,13 @@ struct InteractionReportReadCommand {
     period_days: u8,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceOutcomeReportReadCommand {
+    funnel_id: String,
+    period_days: u8,
+}
+
 impl InteractionReportReadCommand {
     const ID: &'static str = command_ids::INTERACTION_REPORT_READ;
 
@@ -865,6 +877,19 @@ impl InteractionReportReadCommand {
 
 impl FormCompletionReportCommand {
     const ID: &'static str = command_ids::FORM_COMPLETION_REPORT;
+
+    fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
+        let command: Self = serde_json::from_str(parameters)?;
+        validate_route_id(&command.funnel_id)?;
+        if FormCompletionPeriod::from_days(command.period_days).is_none() {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
+        Ok(command)
+    }
+}
+
+impl ServiceOutcomeReportReadCommand {
+    const ID: &'static str = command_ids::SERVICE_OUTCOME_REPORT_READ;
 
     fn from_json(parameters: &str) -> Result<Self, FunnelCommandError> {
         let command: Self = serde_json::from_str(parameters)?;
@@ -1264,6 +1289,43 @@ struct InteractionReportResult {
 }
 
 #[derive(Serialize)]
+struct ServiceOutcomeReportResult {
+    command_id: &'static str,
+    funnel_id: String,
+    period_days: u8,
+    as_of: String,
+    history_started_at: String,
+    retained_submissions: u64,
+    history_covered_submissions: u64,
+    history_uncovered_submissions: u64,
+    current_stock: ServiceOutcomeStatusCounts,
+    recorded_outcomes: ServiceOutcomeCounts,
+    first_contact: FirstContactDelaySummary,
+}
+
+#[derive(Serialize)]
+struct ServiceOutcomeStatusCounts {
+    new: u64,
+    contacted: u64,
+    qualified: u64,
+    closed: u64,
+}
+
+#[derive(Serialize)]
+struct ServiceOutcomeCounts {
+    taken_in_charge: u64,
+    qualified: u64,
+    closed: u64,
+    closed_with_reason: u64,
+}
+
+#[derive(Serialize)]
+struct FirstContactDelaySummary {
+    submission_count: u64,
+    average_delay_seconds: u64,
+}
+
+#[derive(Serialize)]
 struct DailyInteractionReportDay {
     utc_day: String,
     page_viewed: u64,
@@ -1519,6 +1581,9 @@ impl<'repo, 'database> Session<'repo, 'database> {
             CommandHandler::InteractionReportRead => {
                 self.execute_interaction_report_read(parameters).await
             }
+            CommandHandler::ServiceOutcomeReportRead => {
+                self.execute_service_outcome_report_read(parameters).await
+            }
             CommandHandler::PublicRead => self.execute_public_read(parameters).await,
             CommandHandler::Publish => {
                 self.execute_publish(
@@ -1745,6 +1810,24 @@ impl<'repo, 'database> Session<'repo, 'database> {
             return Err(FunnelCommandError::FunnelNotFound);
         }
         let result = build_interaction_report(command.funnel_id, period, rows)?;
+        serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
+    }
+
+    async fn execute_service_outcome_report_read(
+        &self,
+        parameters: &str,
+    ) -> Result<Value, FunnelCommandError> {
+        let command = ServiceOutcomeReportReadCommand::from_json(parameters)?;
+        let period = FormCompletionPeriod::from_days(command.period_days)
+            .ok_or(FunnelCommandError::InvalidParameters)?;
+        let rows = self
+            .repository
+            .public_service_outcome_report_rows(&command.funnel_id, period)
+            .await?;
+        if rows.is_empty() {
+            return Err(FunnelCommandError::FunnelNotFound);
+        }
+        let result = build_service_outcome_report(command.funnel_id, period, rows)?;
         serde_json::to_value(result).map_err(|_| FunnelCommandError::Internal)
     }
 
@@ -3691,6 +3774,92 @@ fn build_form_completion_report(
         revisions,
         channels,
     })
+}
+
+fn build_service_outcome_report(
+    funnel_id: String,
+    period: FormCompletionPeriod,
+    rows: Vec<PublicServiceOutcomeReportRow>,
+) -> Result<ServiceOutcomeReportResult, FunnelCommandError> {
+    if rows.len() != 1 {
+        return Err(FunnelCommandError::Internal);
+    }
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or(FunnelCommandError::Internal)?;
+    if row.row_type != "summary" {
+        return Err(FunnelCommandError::Internal);
+    }
+    report_utc_day(&row.as_of)?;
+    report_utc_day(&row.history_started_at)?;
+    if row.history_started_at > row.as_of {
+        return Err(FunnelCommandError::Internal);
+    }
+
+    let retained_submissions = non_negative_report_count(row.retained_submissions)?;
+    let history_covered_submissions = non_negative_report_count(row.history_covered_submissions)?;
+    let current_stock = ServiceOutcomeStatusCounts {
+        new: non_negative_report_count(row.current_new)?,
+        contacted: non_negative_report_count(row.current_contacted)?,
+        qualified: non_negative_report_count(row.current_qualified)?,
+        closed: non_negative_report_count(row.current_closed)?,
+    };
+    let current_stock_total = current_stock
+        .new
+        .checked_add(current_stock.contacted)
+        .and_then(|total| total.checked_add(current_stock.qualified))
+        .and_then(|total| total.checked_add(current_stock.closed))
+        .ok_or(FunnelCommandError::Internal)?;
+    if current_stock_total != retained_submissions
+        || history_covered_submissions > retained_submissions
+    {
+        return Err(FunnelCommandError::Internal);
+    }
+
+    let recorded_outcomes = ServiceOutcomeCounts {
+        taken_in_charge: non_negative_report_count(row.submissions_taken_in_charge)?,
+        qualified: non_negative_report_count(row.submissions_qualified)?,
+        closed: non_negative_report_count(row.submissions_closed)?,
+        closed_with_reason: non_negative_report_count(row.submissions_closed_with_reason)?,
+    };
+    let first_contact = FirstContactDelaySummary {
+        submission_count: non_negative_report_count(row.first_contact_count)?,
+        average_delay_seconds: non_negative_report_count(row.average_first_contact_delay_seconds)?,
+    };
+    if [
+        recorded_outcomes.taken_in_charge,
+        recorded_outcomes.qualified,
+        recorded_outcomes.closed,
+        recorded_outcomes.closed_with_reason,
+        first_contact.submission_count,
+    ]
+    .into_iter()
+    .any(|count| count > history_covered_submissions)
+        || recorded_outcomes.closed_with_reason > recorded_outcomes.closed
+        || first_contact.submission_count != recorded_outcomes.taken_in_charge
+        || (first_contact.submission_count == 0 && first_contact.average_delay_seconds != 0)
+    {
+        return Err(FunnelCommandError::Internal);
+    }
+
+    Ok(ServiceOutcomeReportResult {
+        command_id: ServiceOutcomeReportReadCommand::ID,
+        funnel_id,
+        period_days: period.days(),
+        as_of: row.as_of,
+        history_started_at: row.history_started_at,
+        retained_submissions,
+        history_covered_submissions,
+        history_uncovered_submissions: retained_submissions - history_covered_submissions,
+        current_stock,
+        recorded_outcomes,
+        first_contact,
+    })
+}
+
+fn non_negative_report_count(value: i64) -> Result<u64, FunnelCommandError> {
+    u64::try_from(value).map_err(|_| FunnelCommandError::Internal)
 }
 
 fn build_interaction_report(
