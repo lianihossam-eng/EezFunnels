@@ -16,6 +16,7 @@ python3 "$repo_root/scripts/test-pub008-migration.py"
 python3 "$repo_root/scripts/test-pub009-migration.py"
 python3 "$repo_root/scripts/test-pub010-migration.py"
 python3 "$repo_root/scripts/test-pub011-migration.py"
+python3 "$repo_root/scripts/test-pub012-migration.py"
 
 python3 - "$repo_root" <<'PY'
 import concurrent.futures
@@ -35,6 +36,8 @@ import secrets
 import uuid
 import xml.etree.ElementTree as ElementTree
 from urllib.parse import urlencode
+
+INTERACTION_EVENT_LIMIT = 20
 
 root = Path(sys.argv[1])
 wrangler = root / "node_modules" / ".bin" / "wrangler"
@@ -72,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "--var", "PUBLIC_FORM_SUBMISSIONS_PER_MINUTE:3",
             "--var", "PUBLIC_FORM_RETENTION_DAYS:1",
             "--var", "PUBLIC_INTERACTION_RETENTION_DAYS:1",
-            "--var", "PUBLIC_INTERACTION_EVENTS_PER_MINUTE:10",
+            "--var", f"PUBLIC_INTERACTION_EVENTS_PER_MINUTE:{INTERACTION_EVENT_LIMIT}",
             "--env-file", str(interaction_env_file),
             "--persist-to", str(persist), "--test-scheduled", "--log-level", "error",
         ],
@@ -936,6 +939,154 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                 interaction_headers_granted,
             )
             assert event_status == 204, (kind, event_status, event_body)
+
+        campaign_registry_path = f"/api/funnels/{funnel_id}/campaigns"
+        registry_status, registry_body, registry_headers = request(
+            "GET", campaign_registry_path
+        )
+        assert registry_status == 200, (registry_status, registry_body)
+        assert registry_headers.get("cache-control") == "private, no-store", registry_headers
+        assert json.loads(registry_body)["campaign_ids"] == [], registry_body
+
+        late_event_id = str(uuid.uuid4())
+        late_event = make_interaction_event(late_event_id)
+        late_event["campaign_id"] = "spring-launch"
+        late_event_body = json.dumps(late_event, separators=(",", ":")).encode()
+        before_registration_status, before_registration_body, _ = request(
+            "POST", interaction_path, late_event_body, interaction_headers_granted
+        )
+        assert before_registration_status == 204, (
+            before_registration_status,
+            before_registration_body,
+        )
+        assert d1_query(
+            "SELECT campaign_id FROM public_interaction_events "
+            f"WHERE event_id = '{late_event_id}'",
+            "campaign_id",
+        ).get("campaign_id") is None
+
+        invalid_campaign_status, invalid_campaign_body, _ = request(
+            "POST",
+            campaign_registry_path,
+            b'{"campaign_id":"invalid/id"}',
+            {"Content-Type": "application/json", "Origin": f"http://localhost:{port}"},
+        )
+        assert invalid_campaign_status == 400, (invalid_campaign_status, invalid_campaign_body)
+        assert b"validation/campaign_id_invalid" in invalid_campaign_body
+        duplicate_json_status, _, _ = request(
+            "POST",
+            campaign_registry_path,
+            b'{"campaign_id":"one","campaign_id":"two"}',
+            {"Content-Type": "application/json", "Origin": f"http://localhost:{port}"},
+        )
+        assert duplicate_json_status == 400, duplicate_json_status
+
+        campaign_body = json.dumps(
+            {"campaign_id": "spring-launch"}, separators=(",", ":")
+        ).encode()
+        owner_headers = {
+            "Content-Type": "application/json",
+            "Origin": f"http://localhost:{port}",
+        }
+        register_status, register_body, register_headers = request(
+            "POST", campaign_registry_path, campaign_body, owner_headers
+        )
+        assert register_status == 200, (register_status, register_body)
+        assert register_headers.get("cache-control") == "private, no-store", register_headers
+        registry = json.loads(register_body)
+        assert registry["campaign_ids"] == ["spring-launch"], registry
+        assert registry["campaign_links"] == [{
+            "campaign_id": "spring-launch",
+            "url": f"https://funnels.example/f/{slug}?campaign_id=spring-launch",
+            "relative_path": f"/f/{slug}?campaign_id=spring-launch",
+        }], registry
+        duplicate_register_status, duplicate_register_body, _ = request(
+            "POST", campaign_registry_path, campaign_body, owner_headers
+        )
+        assert duplicate_register_status == 200, (
+            duplicate_register_status,
+            duplicate_register_body,
+        )
+        assert json.loads(duplicate_register_body)["campaign_ids"] == ["spring-launch"]
+
+        late_replay_status, late_replay_body, _ = request(
+            "POST", interaction_path, late_event_body, interaction_headers_granted
+        )
+        assert late_replay_status == 204, (late_replay_status, late_replay_body)
+        late_row = d1_query(
+            "SELECT COUNT(*) AS events, MIN(campaign_id) AS campaign_id "
+            "FROM public_interaction_events "
+            f"WHERE event_id = '{late_event_id}'",
+            "events",
+        )
+        assert late_row == {"events": 1, "campaign_id": None}, late_row
+
+        attributed_event_id = str(uuid.uuid4())
+        attributed_event = make_interaction_event(attributed_event_id)
+        attributed_event["campaign_id"] = "spring-launch"
+        attributed_status, attributed_body, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(attributed_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert attributed_status == 204, (attributed_status, attributed_body)
+        assert d1_query(
+            "SELECT campaign_id FROM public_interaction_events "
+            f"WHERE event_id = '{attributed_event_id}'",
+            "campaign_id",
+        )["campaign_id"] == "spring-launch"
+
+        remove_status, remove_body, remove_headers = request(
+            "DELETE",
+            f"{campaign_registry_path}/spring-launch",
+            headers={"Origin": f"http://localhost:{port}"},
+        )
+        assert remove_status == 200, (remove_status, remove_body)
+        assert remove_headers.get("cache-control") == "private, no-store", remove_headers
+        assert json.loads(remove_body)["campaign_ids"] == [], remove_body
+        repeated_remove_status, repeated_remove_body, _ = request(
+            "DELETE",
+            f"{campaign_registry_path}/spring-launch",
+            headers={"Origin": f"http://localhost:{port}"},
+        )
+        assert repeated_remove_status == 200, (repeated_remove_status, repeated_remove_body)
+
+        after_removal_event_id = str(uuid.uuid4())
+        after_removal_event = make_interaction_event(after_removal_event_id)
+        after_removal_event["campaign_id"] = "spring-launch"
+        after_removal_status, after_removal_body, _ = request(
+            "POST",
+            interaction_path,
+            json.dumps(after_removal_event, separators=(",", ":")).encode(),
+            interaction_headers_granted,
+        )
+        assert after_removal_status == 204, (after_removal_status, after_removal_body)
+        assert d1_query(
+            "SELECT campaign_id FROM public_interaction_events "
+            f"WHERE event_id = '{after_removal_event_id}'",
+            "campaign_id",
+        )["campaign_id"] is None
+        assert d1_query(
+            "SELECT campaign_id FROM public_interaction_events "
+            f"WHERE event_id = '{attributed_event_id}'",
+            "campaign_id",
+        )["campaign_id"] == "spring-launch"
+
+        capacity_ids = ",".join(
+            f"('{funnel_id}', 'capacity-{index:03}')" for index in range(100)
+        )
+        run_d1(f"INSERT INTO funnel_campaigns (funnel_id, campaign_id) VALUES {capacity_ids}")
+        full_registry_status, full_registry_body, _ = request(
+            "POST",
+            campaign_registry_path,
+            b'{"campaign_id":"overflow"}',
+            owner_headers,
+        )
+        assert full_registry_status == 409, (full_registry_status, full_registry_body)
+        assert b"conflict/campaign_registry_full" in full_registry_body
+        run_d1(f"DELETE FROM funnel_campaigns WHERE funnel_id = '{funnel_id}'")
+
         event_summary = d1_query(
             "SELECT COUNT(*) AS events, SUM(event_kind = 'page_viewed') AS page_views, "
             "SUM(event_kind = 'form_viewed') AS form_views, "
@@ -948,11 +1099,11 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             "events",
         )
         browser_events = 3 if os.environ.get("PR033_BROWSER") == "1" else 0
-        assert event_summary["events"] >= 3 + browser_events, event_summary
+        assert event_summary["events"] >= 6 + browser_events, event_summary
         assert event_summary["page_views"] >= 1 + (browser_events > 0), event_summary
         assert event_summary["form_views"] >= 1 + (browser_events > 0), event_summary
         assert event_summary["form_starts"] >= 1 + (browser_events > 0), event_summary
-        assert event_summary["attributed"] == 0, event_summary
+        assert event_summary["attributed"] == 1, event_summary
         assert event_summary["fingerprint_length"] == 64, event_summary
         assert event_summary["retention_seconds"] == 86_400, event_summary
         assert event_summary["distinct_ids"] == event_summary["events"], event_summary
@@ -976,7 +1127,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             for day in interaction_report["days"]
         ) == event_summary["events"], interaction_report
         assert interaction_report["campaigns"] == [
-            {"campaign_id": None, "events": event_summary["events"]}
+            {"campaign_id": None, "events": event_summary["events"] - 1},
+            {"campaign_id": "spring-launch", "events": 1},
         ], interaction_report
         for private_value in (
             "event_id",
@@ -1103,8 +1255,8 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
             f"WHERE funnel_id = '{funnel_id}' AND received_at >= unixepoch() - 60",
             "events",
         )["events"]
-        assert event_count <= 10, event_count
-        while event_count < 10:
+        assert event_count <= INTERACTION_EVENT_LIMIT, event_count
+        while event_count < INTERACTION_EVENT_LIMIT:
             next_event = make_interaction_event(str(uuid.uuid4()))
             next_status, next_body, _ = request(
                 "POST",
@@ -1633,6 +1785,17 @@ with tempfile.TemporaryDirectory(prefix="eezfunnel-pr033-forms-") as directory:
                     f"http://localhost:{port}/submissions",
                     funnel_id,
                     isolated_funnel_id,
+                ],
+                cwd=root,
+                env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},
+                check=True,
+                timeout=90,
+            )
+            subprocess.run(
+                [
+                    "node",
+                    str(root / "scripts/test-pub012-campaigns-browser.mjs"),
+                    f"http://localhost:{port}/funnels/{funnel_id}/campaigns",
                 ],
                 cwd=root,
                 env={key: value for key, value in os.environ.items() if key != "XDG_CACHE_HOME"},

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 mod api;
 mod browser;
+mod campaigns;
 mod delivery;
 mod editor;
 mod funnels;
@@ -10,6 +11,7 @@ mod reports;
 mod service_brief;
 mod submissions;
 
+use campaigns::CampaignLinksPage;
 use editor::FunnelDetail;
 use funnels::Funnels;
 use reports::{FunnelCompletions, FunnelInteractionReport};
@@ -44,6 +46,10 @@ pub(crate) enum RouteView {
     FunnelInteractionReport { id: String },
     #[end_layout]
     #[layout(DashboardShell)]
+    #[route("/funnels/:id/campaigns")]
+    CampaignLinksPage { id: String },
+    #[end_layout]
+    #[layout(DashboardShell)]
     #[route("/submissions")]
     Submissions {},
 }
@@ -57,6 +63,7 @@ fn DashboardShell() -> Element {
         RouteView::ServiceBriefPage { .. } => "Workspace / Service brief",
         RouteView::FunnelCompletions { .. } => "Workspace / Form completions",
         RouteView::FunnelInteractionReport { .. } => "Workspace / Interaction counts",
+        RouteView::CampaignLinksPage { .. } => "Workspace / Campaign links",
         RouteView::Submissions {} => "Workspace / Submissions",
     };
     rsx! {

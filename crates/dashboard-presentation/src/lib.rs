@@ -172,6 +172,17 @@ mod tests {
     }
 
     #[test]
+    fn campaign_registry_route_renders_on_direct_ssr_navigation() {
+        let html =
+            render_document("/funnels/demo-1/campaigns").expect("campaign links dashboard route");
+
+        assert!(html.contains("Campaign links"));
+        assert!(html.contains("Workspace / Campaign links"));
+        assert!(html.contains("demo-1"));
+        assert_valid_hydration_data(&html);
+    }
+
+    #[test]
     fn submissions_route_renders_a_hydratable_dashboard_shell() {
         let html = render_document("/submissions").expect("submissions dashboard route");
 
@@ -192,6 +203,7 @@ mod tests {
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/completions",
             "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/interaction-report",
+            "/funnels/too-long-identifier-0123456789-0123456789-0123456789-0123456789-0/campaigns",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");
         }
@@ -209,6 +221,7 @@ mod tests {
             "/funnels/demo/completions/extra",
             "/funnels/demo/interaction-report/extra",
             "/funnels/demo/brief/extra",
+            "/funnels/demo/campaigns/extra",
             "/unknown",
         ] {
             assert!(render_document(path).is_none(), "accepted {path:?}");

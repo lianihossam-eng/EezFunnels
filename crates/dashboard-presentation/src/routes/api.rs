@@ -173,6 +173,29 @@ pub(super) struct FunnelCard {
     pub(super) updated_at: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct CampaignRegistryResponse {
+    pub(super) funnel_id: String,
+    pub(super) campaign_ids: Vec<String>,
+    pub(super) max_campaign_ids: usize,
+    pub(super) published: bool,
+    pub(super) campaign_links: Vec<CampaignLinkResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct CampaignLinkResponse {
+    pub(super) campaign_id: String,
+    pub(super) url: Option<String>,
+    pub(super) relative_path: Option<String>,
+}
+
+#[cfg(feature = "browser")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CampaignMutationFailure {
+    Uncertain,
+    Rejected,
+}
+
 #[cfg(any(feature = "browser", test))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub(super) struct ServiceBriefApiResponse {
@@ -326,6 +349,154 @@ pub(super) async fn load_funnels() -> Result<Vec<FunnelCard>, ()> {
     serde_json::from_str::<FunnelListResponse>(&response.body)
         .map(|response| response.items)
         .map_err(|_| ())
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn load_campaign_registry(
+    funnel_id: &str,
+) -> Result<CampaignRegistryResponse, ()> {
+    let response = api_request(
+        "GET",
+        &format!("/api/funnels/{funnel_id}/campaigns"),
+        None,
+        None,
+    )
+    .await?;
+    if response.status != 200 {
+        return Err(());
+    }
+    let snapshot =
+        serde_json::from_str::<CampaignRegistryResponse>(&response.body).map_err(|_| ())?;
+    if !campaign_registry_response_is_valid(&snapshot, funnel_id) {
+        return Err(());
+    }
+    Ok(snapshot)
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn add_campaign_id(
+    funnel_id: &str,
+    campaign_id: &str,
+) -> Result<CampaignRegistryResponse, CampaignMutationFailure> {
+    let body = serde_json::json!({"campaign_id": campaign_id}).to_string();
+    mutate_campaign_registry(
+        "POST",
+        &format!("/api/funnels/{funnel_id}/campaigns"),
+        Some(body),
+        funnel_id,
+    )
+    .await
+}
+
+#[cfg(feature = "browser")]
+pub(super) async fn remove_campaign_id(
+    funnel_id: &str,
+    campaign_id: &str,
+) -> Result<CampaignRegistryResponse, CampaignMutationFailure> {
+    mutate_campaign_registry(
+        "DELETE",
+        &format!("/api/funnels/{funnel_id}/campaigns/{campaign_id}"),
+        None,
+        funnel_id,
+    )
+    .await
+}
+
+#[cfg(feature = "browser")]
+async fn mutate_campaign_registry(
+    method: &str,
+    path: &str,
+    body: Option<String>,
+    funnel_id: &str,
+) -> Result<CampaignRegistryResponse, CampaignMutationFailure> {
+    let response = api_request(method, path, body, None)
+        .await
+        .map_err(|_| CampaignMutationFailure::Uncertain)?;
+    if response.status == 0 || response.status >= 500 {
+        return Err(CampaignMutationFailure::Uncertain);
+    }
+    if response.status != 200 {
+        return Err(CampaignMutationFailure::Rejected);
+    }
+    let snapshot = serde_json::from_str::<CampaignRegistryResponse>(&response.body)
+        .map_err(|_| CampaignMutationFailure::Uncertain)?;
+    if !campaign_registry_response_is_valid(&snapshot, funnel_id) {
+        return Err(CampaignMutationFailure::Uncertain);
+    }
+    Ok(snapshot)
+}
+
+#[cfg(any(feature = "browser", test))]
+fn campaign_registry_response_is_valid(
+    snapshot: &CampaignRegistryResponse,
+    funnel_id: &str,
+) -> bool {
+    use eez_domain::interaction_event::{CampaignId, MAX_CAMPAIGN_IDS_PER_FUNNEL};
+
+    let ids_are_valid = snapshot
+        .campaign_ids
+        .iter()
+        .all(|campaign_id| CampaignId::parse(campaign_id.clone()).is_ok());
+    let ids_are_unique_and_sorted = snapshot.campaign_ids.windows(2).all(|ids| ids[0] < ids[1]);
+    snapshot.funnel_id == funnel_id
+        && snapshot.max_campaign_ids == MAX_CAMPAIGN_IDS_PER_FUNNEL
+        && snapshot.campaign_ids.len() <= snapshot.max_campaign_ids
+        && snapshot.campaign_links.len() == snapshot.campaign_ids.len()
+        && snapshot
+            .campaign_links
+            .iter()
+            .zip(&snapshot.campaign_ids)
+            .all(|(link, campaign_id)| {
+                link.campaign_id == *campaign_id
+                    && if snapshot.published {
+                        link.relative_path
+                            .as_deref()
+                            .is_some_and(|path| valid_campaign_relative_path(path, campaign_id))
+                            && link.url.as_deref().is_none_or(|url| {
+                                link.relative_path
+                                    .as_deref()
+                                    .is_some_and(|path| valid_campaign_url(url, path))
+                            })
+                    } else {
+                        link.url.is_none() && link.relative_path.is_none()
+                    }
+            })
+        && ids_are_valid
+        && ids_are_unique_and_sorted
+}
+
+#[cfg(any(feature = "browser", test))]
+fn valid_campaign_relative_path(path: &str, campaign_id: &str) -> bool {
+    let Some((route, query)) = path.split_once('?') else {
+        return false;
+    };
+    route.starts_with("/f/")
+        && route.len() > 3
+        && route[3..]
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !route[3..].starts_with('-')
+        && !route[3..].ends_with('-')
+        && query == format!("campaign_id={campaign_id}")
+}
+
+#[cfg(any(feature = "browser", test))]
+fn valid_campaign_url(url: &str, relative_path: &str) -> bool {
+    let Some(authority_and_path) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let Some(path_offset) = authority_and_path.find('/') else {
+        return false;
+    };
+    let (authority, path) = authority_and_path.split_at(path_offset);
+    !authority.is_empty()
+        && !authority.contains('@')
+        && !authority.bytes().any(|byte| {
+            byte.is_ascii_whitespace()
+                || byte.is_ascii_control()
+                || matches!(byte, b'?' | b'#' | b'\\')
+        })
+        && path == relative_path
 }
 
 #[cfg(feature = "browser")]
@@ -780,4 +951,101 @@ pub(super) async fn save_service_brief(
         return Err(ServiceBriefSaveFailure::Uncertain);
     }
     Ok(saved)
+}
+
+#[cfg(test)]
+mod campaign_registry_tests {
+    use super::{
+        campaign_registry_response_is_valid, CampaignLinkResponse, CampaignRegistryResponse,
+    };
+    use eez_domain::interaction_event::MAX_CAMPAIGN_IDS_PER_FUNNEL;
+
+    fn response(campaign_ids: Vec<String>) -> CampaignRegistryResponse {
+        CampaignRegistryResponse {
+            funnel_id: "funnel-01".to_owned(),
+            campaign_links: campaign_ids
+                .iter()
+                .map(|campaign_id| CampaignLinkResponse {
+                    campaign_id: campaign_id.clone(),
+                    url: Some(format!(
+                        "https://funnels.example/f/lead-gen?campaign_id={campaign_id}"
+                    )),
+                    relative_path: Some(format!("/f/lead-gen?campaign_id={campaign_id}")),
+                })
+                .collect(),
+            max_campaign_ids: MAX_CAMPAIGN_IDS_PER_FUNNEL,
+            campaign_ids,
+            published: true,
+        }
+    }
+
+    #[test]
+    fn campaign_snapshot_validation_accepts_exact_sorted_links_and_rejects_bad_state() {
+        let valid = response(vec!["spring-launch".to_owned(), "winter-sale".to_owned()]);
+        assert!(campaign_registry_response_is_valid(&valid, "funnel-01"));
+        assert!(!campaign_registry_response_is_valid(
+            &valid,
+            "another-funnel"
+        ));
+
+        let mut duplicate = response(vec!["spring-launch".to_owned(), "spring-launch".to_owned()]);
+        assert!(!campaign_registry_response_is_valid(
+            &duplicate,
+            "funnel-01"
+        ));
+        duplicate = response(vec!["invalid campaign".to_owned()]);
+        assert!(!campaign_registry_response_is_valid(
+            &duplicate,
+            "funnel-01"
+        ));
+        duplicate.campaign_links.clear();
+        assert!(!campaign_registry_response_is_valid(
+            &duplicate,
+            "funnel-01"
+        ));
+    }
+
+    #[test]
+    fn campaign_snapshot_validation_rejects_oversized_registry() {
+        let too_many = (0..=MAX_CAMPAIGN_IDS_PER_FUNNEL)
+            .map(|index| format!("campaign-{index:03}"))
+            .collect();
+        assert!(!campaign_registry_response_is_valid(
+            &response(too_many),
+            "funnel-01"
+        ));
+    }
+
+    #[test]
+    fn campaign_snapshot_validation_rejects_inconsistent_or_insecure_links() {
+        let mut value = response(vec!["spring-launch".to_owned()]);
+        value.campaign_links[0].url = Some("javascript:alert(1)".to_owned());
+        assert!(!campaign_registry_response_is_valid(&value, "funnel-01"));
+
+        let mut value = response(vec!["spring-launch".to_owned()]);
+        value.campaign_links[0].url = Some(
+            "https://funnels.example?redirect=/f/lead-gen?campaign_id=spring-launch".to_owned(),
+        );
+        assert!(!campaign_registry_response_is_valid(&value, "funnel-01"));
+
+        let mut value = response(vec!["spring-launch".to_owned()]);
+        value.campaign_links[0].relative_path =
+            Some("/f/other?campaign_id=spring-launch".to_owned());
+        assert!(!campaign_registry_response_is_valid(&value, "funnel-01"));
+
+        let mut value = response(vec!["spring-launch".to_owned()]);
+        value.campaign_links[0].url =
+            Some("https://custom.example/f/lead-gen?campaign_id=spring-launch".to_owned());
+        assert!(campaign_registry_response_is_valid(&value, "funnel-01"));
+
+        let mut value = response(vec!["spring-launch".to_owned()]);
+        value.published = false;
+        value.campaign_links[0].url = None;
+        value.campaign_links[0].relative_path = None;
+        assert!(campaign_registry_response_is_valid(&value, "funnel-01"));
+
+        value.campaign_links[0].relative_path =
+            Some("/f/lead-gen?campaign_id=spring-launch".to_owned());
+        assert!(!campaign_registry_response_is_valid(&value, "funnel-01"));
+    }
 }

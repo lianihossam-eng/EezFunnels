@@ -2284,6 +2284,208 @@ h1 {
   text-decoration: none;
 }
 
+.campaign-page {
+  display: grid;
+  gap: 22px;
+  width: min(100%, 900px);
+  margin: 0 auto;
+}
+
+.campaign-heading {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.campaign-heading .page-description {
+  max-width: 680px;
+  margin: 0;
+}
+
+.campaign-back-link {
+  margin-top: 4px;
+  text-decoration: none;
+}
+
+.campaign-registry-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid #e1e6ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.campaign-registry-panel > h2,
+.campaign-row h3 {
+  margin: 0;
+  color: #27324b;
+}
+
+.campaign-registry-intro,
+.campaign-field-help,
+.campaign-capacity {
+  margin: 0;
+  color: #5d687d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.campaign-add-form {
+  display: grid;
+  gap: 8px;
+  max-width: 680px;
+}
+
+.campaign-add-form > label,
+.campaign-row > label {
+  color: #35415a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.campaign-add-row,
+.campaign-link-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.campaign-add-row input,
+.campaign-link-row input {
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid #cfd6e3;
+  border-radius: 8px;
+  color: #27344f;
+  background: #fff;
+  font: inherit;
+}
+
+.campaign-add-row input {
+  width: min(100%, 420px);
+}
+
+.campaign-link-row input {
+  flex: 1;
+  background: #f7f8fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.campaign-add-row input:focus-visible,
+.campaign-link-row input:focus-visible,
+.campaign-add-row button:focus-visible,
+.campaign-remove-button:focus-visible,
+.campaign-open-link:focus-visible {
+  outline: 3px solid #7d8be5;
+  outline-offset: 2px;
+}
+
+.campaign-capacity {
+  font-variant-numeric: tabular-nums;
+}
+
+.campaign-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.campaign-row {
+  display: grid;
+  gap: 11px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #e5e9f1;
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.campaign-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.campaign-row h3 code {
+  overflow-wrap: anywhere;
+  color: #35466f;
+  font: 650 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.campaign-remove-button,
+.campaign-open-link {
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.campaign-empty-state,
+.campaign-state,
+.campaign-loading {
+  padding: 14px;
+  border-radius: 8px;
+  background: #f7f8fc;
+}
+
+.campaign-empty-state h3,
+.campaign-empty-state p,
+.campaign-state p {
+  margin: 0;
+}
+
+.campaign-empty-state h3 {
+  margin-bottom: 5px;
+  color: #27344c;
+  font-size: 14px;
+}
+
+.campaign-empty-state p,
+.campaign-state {
+  color: #59667e;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.campaign-state-error {
+  color: #8b2525;
+  background: #fff6f5;
+}
+
+.campaign-state-success {
+  color: #175d43;
+  background: #effaf5;
+}
+
+.campaign-state button {
+  margin-top: 10px;
+}
+
+.campaign-loading {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-skeleton {
+  width: 72%;
+  height: 15px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #edf0f6 25%, #f8f9fc 50%, #edf0f6 75%);
+  background-size: 200% 100%;
+  animation: submission-loading-pulse 1.4s ease-in-out infinite;
+}
+
+.campaign-skeleton-title {
+  width: 38%;
+  height: 22px;
+}
+
 .completion-period-selector {
   width: fit-content;
   max-width: 100%;
@@ -2802,12 +3004,38 @@ h1 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .submission-loading-line {
+  .submission-loading-line,
+  .campaign-skeleton {
     animation: none;
   }
 }
 
 @media (max-width: 680px) {
+  .campaign-registry-panel {
+    padding: 16px;
+  }
+
+  .campaign-add-row,
+  .campaign-link-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .campaign-add-row input,
+  .campaign-link-row input,
+  .campaign-add-row button,
+  .campaign-open-link {
+    width: 100%;
+  }
+
+  .campaign-row-header {
+    align-items: flex-start;
+  }
+
+  .campaign-remove-button {
+    min-height: 36px;
+  }
+
   .completion-report,
   .interaction-report {
     gap: 18px;

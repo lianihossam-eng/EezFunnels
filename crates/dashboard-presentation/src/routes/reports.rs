@@ -149,6 +149,7 @@ pub(super) fn FunnelCompletions(id: String) -> Element {
                 p { class: "page-description", "Successful form submissions still within the configured retention period. These counts do not represent a conversion rate." }
                 p { class: "completion-funnel-id", "Funnel: " code { "{id}" } }
                 Link { to: RouteView::FunnelDetail { id: id.clone() }, class: "completion-back-link", "Back to funnel" }
+                Link { to: RouteView::CampaignLinksPage { id: id.clone() }, class: "completion-report-link", "Manage campaign links" }
             }
             fieldset { class: "completion-period-selector",
                 legend { "UTC date range" }

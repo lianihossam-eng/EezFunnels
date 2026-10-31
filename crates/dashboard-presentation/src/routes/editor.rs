@@ -2069,6 +2069,7 @@ fn FunnelDetailV1(id: String) -> Element {
             p { class: "page-description", "Reorder sections and preview the funnel before saving a new revision." }
             code { class: "detail-id", "Funnel ID: {id}" }
             Link { to: RouteView::ServiceBriefPage { id: id.clone() }, class: "secondary-button completion-report-link", "Service brief" }
+            Link { to: RouteView::CampaignLinksPage { id: id.clone() }, class: "secondary-button completion-report-link", "Campaign links" }
             Link { to: RouteView::FunnelInteractionReport { id: id.clone() }, class: "secondary-button completion-report-link", "View interaction counts" }
         }
         if view.loading {

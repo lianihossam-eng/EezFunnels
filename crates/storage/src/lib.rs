@@ -7,6 +7,7 @@ use repository::{
 use worker::d1::D1Type;
 use worker::{Env, Error, Result};
 
+pub mod campaign_registry;
 pub mod delivery_controls;
 pub mod media;
 pub mod repository;
@@ -88,6 +89,12 @@ impl Bindings {
 
     pub fn delivery_control_repository(&self) -> delivery_controls::DeliveryControlRepository<'_> {
         delivery_controls::DeliveryControlRepository::new(&self.database)
+    }
+
+    pub fn campaign_registry_repository(
+        &self,
+    ) -> campaign_registry::CampaignRegistryRepository<'_> {
+        campaign_registry::CampaignRegistryRepository::new(&self.database)
     }
 
     pub fn media_asset_repository(&self) -> media::MediaAssetRepository<'_> {
