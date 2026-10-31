@@ -2,6 +2,7 @@ mod edit;
 mod model;
 mod placeholders;
 mod starter;
+mod template;
 mod theme;
 mod validate;
 
@@ -23,6 +24,10 @@ pub use model::{
 pub use placeholders::{
     GeneratedPlaceholderCode, GeneratedPlaceholderMarker, GeneratedPlaceholderPageField,
     GeneratedPlaceholderTarget,
+};
+pub use template::{
+    PortableTemplate, PortableTemplateError, TemplateMediaAsset, MAX_PORTABLE_TEMPLATE_BYTES,
+    MAX_TEMPLATE_MEDIA_ASSETS, PORTABLE_TEMPLATE_FORMAT, PORTABLE_TEMPLATE_VERSION,
 };
 pub use theme::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
