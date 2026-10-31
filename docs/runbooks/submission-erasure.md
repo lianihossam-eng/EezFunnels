@@ -55,7 +55,7 @@ The recovery guarantee applies only when D1 is restored while the original R2 bu
 
 4. Restore the D1 snapshot while retaining the original R2 bucket. Apply the repository's compatible D1 migrations before reopening service. Keep the Worker behind the perimeter while the restore is in progress.
 
-5. Start reconciliation only after D1 restoration is complete. Repeat this request with the same generation until the returned phase is `ready`:
+5. Start reconciliation only after D1 restoration is complete and a Worker version compatible with the restored schema and erasure gate is active. Review restored pending delivery tasks against the receiver's stable event-ID ledger, and arrange any required independent dispatch hold before reconciliation can reach its terminal page. Repeat this request with the same generation until the returned phase is `ready`:
 
    ```http
    POST /api/submissions/recovery
@@ -67,14 +67,14 @@ The recovery guarantee applies only when D1 is restored while the original R2 bu
 
    Each invocation processes one bounded R2 page. The Worker validates each versioned journal, checks any restored source's funnel/form/key digest and original expiry before deleting it, reapplies still-live replay markers, clears matching restored intents, and advances the R2 checkpoint only after the D1 page succeeds. The gate opens only after a complete terminal page and a final check finds no pending intent.
 
-6. Verify `GET /api/submissions/recovery` reports `ready`, then restore normal traffic. A journal that is listed but malformed, inconsistent, or unavailable keeps the gate closed, as does failed D1 work. The Worker has no independent journal inventory and cannot detect an object already missing from R2; the recovery guarantee therefore requires the original R2 bucket and all retained erasure journals to remain intact. Do not edit the R2 control object to force it open; preserve the restored database and investigate the failed journal or checkpoint first.
+6. Verify `GET /api/submissions/recovery` reports `ready`. The final reconciliation opens the gate for submission reads and the scheduled delivery dispatcher immediately; Cloudflare Access does not pause Cron. Keep any independent ingress or dispatch hold until post-recovery checks pass, then restore normal traffic. A D1 restore can rewind task attempts after an external receiver accepted a request, so preserve receiver deduplication for stable event IDs. A journal that is listed but malformed, inconsistent, or unavailable keeps the gate closed, as does failed D1 work. The Worker has no independent journal inventory and cannot detect an object already missing from R2; the recovery guarantee therefore requires the original R2 bucket and all retained erasure journals to remain intact. Do not edit the R2 control object to force it open; preserve the restored database and investigate the failed journal or checkpoint first.
 
 The initial R2 recovery control is created conditionally only when there are no erasure intents, replay markers, or journals. If the control object is missing while any erasure state exists, normal submission routes fail closed.
 
-## Outbox and future dispatch
+## Outbox and dispatch
 
-PUB-008 adds a disabled-by-default, reference-only outbox. Accepting a form creates a task only when the installation and form are enabled and the form's expected destination version matches the current installation destination. The source and task commit in one D1 batch. A new destination version does not retarget old tasks; each form must be explicitly revalidated. Direct source insertion during restore does not create a task.
+The disabled-by-default outbox stores references to submissions and revisions rather than another copy of submitted values. Accepting a form creates a task only when the installation and form are enabled and the form's expected destination version matches the current installation destination. The source and task commit in one D1 batch. A new destination version does not retarget old tasks; each form must be explicitly revalidated. Direct source insertion during restore does not create a task.
 
 When an erasure intent commits, the matching task is deleted in the same D1 batch as the intent and replay marker. The `retained_visible_public_submission_delivery` view also hides a task if its source is expired or has an erasure intent. Source purge cascades to its task. The R2 journal remains the recovery authority, and D1 task visibility does not prove the recovery gate is open.
 
-PUB-009's dispatcher must require the recovery-ready gate, acquire and retry only through the retained-visible source predicate, and recheck the gate and source immediately before transport. An erasure cannot recall a request already sent to a receiver; a request in flight at deletion time remains outside the cancellation guarantee.
+The scheduled dispatcher requires the recovery-ready gate, acquires and retries only through the retained-visible source predicate, and rechecks the gate and source immediately before transport. An erasure cannot recall a request already sent to a receiver; a request in flight at deletion time remains outside the cancellation guarantee.

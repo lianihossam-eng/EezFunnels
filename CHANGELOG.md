@@ -12,9 +12,14 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Bounded R2 staging for typed revisions, including local capacity reporting and cleanup.
 - Funnel-scoped form completion counts by UTC date, stable form ID, and closed campaign-channel category, limited to retained submissions.
 - Follow-up statuses for retained submissions in the dashboard inbox, with filtering by status.
+- Contact, estimate-request, and diagnostic-request recipes with accessible form recovery, independent consent choices, and receipt-only confirmation wording.
+- French and English public form copy, multi-line fields, structured service offers and comparisons, contextual evidence, FAQ, and operating steps.
+- Private submission export and targeted erasure, versioned follow-up history, optional signed webhook delivery, registered campaign links, and coverage-aware reports.
+- Versioned V2 funnel template export/import with a media manifest; imports create new unpublished funnels and require missing images to be replaced from the target library.
 
 ### Changed
 - Dashboard funnel creation and editing use typed version 2 documents while preserving version 1 reads and conversion.
+- README demonstrations and public-edition documentation describe the current self-hosted capabilities and the boundary of a future pilot; no remote deployment or release is implied.
 
 ## [0.1.0] - 2026-10-15
 

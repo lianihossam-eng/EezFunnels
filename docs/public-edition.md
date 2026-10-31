@@ -26,19 +26,20 @@ Contact asks for a message, estimate requests collect scope and an optional time
 
 The dashboard exports the saved V2 revision as a versioned JSON template with a manifest for every referenced image. Export does not include an unsaved editor draft. Import validates the package and target media library, remaps internal funnel, page, section, block, form, field, and consent-copy identifiers, then atomically creates a new unpublished V2 funnel. Images already present in the target library keep their references; an unavailable image requires an explicit replacement from that library. The importer does not fetch external URLs. V1 revisions, private briefs, submissions, delivery configuration, and secrets are excluded.
 
-## Capability snapshot
+## Current capability snapshot
 
-This table records the capabilities on the series baseline, commit 65feaeee, and the boundaries maintained by the public improvement series. It is a baseline snapshot; issue 82 is the live source for delivery progress.
+This table describes the public edition after the improvement series. Issue 82 remains the live source for delivery status.
 
-| Area | Available on the baseline | Boundary maintained by the series |
+| Area | Available now | Boundary maintained by the series |
 | --- | --- | --- |
-| Visitor pages | Typed multi-page funnels, immutable revisions, preview, publication, SEO metadata, and mapped custom hosts. | A page represents content and navigation; it does not establish a commercial outcome. |
-| Public forms | Native text, email, phone, checkbox, and select fields; required request acknowledgement; optional marketing consent; bounded and idempotent submission. | Inbox and owner APIs remain private. Only fields explicitly selected for an activated operator-configured webhook may be sent to its destination. Measurement and marketing consent remain separate from request acknowledgement. |
-| Inbox | Private owner access to retained submissions and the statuses new, contacted, qualified, and closed. | Status records follow-up. Closed or completed never implies payment. |
-| Delivery | No built-in external delivery integration on the baseline. | The planned integration is an operator-configured, disabled-by-default, signed webhook with bounded retries and no visitor-supplied destination. |
-| Reports | Retained form-completion counts and optional, consent-based page/form interaction aggregates; the initial baseline has no owner campaign registry. | Exact owner-registered campaign IDs group consented interaction events only; no visitor or session identity, visitor-to-submission rate, or commercial attribution is inferred. |
-| Portability | No funnel JSON import/export on the baseline. | The series adds versioned V2 templates with exact media manifests; import creates a new unpublished draft and never overwrites or publishes a funnel. |
-| Runtime | Cloudflare Workers with D1, R2, and KV bindings. | The series adds no Cloudflare service and does not verify a remote production deployment. |
+| Visitor pages and editor | Typed multi-page V2 documents, immutable revisions, preview, publication checks, SEO metadata, mapped custom hosts, and renderer compatibility for older revisions. | Pages and actions present information or navigate; they do not establish a booking, sale, or payment. |
+| Service composition | Contact, estimate-request, and diagnostic-request recipes; FAQ, operating steps, exact-price offers, comparisons, and contextual evidence. | Recipes seed editable documents. Demonstrations are labeled; owner-entered real evidence is not independently verified. |
+| Public forms | French and English copy, text/email/phone/checkbox/select fields, multi-line text, field-level HTML recovery, bounded idempotency, and required request acknowledgement. | Marketing and measurement consent are separate. Public errors do not echo untrusted transport bodies or include values in URLs. |
+| Submissions and inbox | Private retained responses, export, targeted erasure, legacy statuses, versioned follow-up history, next action, and close reason. | Recovery requires restored D1 with the original R2 journals intact and reconciliation before reads or dispatch resume. `closed` is not payment. |
+| Delivery | Operator-owned HTTPS destination, disabled by default, selected form fields, immutable task configuration, signed requests, bounded retry, and owner-visible controls. | No visitor-provided destination. Delivery may result in zero, one, or several receiver attempts; an acknowledgement does not prove downstream completion. |
+| Reporting | Retained completion and follow-up outcome cohorts, explicit coverage and retention, and consented current-page interaction aggregates using exact registered campaign IDs. | No visitor/session identity, cross-page attribution, campaign-to-person join, visitor-to-request rate, or inferred sale/payment. |
+| Portability | Versioned saved-V2 template export with an exact media manifest and import as a new unpublished funnel. | Import validates media in the target library; it does not fetch external URLs, overwrite, publish, or include private briefs, submissions, delivery settings, or secrets. |
+| Runtime and recovery | Cloudflare Workers with D1, R2, and KV; the series adds no Cloudflare service. | CI and local recovery tests do not verify an account-specific deployment or execute an actual Cloudflare D1 Time Travel restore. |
 
 ## Outcome limits
 

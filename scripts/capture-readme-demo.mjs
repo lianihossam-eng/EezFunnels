@@ -9,7 +9,7 @@ import { startPr019Worker } from "./pr019-local-worker.mjs";
 const root = resolve(import.meta.dirname, "..");
 const assets = join(root, "docs/assets");
 const scratch = await mkdtemp(join(tmpdir(), "eezfunnel-readme-demo-"));
-const heroTitle = "A clearer plan for your next launch";
+const heroTitle = "Plan your garden studio";
 const ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg";
 let worker;
 let browser;
@@ -31,8 +31,9 @@ async function captureEditor() {
     await page.getByRole("button", { name: "Create funnel" }).click();
     const dialog = page.getByRole("dialog", { name: "Create a funnel" });
     await dialog.waitFor({ state: "visible" });
-    await page.getByLabel("Funnel name").fill("Launch Workshop");
-    await page.locator('input[name="blueprint"][value="webinar"]').check();
+    await page.getByLabel("Funnel name").fill("Garden Studio Estimate");
+    await page.locator('input[name="blueprint"][value="lead_gen"]').check();
+    await page.locator('input[name="service_recipe"][value="quote_request"]').check();
     await page.waitForTimeout(1000);
 
     const createResponsePromise = page.waitForResponse(
@@ -46,20 +47,39 @@ async function captureEditor() {
     assert.equal(typeof id, "string");
     assert.equal(typeof slug, "string");
 
-    const funnelLink = page.getByRole("link", { name: "Launch Workshop" });
+    const funnelLink = page.getByRole("link", { name: "Garden Studio Estimate" });
     await funnelLink.waitFor();
     await funnelLink.click();
-    await page.getByRole("heading", { name: "Launch Workshop" }).waitFor();
+    await page.getByRole("heading", { name: "Garden Studio Estimate" }).waitFor();
     await page.getByRole("list", { name: "Sections on this page" }).waitFor();
     await page.waitForTimeout(900);
+
     await page.getByRole("button", { name: "Hero", exact: true }).click();
     const title = page.getByRole("textbox", { name: "Heading content for block-hero-title" });
     await title.fill(heroTitle);
     await title.press("Tab");
     const copy = page.getByRole("textbox", { name: "Text content for block-hero-copy" });
-    await copy.fill("A live session to shape your next launch into a clear, repeatable plan.");
+    await copy.fill("Share the work you have in mind. This request does not reserve a date or guarantee a price.");
     await copy.press("Tab");
     await page.frameLocator("iframe").getByRole("heading", { name: heroTitle }).waitFor();
+
+    await page.getByRole("button", { name: "Features", exact: true }).click();
+    const featuresHeading = page.getByRole("textbox", { name: "Heading content for block-features-title" });
+    await featuresHeading.fill("What the service includes");
+    await featuresHeading.press("Tab");
+    const features = page.getByRole("textbox", { name: "List content for block-features-list" });
+    await features.fill("Scope reviewed before an estimate\nNo price or response date is promised");
+    await features.press("Tab");
+
+    await page.getByRole("button", { name: "Call to action", exact: true }).click();
+    const ctaTitle = page.getByRole("textbox", { name: "Heading content for block-cta-title" });
+    await ctaTitle.fill("Describe the work you have in mind");
+    await ctaTitle.press("Tab");
+    const ctaCopy = page.getByRole("textbox", { name: "Text content for block-cta-copy" });
+    await ctaCopy.fill("Submitting this form requests a review. It does not reserve a date or confirm a price.");
+    await ctaCopy.press("Tab");
+    await page.frameLocator("iframe").getByRole("heading", { name: "What the service includes" }).waitFor();
+    await page.frameLocator("iframe").getByRole("heading", { name: "Describe the work you have in mind" }).waitFor();
     await page.waitForTimeout(700);
 
     const mobilePreview = page
@@ -81,9 +101,10 @@ async function captureEditor() {
     const response = await page.goto(publicUrl, { waitUntil: "networkidle" });
     assert.equal(response.status(), 200);
     await page.getByRole("heading", { name: heroTitle }).waitFor();
-    await page.getByRole("heading", { name: "What makes this offer valuable" }).waitFor();
-    await page.getByRole("heading", { name: "Trusted by customers" }).waitFor();
-    await page.getByRole("heading", { name: "Ready to get started?" }).waitFor();
+    await page.getByRole("heading", { name: "What the service includes" }).waitFor();
+    await page.getByRole("heading", { name: "Describe the work you have in mind" }).waitFor();
+    await page.getByRole("button", { name: "Request an estimate" }).waitFor();
+    await page.getByLabel("Describe the scope for an estimate").waitFor();
     await page.waitForTimeout(1600);
     return { video: page.video(), publicUrl };
   } catch (error) {
@@ -106,16 +127,13 @@ async function capturePublishedPage(publicUrl) {
     const response = await page.goto(publicUrl, { waitUntil: "networkidle" });
     assert.equal(response.status(), 200);
     await page.getByRole("heading", { name: heroTitle }).waitFor();
-    await page.getByRole("heading", { name: "What makes this offer valuable" }).waitFor();
-    await page.getByRole("heading", { name: "Trusted by customers" }).waitFor();
-    await page.getByRole("heading", { name: "Ready to get started?" }).waitFor();
+    await page.getByRole("heading", { name: "What the service includes" }).waitFor();
+    await page.getByRole("heading", { name: "Describe the work you have in mind" }).waitFor();
     await page.waitForTimeout(1000);
     await page.evaluate(() => window.scrollTo({ top: window.innerHeight * 0.7, behavior: "smooth" }));
     await page.waitForTimeout(1700);
-    await page.evaluate(() => window.scrollTo({ top: window.innerHeight * 1.45, behavior: "smooth" }));
+    await page.getByLabel("Describe the scope for an estimate").scrollIntoViewIfNeeded();
     await page.waitForTimeout(1700);
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }));
-    await page.waitForTimeout(1000);
     return page.video();
   } catch (error) {
     throw new Error(`Published page demo capture failed at ${page.url()}: ${error}`);

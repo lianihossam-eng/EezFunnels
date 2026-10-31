@@ -7,15 +7,16 @@ An open-source, Rust-first funnel builder for single-owner deployments on your o
 
 ## Demo
 
-These recordings show the current dashboard creating a webinar funnel, editing its content, previewing it at mobile width, and publishing it. The sample was created in the locally built application with disposable local data; it does not represent a production deployment.
+These recordings show the quote-request recipe being created, edited, saved, published, and viewed at mobile width. The sample uses fictional local copy and disposable data; it does not represent a production deployment or a real service result.
 
-![Create a funnel, edit its typed content, preview the mobile layout, and publish it](docs/assets/dashboard-demo.gif)
+![Create and edit a service estimate-request funnel, preview it at mobile width, and publish it](docs/assets/dashboard-demo.gif)
 
-![The published sample funnel in a mobile browser, from its hero section through the call to action](docs/assets/published-page-demo.gif)
+![The published estimate-request page in a mobile browser, including its scope form and price/date limits](docs/assets/published-page-demo.gif)
 
 ## What you can do
 
 - Create and manage funnels from five starter blueprints: tripwire, video sales letter, webinar, product launch, and lead generation.
+- Start a service funnel from a contact, estimate-request, or diagnostic-request recipe. Each creates a new document; later recipe changes do not alter existing funnels, and none promises a booking, price, diagnosis, or response date.
 - Build multi-page funnels: add steps, edit each page title and URL slug, connect pages with buttons, and preview at mobile, tablet, and desktop widths. See [Pages and steps](docs/pages.md) for the editor behavior.
 - Edit typed sections, supported content blocks, actions, and theme settings in the dashboard.
 - Describe service offers with exact decimal prices, stated units and conditions, and reusable side-by-side comparisons. An announced total is entered explicitly; it is not calculated and no order is created.
@@ -24,16 +25,16 @@ These recordings show the current dashboard creating a webinar funnel, editing i
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.
 - Publish canonical links for public pages and serve a generated sitemap and crawler guidance using operator-configured HTTPS origins. Map custom hostnames from an operator-controlled Cloudflare zone to individual funnels. See [SEO and crawler guidance](docs/seo.md) and [Deploy](docs/deploy.md).
-- Create and edit V2 forms in the typed editor, then capture submissions from published pages. See [Public forms](docs/forms.md) for current limits and data handling.
-- Review retained submissions in the inbox and track follow-up as new, contacted, qualified, or closed.
-- Review retained form completion counts by UTC date, stable form ID, and a closed campaign-channel category derived from `utm_medium` on the page containing the form. The report contains counts only; it does not track visits or calculate conversion rates.
-- Review retained consent-based page and form interaction event counts by UTC date, event kind, and configured campaign ID. This aggregate report does not identify visitors or calculate conversion rates; see [Interaction measurement](docs/analytics.md).
+- Create French or English V2 forms, recover from public validation errors, and capture bounded, idempotent submissions. See [Public forms](docs/forms.md) for consent and data-handling details.
+- Review retained submissions, export or erase one response, and track follow-up history and next actions in the private inbox.
+- Configure an optional signed webhook for selected form fields. Delivery is disabled until the operator enables it; retries can result in zero, one, or multiple receiver deliveries, and a `2xx` confirms acceptance only.
+- Review retained form completions and consented interactions, with registered campaign IDs and explicit collection, retention, and cohort coverage. Reports do not identify visitors or infer visitor-to-request, sales, or payment rates; see [Interaction measurement](docs/analytics.md).
 - Use the native `eez` CLI to list, create, and publish funnels, retry an ambiguous mutation, or forward a Wrangler deploy command.
 - Connect an MCP client to `/mcp` with a Worker Bearer secret. The server exposes `list_commands`, `execute_command`, `list_funnels`, and `get_funnel`.
 
 ## Scope and current limits
 
-Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. The dashboard exports saved V2 funnels as versioned JSON templates and imports them as new unpublished drafts; templates contain the public document and media manifest, never briefs, submissions, or secrets. Missing images must be replaced with assets already in the target media library. The application does not provide custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly.
+Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. The dashboard exports saved V2 funnels as versioned JSON templates and imports them as new unpublished drafts; templates contain the public document and media manifest, never briefs, submissions, or secrets. Missing images must be replaced with assets already in the target media library. The application does not provide custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly. The [public edition contract](docs/public-edition.md) defines current behavior and boundaries; the [future pilot readiness guide](docs/runbooks/public-pilot-readiness.md) describes an operator rehearsal and rollback without claiming a remote deployment has occurred.
 
 ## Quickstart
 
