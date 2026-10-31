@@ -10,6 +10,10 @@ The series starts from EezFunnels commit 65feaeee and the funnel-hacking documen
 | Usable request | PUB-007–PUB-011 | Export and erase a request, recover from webhook failure, verify stable retry identity with a deduplicating local receiver, and record owner follow-up. |
 | Honest reporting | PUB-012–PUB-014 | Respect measurement consent and retention, show report coverage, and calculate outcomes only over eligible retained submissions. |
 | Page composition | PUB-015–PUB-019 | Build the three service recipes with accessible controls while preserving old revisions and local drafts. |
-| Portability and release preparation | PUB-020–PUB-021 | Round-trip a template with available media, document bounded restoration, and leave current CI green. |
+| Portability and release preparation | PUB-020–PUB-021 | Round-trip a template with available media, verify the application recovery gate with restored D1 rows and intact R2 journals, document the future pilot/rollback boundary, and leave current CI green. |
 
 A gate passes only when its behavior and compatibility checks are recorded in the linked PRs. Closing issue 82 requires all 21 PRs merged, the final main validated, and local verification evidence published in the issue. The series prepares a future remote pilot; it does not deploy, publish a release, or contact a real webhook receiver.
+
+## Verification boundary
+
+The final evidence is local `cargo xtask ci`, hosted repository checks, browser smokes, and targeted integration scripts on the merged commits. The public-form recovery smoke restores erased submission rows and delivery tasks in local D1 while retaining the local R2 journal, then verifies that reconciliation removes suppressed rows and opens the gate. This exercises EezFunnels' recovery protocol; it does not execute Cloudflare D1 Time Travel or prove account-specific backup retention. The [future pilot readiness guide](runbooks/public-pilot-readiness.md) keeps those operator checks explicit.
