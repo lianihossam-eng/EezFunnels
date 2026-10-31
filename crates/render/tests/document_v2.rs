@@ -52,6 +52,50 @@ fn document_with_functional_blocks() -> DocumentV2 {
         .expect("valid functional blocks")
 }
 
+fn document_with_offers() -> DocumentV2 {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["language"] = serde_json::json!("fr");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {
+            "id": "offer-starter",
+            "kind": "offer_card",
+            "title": "Offre <Essentielle>",
+            "scope": "Un atelier\net des notes",
+            "price": {
+                "kind": "recurring",
+                "initial_amount": "500.00",
+                "recurring_amount": "250.00",
+                "period": "monthly",
+                "announced_total": "3500.00",
+                "currency": "EUR",
+                "unit": "projet"
+            },
+            "conditions": "Engagement de 12 mois & conditions écrites"
+        },
+        {
+            "id": "offer-plus",
+            "kind": "offer_card",
+            "title": "Offre Plus",
+            "scope": "Un audit",
+            "price": {
+                "kind": "one_time",
+                "amount": "1200.00",
+                "currency": "EUR",
+                "unit": "mission"
+            },
+            "conditions": "Périmètre convenu avant démarrage"
+        },
+        {
+            "id": "offer-comparison",
+            "kind": "offer_comparison",
+            "offer_ids": ["offer-starter", "offer-plus"]
+        }
+    ]);
+    DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
+        .expect("valid offer document")
+}
+
 fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String {
     let mut manifest: serde_json::Value =
         serde_json::from_str(manifest_json).expect("serialized manifest");
@@ -61,7 +105,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v10_manifest_binds_row_document_theme_and_assets() {
+fn renderer_v10_profile_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -70,7 +114,13 @@ fn exact_renderer_v10_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    let renderer_v10 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&renderer_v10).unwrap()["renderer_version"],
+        "renderer-v10"
+    );
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -84,7 +134,7 @@ fn exact_renderer_v10_manifest_binds_row_document_theme_and_assets() {
         "funnel-01",
         "revision-v2-01",
         &prepared.data_json,
-        &prepared.render_manifest_json,
+        &renderer_v10,
     )
     .expect("exact V2 row renders");
     assert!(html.contains("Welcome to your new funnel"));
@@ -187,13 +237,15 @@ fn renderer_v8_keeps_the_historical_section_markup() {
 fn renderer_v10_renders_accessible_native_faq_and_steps_with_escaped_text() {
     let document = document_with_functional_blocks();
     let prepared = prepare_revision(&document, "revision-functional-blocks").expect("revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    let renderer_v10 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
     let html = render_published(
         2,
         "funnel-01",
         "revision-functional-blocks",
         &prepared.data_json,
-        &prepared.render_manifest_json,
+        &renderer_v10,
     )
     .expect("renderer-v10 supports functional blocks");
     let preview = render_owner_preview(&document, document.entry_page_id())
@@ -209,6 +261,54 @@ fn renderer_v10_renders_accessible_native_faq_and_steps_with_escaped_text() {
         assert!(rendered.contains(".v2-faq-item>summary:focus-visible"));
         assert!(!rendered.contains("<script"));
     }
+}
+
+#[test]
+fn renderer_v11_reuses_exact_offer_values_in_cards_and_a_mobile_readable_comparison() {
+    let document = document_with_offers();
+    let prepared = prepare_revision(&document, "revision-offers").expect("offer revision");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    let html = render_published(
+        2,
+        "funnel-01",
+        "revision-offers",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("renderer-v11 supports offer pricing");
+    let preview = render_owner_preview(&document, document.entry_page_id()).expect("preview");
+
+    for rendered in [&html, &preview] {
+        assert!(rendered.contains("<article class=\"v2-offer-card\"><h2 class=\"v2-offer-title\">Offre &lt;Essentielle&gt;</h2>"));
+        assert!(rendered.contains("EUR 250.00 par projet / mois"));
+        assert!(rendered.contains("EUR 3500.00 par projet"));
+        assert_eq!(rendered.matches("Un atelier").count(), 2);
+        assert_eq!(rendered.matches("Engagement de 12 mois").count(), 2);
+        assert!(rendered.contains("Engagement de 12 mois &amp; conditions écrites"));
+        assert!(rendered
+            .contains("role=\"region\" tabindex=\"0\" aria-label=\"Comparaison des offres\""));
+        assert!(rendered.contains(
+            "<table class=\"v2-offer-comparison\"><caption>Comparaison des offres</caption>"
+        ));
+        assert!(rendered.contains("v2-offer-comparison-scroll"));
+        assert!(rendered.contains(".v2-offer-comparison-scroll{max-width:100%;overflow-x:auto"));
+        assert!(!rendered.contains("3500.00 par projet / mois"));
+    }
+    assert_eq!(html.matches("EUR 250.00 par projet / mois").count(), 2);
+
+    let renderer_v10 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
+    assert_eq!(
+        validate_revision_v2(
+            2,
+            "funnel-01",
+            "revision-offers",
+            &prepared.data_json,
+            &renderer_v10,
+        )
+        .expect_err("renderer-v10 does not support offers"),
+        V2RenderError::OfferPricingNotEnabled
+    );
 }
 
 #[test]
@@ -346,7 +446,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v10", "renderer-v10-next");
+        .replace("renderer-v11", "renderer-v11-next");
     assert!(matches!(
         render_published(
             2,
@@ -969,13 +1069,15 @@ fn renderer_v10_metadata_escapes_title_and_attributes_in_preview_and_public_html
     let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
         .expect("metadata document");
     let prepared = prepare_revision(&document, "revision-seo").expect("metadata revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    let renderer_v10 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
     let published = render_published(
         2,
         "funnel-01",
         "revision-seo",
         &prepared.data_json,
-        &prepared.render_manifest_json,
+        &renderer_v10,
     )
     .expect("public metadata");
     let preview = render_owner_preview(&document, document.entry_page_id()).expect("preview");

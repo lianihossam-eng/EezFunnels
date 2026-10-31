@@ -1,9 +1,10 @@
 use eez_domain::document_v2::{
-    validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, DocumentV2, Edit,
-    FontFamily, FormField, FormId, FormPresentation, FormResult, FormSubmissionIssueCode,
-    FormSubmissionIssueTarget, FormSubmissionValue, GeneratedPlaceholderPageField,
-    GeneratedPlaceholderTarget, IdKind, IdSource, NewBlock, PublicLanguage, SectionId, SectionKind,
-    TextPresentation, ThemeColors, ThemeOverrides, TypeScale,
+    validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, CurrencyCode,
+    DocumentV2, Edit, ExactPriceAmount, FontFamily, FormField, FormId, FormPresentation,
+    FormResult, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
+    GeneratedPlaceholderPageField, GeneratedPlaceholderTarget, IdKind, IdSource, NewBlock,
+    PublicLanguage, SectionId, SectionKind, TextPresentation, ThemeColors, ThemeOverrides,
+    TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -59,6 +60,280 @@ fn document_with_lead_form_with_name_limit(max_length: u32) -> DocumentV2 {
     }]);
     let encoded = serde_json::to_vec(&value).expect("form document serialization");
     DocumentV2::decode(&encoded, "funnel-01").expect("valid lead form document")
+}
+
+#[test]
+fn offer_price_types_keep_exact_decimals_and_reject_ambiguous_amounts_and_currencies() {
+    for amount in ["0", "0.00", "1250.50", "123456789012.999"] {
+        let parsed = ExactPriceAmount::parse(amount).expect("valid exact decimal");
+        assert_eq!(parsed.as_str(), amount);
+    }
+    for amount in [
+        "",
+        "-1",
+        "+1",
+        "1e3",
+        "1,000",
+        "01",
+        "1.",
+        ".5",
+        "1.0000",
+        "1234567890123",
+        "１２",
+    ] {
+        assert!(
+            ExactPriceAmount::parse(amount).is_err(),
+            "accepted {amount:?}"
+        );
+    }
+
+    assert_eq!(CurrencyCode::parse("EUR").unwrap().as_str(), "EUR");
+    for currency in ["eur", "EU", "EURO", "ÉUR", "E1R"] {
+        assert!(
+            CurrencyCode::parse(currency).is_err(),
+            "accepted {currency:?}"
+        );
+    }
+}
+
+#[test]
+fn offer_amount_and_currency_parsers_survive_deterministic_fuzz_inputs() {
+    const TOKENS: &[char] = &[
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ',', '-', '+', 'e', 'E', ' ', '\t',
+        '\n', 'A', 'B', 'C', 'a', 'z', '€', '🦀', '\0', '/',
+    ];
+    let seeds = ["0", "1250.50", "123456789012.999", "EUR", "eur", "1e3"];
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    for case_number in 0..10_000 {
+        let input = if case_number % 5 == 0 {
+            seeds[case_number % seeds.len()].to_owned()
+        } else {
+            let length = (next_price_fuzz_value(&mut state) % 48) as usize;
+            (0..length)
+                .map(|_| TOKENS[(next_price_fuzz_value(&mut state) as usize) % TOKENS.len()])
+                .collect::<String>()
+        };
+        let json_string = serde_json::to_string(&input).expect("input string encodes as JSON");
+        let result = std::panic::catch_unwind(|| {
+            if let Ok(amount) = ExactPriceAmount::parse(input.clone()) {
+                assert_eq!(amount.as_str(), input);
+                let decoded: ExactPriceAmount =
+                    serde_json::from_str(&json_string).expect("accepted amount deserializes");
+                assert_eq!(decoded.as_str(), input);
+            }
+            if let Ok(currency) = CurrencyCode::parse(input.clone()) {
+                assert_eq!(currency.as_str(), input);
+                let decoded: CurrencyCode =
+                    serde_json::from_str(&json_string).expect("accepted currency deserializes");
+                assert_eq!(decoded.as_str(), input);
+            }
+            for non_string in ["null", "true", "12", "12.50", "[]", "{}"] {
+                assert!(serde_json::from_str::<ExactPriceAmount>(non_string).is_err());
+                assert!(serde_json::from_str::<CurrencyCode>(non_string).is_err());
+            }
+        });
+        assert!(
+            result.is_ok(),
+            "parser panicked for fuzz case {case_number}"
+        );
+    }
+}
+
+fn next_price_fuzz_value(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state
+}
+
+#[test]
+fn absent_offer_price_stays_omitted_and_explicit_null_is_rejected() {
+    let document = decode_with_blocks(serde_json::json!([{
+        "id":"offer-incomplete",
+        "kind":"offer_card",
+        "title":"",
+        "scope":"",
+        "conditions":""
+    }]))
+    .expect("incomplete offer can be saved as a draft");
+    let canonical: serde_json::Value =
+        serde_json::from_slice(document.canonical_bytes()).expect("canonical JSON");
+    let offer = &canonical["pages"][0]["sections"][0]["blocks"][0];
+    assert!(offer.get("price").is_none());
+
+    let error = decode_with_blocks(serde_json::json!([{
+        "id":"offer-incomplete",
+        "kind":"offer_card",
+        "title":"",
+        "scope":"",
+        "price":null,
+        "conditions":""
+    }]))
+    .expect_err("explicit null must not be accepted as an omitted field");
+    assert_eq!(error.code(), "validation/document_invalid");
+}
+
+#[test]
+fn offer_comparisons_require_distinct_existing_offer_cards() {
+    let offers = serde_json::json!([
+        {"id":"offer-one", "kind":"offer_card", "title":"One", "scope":"Scope", "conditions":"Terms"},
+        {"id":"offer-two", "kind":"offer_card", "title":"Two", "scope":"Scope", "conditions":"Terms"}
+    ]);
+    let mut blocks = offers.as_array().unwrap().clone();
+    blocks.push(serde_json::json!({
+        "id":"offer-compare", "kind":"offer_comparison", "offer_ids":["offer-one", "offer-two"]
+    }));
+    assert!(decode_with_blocks(serde_json::Value::Array(blocks)).is_ok());
+
+    for (ids, expected_code) in [
+        (serde_json::json!([]), "validation/offer_comparison_count"),
+        (
+            serde_json::json!(["offer-one"]),
+            "validation/offer_comparison_count",
+        ),
+        (
+            serde_json::json!([
+                "offer-one",
+                "offer-two",
+                "offer-three",
+                "offer-four",
+                "offer-five"
+            ]),
+            "validation/offer_comparison_count",
+        ),
+        (
+            serde_json::json!(["offer-one", "offer-one"]),
+            "validation/offer_comparison_duplicate",
+        ),
+        (
+            serde_json::json!(["offer-one", "offer-missing"]),
+            "validation/offer_comparison_offer_missing",
+        ),
+    ] {
+        let mut blocks = offers.as_array().unwrap().clone();
+        blocks.push(serde_json::json!({
+            "id":"offer-compare", "kind":"offer_comparison", "offer_ids":ids
+        }));
+        assert_eq!(
+            decode_with_blocks(serde_json::Value::Array(blocks))
+                .expect_err("invalid comparison must fail closed")
+                .code(),
+            expected_code
+        );
+    }
+}
+
+#[test]
+fn repeated_offer_comparisons_cannot_exceed_the_render_expansion_budget() {
+    const COMPARISONS: usize = 200;
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("minimal document");
+    let mut sections = Vec::new();
+    for section_index in 0..5 {
+        let mut blocks = Vec::new();
+        if section_index == 0 {
+            blocks.extend([
+                serde_json::json!({
+                    "id":"offer-one",
+                    "kind":"offer_card",
+                    "title":"One",
+                    "scope":"&".repeat(512),
+                    "conditions":"&".repeat(512)
+                }),
+                serde_json::json!({
+                    "id":"offer-two",
+                    "kind":"offer_card",
+                    "title":"Two",
+                    "scope":"&".repeat(512),
+                    "conditions":"&".repeat(512)
+                }),
+            ]);
+        }
+        let first = section_index * 40;
+        let last = (first + 40).min(COMPARISONS);
+        blocks.extend((first..last).map(|index| {
+            serde_json::json!({
+                "id":format!("comparison-{index}"),
+                "kind":"offer_comparison",
+                "offer_ids":["offer-one", "offer-two"]
+            })
+        }));
+        sections.push(serde_json::json!({
+            "id":format!("section-offers-{section_index}"),
+            "type":"features",
+            "blocks":blocks
+        }));
+    }
+    value["pages"][0]["sections"] = serde_json::Value::Array(sections);
+
+    let raw = serde_json::to_vec(&value).expect("bounded comparison fixture");
+    let error = DocumentV2::decode(&raw, "funnel-01")
+        .expect_err("repeated comparisons exceed the bounded render expansion");
+    assert_eq!(error.code(), "validation/offer_comparison_render_budget");
+}
+
+#[test]
+fn deleting_an_offer_referenced_by_a_comparison_is_rejected_atomically() {
+    let mut blocks = serde_json::json!([
+        {"id":"offer-one", "kind":"offer_card", "title":"One", "scope":"Scope", "conditions":"Terms"},
+        {"id":"offer-two", "kind":"offer_card", "title":"Two", "scope":"Scope", "conditions":"Terms"},
+        {"id":"offer-compare", "kind":"offer_comparison", "offer_ids":["offer-one", "offer-two"]}
+    ]);
+    let document = decode_with_blocks(blocks.take()).expect("valid source document");
+    let before = document.canonical_bytes().to_vec();
+    let mut ids = TestIds(0);
+    let error = document
+        .apply(
+            Edit::DeleteBlock {
+                section: SectionId::parse("section-hero").expect("section id"),
+                block: eez_domain::document_v2::BlockId::parse("offer-one")
+                    .expect("offer block id"),
+            },
+            &mut ids,
+        )
+        .expect_err("a referenced offer cannot be deleted");
+
+    assert_eq!(error.code(), "validation/offer_in_use");
+    assert_eq!(document.canonical_bytes(), before);
+}
+
+#[test]
+fn duplicating_a_section_remaps_its_comparison_to_the_copied_offers() {
+    let document = decode_with_blocks(serde_json::json!([
+        {"id":"offer-one", "kind":"offer_card", "title":"One", "scope":"Scope", "conditions":"Terms"},
+        {"id":"offer-two", "kind":"offer_card", "title":"Two", "scope":"Scope", "conditions":"Terms"},
+        {"id":"offer-compare", "kind":"offer_comparison", "offer_ids":["offer-one", "offer-two"]}
+    ]))
+    .expect("valid offer comparison document");
+    let mut ids = TestIds(0);
+    let copied = document
+        .apply(
+            Edit::DuplicateSection {
+                page: document.pages()[0].id().clone(),
+                section: document.pages()[0].sections()[0].id().clone(),
+            },
+            &mut ids,
+        )
+        .expect("offer section can be duplicated")
+        .document;
+    let copied_blocks = copied.pages()[0].sections()[1].blocks();
+    let copied_offer_ids = copied_blocks
+        .iter()
+        .filter_map(|block| match block {
+            BlockV2::OfferCard { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let copied_comparison_ids = copied_blocks
+        .iter()
+        .find_map(|block| match block {
+            BlockV2::OfferComparison { offer_ids, .. } => Some(offer_ids.clone()),
+            _ => None,
+        })
+        .expect("copied comparison remains in the duplicated section");
+
+    assert_eq!(copied_comparison_ids, copied_offer_ids);
+    assert_ne!(copied_comparison_ids[0].as_str(), "offer-one");
+    assert_ne!(copied_comparison_ids[1].as_str(), "offer-two");
 }
 
 #[test]
@@ -217,6 +492,46 @@ fn generated_placeholder_markers_follow_text_when_retyped_into_other_public_bloc
         assert_eq!(marked_block, &block_id);
         assert!(original.has_valid_generated_placeholder_transition(&edited));
     }
+}
+
+#[test]
+fn generated_placeholder_markers_follow_text_into_an_offer_price_unit() {
+    let original = DocumentV2::starter(
+        "funnel-offer-placeholder",
+        BlueprintId::Tripwire,
+        ThemePreset::Minimal,
+    )
+    .expect("Tripwire starter");
+    let expected_text = original.generated_placeholders()[0].expected_text.clone();
+    let block_id = eez_domain::document_v2::BlockId::parse("block-hero-copy").expect("block id");
+    let mut ids = TestIds(0);
+    let edited = original
+        .apply(
+            Edit::SetBlock {
+                block: block_id.clone(),
+                value: NewBlock::OfferCard {
+                    title: "Service offer".to_owned(),
+                    scope: "One project".to_owned(),
+                    price: Some(eez_domain::document_v2::OfferPriceV2::OneTime {
+                        amount: None,
+                        currency: None,
+                        unit: expected_text.clone(),
+                    }),
+                    conditions: "Agreed in writing".to_owned(),
+                },
+            },
+            &mut ids,
+        )
+        .expect("offer unit can carry the text for readiness to flag")
+        .document;
+
+    assert!(edited.generated_placeholders().iter().any(|marker| {
+        marker.expected_text == expected_text
+            && matches!(
+                &marker.target,
+                GeneratedPlaceholderTarget::Block { block_id: target, .. } if target == &block_id
+            )
+    }));
 }
 
 #[test]

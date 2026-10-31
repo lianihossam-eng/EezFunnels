@@ -4,11 +4,14 @@ use crate::routes::RouteView;
 use eez_domain::document_v2::PublicLanguage;
 use eez_domain::document_v2::{
     is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FaqItem, FocusTarget, FormField,
-    FormResult, IdKind, IdSource, NewBlock, SectionKind, StepItem, MAX_FUNCTIONAL_BLOCK_ITEMS,
-    SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
+    FormResult, IdKind, IdSource, NewBlock, OfferPriceV2, SectionKind, StepItem,
+    MAX_FUNCTIONAL_BLOCK_ITEMS, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
 };
 #[cfg(feature = "browser")]
-use eez_domain::document_v2::{AssetId, BlockId, ImageAlt};
+use eez_domain::document_v2::{
+    AssetId, BlockId, CurrencyCode, ExactPriceAmount, ImageAlt, PricePeriod,
+    MAX_OFFER_COMPARISON_ITEMS,
+};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::document_v2::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
@@ -21,6 +24,8 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "browser")]
 mod form_builder;
+#[cfg(feature = "browser")]
+mod offers;
 #[cfg(feature = "browser")]
 use form_builder::V2FormEditor;
 #[cfg(feature = "browser")]

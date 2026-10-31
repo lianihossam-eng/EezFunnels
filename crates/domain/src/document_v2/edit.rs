@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::model::{
     BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FaqItem, FieldId,
-    FormField, FormId, FormPresentation, FormResult, FormV2, PageId, PageV2, PublicLanguage,
-    SectionId, SectionKind, SectionV2, StepItem, TextPresentation, ValidationRange,
+    FormField, FormId, FormPresentation, FormResult, FormV2, OfferPriceV2, PageId, PageV2,
+    PublicLanguage, SectionId, SectionKind, SectionV2, StepItem, TextPresentation, ValidationRange,
 };
 use super::theme::ThemeOverrides;
 use crate::ThemePreset;
@@ -53,6 +53,15 @@ pub enum NewBlock {
     },
     Steps {
         items: Vec<StepItem>,
+    },
+    OfferCard {
+        title: String,
+        scope: String,
+        price: Option<OfferPriceV2>,
+        conditions: String,
+    },
+    OfferComparison {
+        offer_ids: Vec<BlockId>,
     },
 }
 
@@ -490,11 +499,18 @@ impl DocumentV2 {
                 FocusTarget::Block(blocks[insertion].id().clone())
             }
             Edit::DeleteBlock { section, block } => {
+                let references_offer = offer_is_referenced(&data, &block);
                 let blocks = &mut section_mut(&mut data, &section)?.blocks;
                 let index = blocks
                     .iter()
                     .position(|candidate| candidate.id() == &block)
                     .ok_or_else(|| DocumentError::at("validation/block_missing", "block_id"))?;
+                if matches!(blocks[index], BlockV2::OfferCard { .. }) && references_offer {
+                    return Err(DocumentError::at(
+                        "validation/offer_in_use",
+                        "blocks.offer_ids",
+                    ));
+                }
                 blocks.remove(index);
                 prune_unplaced_forms(&mut data);
                 select_after_block_delete(&data, &section, index)?
@@ -696,8 +712,31 @@ impl NewBlock {
             Self::Form { form_id } => BlockV2::Form { id, form_id },
             Self::Faq { items } => BlockV2::Faq { id, items },
             Self::Steps { items } => BlockV2::Steps { id, items },
+            Self::OfferCard {
+                title,
+                scope,
+                price,
+                conditions,
+            } => BlockV2::OfferCard {
+                id,
+                title,
+                scope,
+                price,
+                conditions,
+            },
+            Self::OfferComparison { offer_ids } => BlockV2::OfferComparison { id, offer_ids },
         }
     }
+}
+
+fn offer_is_referenced(data: &DocumentData, offer_id: &BlockId) -> bool {
+    data.pages.iter().any(|page| {
+        page.sections.iter().any(|section| {
+            section.blocks.iter().any(|block| {
+                matches!(block, BlockV2::OfferComparison { offer_ids, .. } if offer_ids.contains(offer_id))
+            })
+        })
+    })
 }
 
 impl NewFormField {
@@ -869,12 +908,17 @@ fn duplicate_section(
 ) -> Result<SectionV2, DocumentError> {
     source.id = SectionId::from_validated(allocate_id(ids, IdKind::Section, section_ids(data))?);
     let mut used_block_ids = block_ids(data);
-    for block in &mut source.blocks {
-        let old = block.clone();
+    let mut copied_blocks = Vec::with_capacity(source.blocks.len());
+    let mut copied_block_ids = BTreeMap::new();
+    for block in &source.blocks {
         let value = allocate_id(ids, IdKind::Block, used_block_ids.clone())?;
         used_block_ids.insert(value.clone());
         let new_id = super::BlockId::from_validated(value);
-        *block = duplicate_block_with_id(data, old, new_id, ids)?;
+        copied_block_ids.insert(block.id().clone(), new_id.clone());
+        copied_blocks.push((block.clone(), new_id));
+    }
+    for (block, (original, new_id)) in source.blocks.iter_mut().zip(copied_blocks) {
+        *block = duplicate_block_with_id(data, original, new_id, ids, &copied_block_ids)?;
     }
     Ok(source)
 }
@@ -885,7 +929,7 @@ fn duplicate_block(
     ids: &mut impl IdSource,
 ) -> Result<BlockV2, DocumentError> {
     let id = super::BlockId::from_validated(allocate_id(ids, IdKind::Block, block_ids(data))?);
-    duplicate_block_with_id(data, source, id, ids)
+    duplicate_block_with_id(data, source, id, ids, &BTreeMap::new())
 }
 
 fn duplicate_block_with_id(
@@ -893,6 +937,7 @@ fn duplicate_block_with_id(
     source: BlockV2,
     id: super::BlockId,
     ids: &mut impl IdSource,
+    copied_block_ids: &BTreeMap<BlockId, BlockId>,
 ) -> Result<BlockV2, DocumentError> {
     Ok(match source {
         BlockV2::Heading { level, text, .. } => BlockV2::Heading { id, level, text },
@@ -917,6 +962,26 @@ fn duplicate_block_with_id(
         }
         BlockV2::Faq { items, .. } => BlockV2::Faq { id, items },
         BlockV2::Steps { items, .. } => BlockV2::Steps { id, items },
+        BlockV2::OfferCard {
+            title,
+            scope,
+            price,
+            conditions,
+            ..
+        } => BlockV2::OfferCard {
+            id,
+            title,
+            scope,
+            price,
+            conditions,
+        },
+        BlockV2::OfferComparison { offer_ids, .. } => BlockV2::OfferComparison {
+            id,
+            offer_ids: offer_ids
+                .into_iter()
+                .map(|offer_id| copied_block_ids.get(&offer_id).cloned().unwrap_or(offer_id))
+                .collect(),
+        },
     })
 }
 

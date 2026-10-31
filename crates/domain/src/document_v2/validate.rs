@@ -7,9 +7,10 @@ use url::Url;
 use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
     FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
-    FormSubmissionValue, FormV2, PageId, TextPresentation, ValidatedFormSubmission,
+    FormSubmissionValue, FormV2, OfferPriceV2, PageId, TextPresentation, ValidatedFormSubmission,
     MAX_FUNCTIONAL_BLOCK_ITEMS, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES,
-    MAX_FUNCTIONAL_BLOCK_TEXT_BYTES,
+    MAX_FUNCTIONAL_BLOCK_TEXT_BYTES, MAX_OFFER_COMPARISON_ITEMS, MAX_OFFER_TEXT_BYTES,
+    MAX_OFFER_UNIT_BYTES, MIN_OFFER_COMPARISON_ITEMS,
 };
 use super::placeholders::target_contains_text;
 
@@ -264,6 +265,7 @@ pub(crate) fn validate_data(
         ));
     }
 
+    validate_offer_references(data)?;
     validate_forms_and_graph(data, &page_ids)?;
     validate_generated_placeholders(data)?;
     Ok(())
@@ -439,8 +441,167 @@ fn validate_block(block: &mut BlockV2) -> Result<(), DocumentError> {
                 ]
             }),
         )?,
+        BlockV2::OfferCard {
+            title,
+            scope,
+            price,
+            conditions,
+            ..
+        } => {
+            validate_text(title, MAX_OFFER_TEXT_BYTES, "blocks.offer.title")?;
+            validate_text(scope, MAX_OFFER_TEXT_BYTES, "blocks.offer.scope")?;
+            validate_text(conditions, MAX_OFFER_TEXT_BYTES, "blocks.offer.conditions")?;
+            if let Some(price) = price {
+                validate_offer_price(price)?;
+            }
+        }
+        BlockV2::OfferComparison { offer_ids, .. } => {
+            if !(MIN_OFFER_COMPARISON_ITEMS..=MAX_OFFER_COMPARISON_ITEMS).contains(&offer_ids.len())
+            {
+                return Err(DocumentError::at(
+                    "validation/offer_comparison_count",
+                    "blocks.offer_ids",
+                ));
+            }
+            let unique = offer_ids.iter().collect::<BTreeSet<_>>();
+            if unique.len() != offer_ids.len() {
+                return Err(DocumentError::at(
+                    "validation/offer_comparison_duplicate",
+                    "blocks.offer_ids",
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn validate_offer_price(price: &mut OfferPriceV2) -> Result<(), DocumentError> {
+    let unit = match price {
+        OfferPriceV2::OneTime { unit, .. } | OfferPriceV2::Recurring { unit, .. } => unit,
+    };
+    validate_text(unit, MAX_OFFER_UNIT_BYTES, "blocks.offer.price.unit")
+}
+
+fn validate_offer_references(data: &DocumentData) -> Result<(), DocumentError> {
+    let offer_ids = data
+        .pages
+        .iter()
+        .flat_map(|page| &page.sections)
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            BlockV2::OfferCard { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for comparison in data
+        .pages
+        .iter()
+        .flat_map(|page| &page.sections)
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            BlockV2::OfferComparison { offer_ids, .. } => Some(offer_ids),
+            _ => None,
+        })
+    {
+        if comparison.iter().any(|id| !offer_ids.contains(id)) {
+            return Err(DocumentError::at(
+                "validation/offer_comparison_offer_missing",
+                "blocks.offer_ids",
+            ));
+        }
+    }
+    if offer_comparison_render_bytes_upper_bound(data) > super::MAX_OFFER_COMPARISON_RENDER_BYTES {
+        return Err(DocumentError::at(
+            "validation/offer_comparison_render_budget",
+            "blocks.offer_ids",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn offer_comparison_render_bytes_upper_bound(data: &DocumentData) -> usize {
+    const COMPARISON_BASE_BYTES: usize = 2048;
+    const OFFER_MARKUP_BYTES: usize = 2048;
+    const MAX_ESCAPED_BYTES_PER_SOURCE_BYTE: usize = 9;
+
+    let mut offer_source_bytes = BTreeMap::new();
+    for block in data
+        .pages
+        .iter()
+        .flat_map(|page| &page.sections)
+        .flat_map(|section| &section.blocks)
+    {
+        if let BlockV2::OfferCard {
+            id,
+            title,
+            scope,
+            price,
+            conditions,
+        } = block
+        {
+            let price_bytes = match price {
+                Some(OfferPriceV2::OneTime {
+                    amount,
+                    currency,
+                    unit,
+                }) => amount
+                    .as_ref()
+                    .map_or(0, |value| value.as_str().len())
+                    .saturating_add(currency.as_ref().map_or(0, |value| value.as_str().len()))
+                    .saturating_add(unit.len()),
+                Some(OfferPriceV2::Recurring {
+                    initial_amount,
+                    recurring_amount,
+                    announced_total,
+                    currency,
+                    unit,
+                    ..
+                }) => initial_amount
+                    .as_ref()
+                    .map_or(0, |value| value.as_str().len())
+                    .saturating_add(
+                        recurring_amount
+                            .as_ref()
+                            .map_or(0, |value| value.as_str().len()),
+                    )
+                    .saturating_add(
+                        announced_total
+                            .as_ref()
+                            .map_or(0, |value| value.as_str().len()),
+                    )
+                    .saturating_add(currency.as_ref().map_or(0, |value| value.as_str().len()))
+                    .saturating_add(unit.len()),
+                None => 0,
+            };
+            let source_bytes = title
+                .len()
+                .saturating_add(scope.len())
+                .saturating_add(conditions.len())
+                .saturating_add(price_bytes);
+            offer_source_bytes.insert(id, source_bytes);
+        }
+    }
+
+    let mut bound = 0usize;
+    for offer_ids in data
+        .pages
+        .iter()
+        .flat_map(|page| &page.sections)
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            BlockV2::OfferComparison { offer_ids, .. } => Some(offer_ids),
+            _ => None,
+        })
+    {
+        bound = bound.saturating_add(COMPARISON_BASE_BYTES);
+        for offer_id in offer_ids {
+            let source_bytes = offer_source_bytes.get(offer_id).copied().unwrap_or(0);
+            bound = bound
+                .saturating_add(OFFER_MARKUP_BYTES)
+                .saturating_add(source_bytes.saturating_mul(MAX_ESCAPED_BYTES_PER_SOURCE_BYTE));
+        }
+    }
+    bound
 }
 
 fn validate_functional_block_items<'a>(

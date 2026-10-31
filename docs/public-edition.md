@@ -6,6 +6,10 @@ This series covers the complete public, single-owner edition. It excludes hosted
 
 The product's terms are defined in the [glossary](../GLOSSARY.md). The five application layers and their allowed dependencies are defined in [Architecture](architecture.md).
 
+## Structured service offers
+
+An owner can add an offer with its scope, exact decimal amount, currency, price unit, and conditions. Amounts use a non-negative decimal string with up to 12 whole digits and 3 decimal places; currency values use three uppercase ASCII letters. One-time and recurring prices are distinct; recurring offers can state an initial amount and an owner-entered announced total, which the system never calculates. A comparison references the same offers shown in their cards, so scope, prices, and conditions stay consistent. Incomplete offers may remain in a draft but block publication. These content blocks describe terms and do not accept orders, calculate discounts, or imply availability.
+
 ## Capability snapshot
 
 This table records the capabilities on the series baseline, commit 65feaeee, and the boundaries maintained by the public improvement series. It is a baseline snapshot; issue 82 is the live source for delivery progress.
