@@ -35,6 +35,7 @@ mod campaign_registry;
 mod canonical;
 mod custom_hosts;
 mod delivery_controls;
+mod document_portability;
 pub mod errors;
 pub mod host;
 mod json;
@@ -201,6 +202,10 @@ pub async fn fetch(
             correlation_id.clone(),
         )
         .await
+    } else if request_path == "/api/funnel-templates/inspect" {
+        document_portability::inspect_response(&env, request, &correlation_id).await
+    } else if request_path == "/api/funnel-templates/import" {
+        document_portability::import_response(&env, request, &correlation_id).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/completions") {
         funnel_completion_report_response(&env, request, funnel_id, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/interaction-report") {
@@ -222,6 +227,8 @@ pub async fn fetch(
         public_form_submission_response(&env, request, route, correlation_id.clone()).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/document") {
         funnel_document_response(&env, request, funnel_id, correlation_id.clone()).await
+    } else if let Some(funnel_id) = funnel_subroute(&request_path, "/template") {
+        document_portability::export_response(&env, request, funnel_id, &correlation_id).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/convert-v2/preview") {
         funnel_v2_conversion_response(&env, request, funnel_id, correlation_id.clone(), false).await
     } else if let Some(funnel_id) = funnel_subroute(&request_path, "/convert-v2") {
@@ -5374,6 +5381,10 @@ mod tests {
     fn v2_document_routes_and_preview_parameters_are_closed() {
         assert_eq!(
             funnel_subroute("/api/funnels/funnel-a/document", "/document"),
+            Some("funnel-a")
+        );
+        assert_eq!(
+            funnel_subroute("/api/funnels/funnel-a/template", "/template"),
             Some("funnel-a")
         );
         assert_eq!(

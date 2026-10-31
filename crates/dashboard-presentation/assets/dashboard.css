@@ -415,6 +415,12 @@ h1 {
   font-size: 10px;
 }
 
+.funnel-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .status-badge {
   padding: 4px 8px;
   border-radius: 999px;
@@ -500,6 +506,82 @@ h1 {
   color: #46536d;
   font-size: 11px;
   font-weight: 700;
+}
+
+.template-import-file-label,
+.template-import-dialog > label {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  color: #46536d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.template-import-file-label input[type="file"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px;
+  border: 1px solid #dce1eb;
+  border-radius: 8px;
+  color: #46536d;
+  background: #fff;
+  font: inherit;
+}
+
+.template-import-file-label small {
+  color: #66728a;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.template-import-summary,
+.template-import-media-list {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #e5e9f1;
+  border-radius: 9px;
+  background: #fafbfe;
+}
+
+.template-import-summary h3,
+.template-import-media-list h3 {
+  margin: 0 0 6px;
+  color: #29344e;
+  font-size: 12px;
+}
+
+.template-import-summary p,
+.template-import-media-list > p {
+  margin: 0;
+  color: #5d687d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.template-import-media-item {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.template-import-media-item label {
+  color: #46536d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.template-import-media-item select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #dce1eb;
+  border-radius: 8px;
+  color: #25304a;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
 }
 
 .funnel-dialog input[type="text"] {
@@ -1435,6 +1517,13 @@ h1 {
   .funnel-card > .text-button {
     grid-column: 2;
     grid-row: 1 / span 2;
+  }
+
+  .funnel-card-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    flex-direction: column;
+    align-items: flex-end;
   }
 
   .funnel-dialog {

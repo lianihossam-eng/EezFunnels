@@ -91,6 +91,8 @@ pub(super) fn Funnels() -> Element {
     let mut create_error = use_signal(|| None::<String>);
     let mut create_idempotency_key = use_signal(|| None::<IdempotencyKeyState>);
     let mut create_success = use_signal(|| None::<String>);
+    let mut import_open = use_signal(|| false);
+    let mut imported_funnel_id = use_signal(|| None::<String>);
     let mut delete_target = use_signal(|| None::<String>);
     let mut delete_pending = use_signal(|| false);
     let mut delete_error = use_signal(|| None::<String>);
@@ -128,6 +130,12 @@ pub(super) fn Funnels() -> Element {
         div { class: "section-heading funnel-list-heading",
             h2 { "Funnels" }
             button {
+                class: "secondary-button",
+                r#type: "button",
+                onclick: move |_| import_open.set(true),
+                "Import template"
+            }
+            button {
                 class: "primary-button",
                 r#type: "button",
                 onclick: move |_| {
@@ -140,6 +148,12 @@ pub(super) fn Funnels() -> Element {
         }
         if let Some(message) = create_success() {
             p { class: "success-message", role: "status", "{message}" }
+        }
+        if let Some(funnel_id) = imported_funnel_id() {
+            p { class: "success-message", role: "status",
+                "Template imported as an unpublished draft. "
+                Link { to: RouteView::FunnelDetail { id: funnel_id }, "Open draft" }
+            }
         }
         match load_state().response {
             None => rsx! {
@@ -195,24 +209,44 @@ pub(super) fn Funnels() -> Element {
                                 }
                                 span { "Updated {item.updated_at}" }
                             }
-                            button {
-                                class: "text-button danger-button",
-                                r#type: "button",
-                                disabled: delete_pending(),
-                                onclick: move |_| {
-                                    if delete_idempotency_target().as_deref() != Some(item.id.as_str()) {
-                                        delete_idempotency_key.set(None);
-                                        delete_idempotency_target.set(Some(item.id.clone()));
-                                    }
-                                    delete_target.set(Some(item.id.clone()));
-                                    delete_error.set(None);
-                                },
-                                "Delete"
+                            div { class: "funnel-card-actions",
+                                a {
+                                    class: "secondary-button",
+                                    href: "/api/funnels/{item.id}/template",
+                                    download: "funnel-template.json",
+                                    "Export saved template"
+                                }
+                                button {
+                                    class: "text-button danger-button",
+                                    r#type: "button",
+                                    disabled: delete_pending(),
+                                    onclick: move |_| {
+                                        if delete_idempotency_target().as_deref() != Some(item.id.as_str()) {
+                                            delete_idempotency_key.set(None);
+                                            delete_idempotency_target.set(Some(item.id.clone()));
+                                        }
+                                        delete_target.set(Some(item.id.clone()));
+                                        delete_error.set(None);
+                                    },
+                                    "Delete"
+                                }
                             }
                         }
                     }
                 }
             },
+        }
+
+        if import_open() {
+            super::funnels_import::FunnelTemplateImportDialog {
+                on_close: move |_| import_open.set(false),
+                on_imported: move |funnel_id: String| {
+                    imported_funnel_id.set(Some(funnel_id));
+                    import_open.set(false);
+                    #[cfg(feature = "browser")]
+                    spawn(async move { refresh_funnel_list(load_state).await; });
+                },
+            }
         }
 
         dialog {

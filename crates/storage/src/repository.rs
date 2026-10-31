@@ -739,6 +739,41 @@ impl<'a> Repository<'a> {
         .await
     }
 
+    pub async fn create_funnel_with_template_import_v2_revision(
+        &self,
+        funnel: &NewFunnel,
+        revision: &NewRevision,
+        command_id: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+        result_json: &str,
+    ) -> RepositoryResult<MutationResult> {
+        if revision.schema_version != 2 || command_id != "funnel.template.import.v1" {
+            return Err(RepositoryError::InvalidField("template_import_revision"));
+        }
+        self.create_funnel_with_revision_inner(
+            funnel,
+            revision,
+            command_id,
+            idempotency_key,
+            payload_json,
+            result_json,
+        )
+        .await
+    }
+
+    pub async fn template_import_replay(
+        &self,
+        idempotency_key: &str,
+        payload_json: &str,
+    ) -> RepositoryResult<Option<MutationResult>> {
+        validate_idempotency_key(idempotency_key)?;
+        self.active_receipt(idempotency_key).await.map(|receipt| {
+            receipt
+                .map(|receipt| classify_receipt(receipt, "funnel.template.import.v1", payload_json))
+        })
+    }
+
     async fn create_funnel_with_revision_inner(
         &self,
         funnel: &NewFunnel,

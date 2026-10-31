@@ -33,7 +33,7 @@ These recordings show the current dashboard creating a webinar funnel, editing i
 
 ## Scope and current limits
 
-Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. It does not provide funnel JSON import/export, custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly.
+Eez Funnel is an open-source funnel builder designed for single-owner, self-hosted use on Cloudflare. The current application has no built-in user login or multi-user roles. The dashboard exports saved V2 funnels as versioned JSON templates and imports them as new unpublished drafts; templates contain the public document and media manifest, never briefs, submissions, or secrets. Missing images must be replaced with assets already in the target media library. The application does not provide custom CSS or user-defined theme presets, a full CRM, unique-visitor analytics, full-funnel attribution, or AI generation. Interaction events are optional, consent-based aggregate counts; see [Interaction measurement](docs/analytics.md). Read [Security](docs/security.md) before exposing an instance publicly.
 
 ## Quickstart
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::io::Cursor;
 
@@ -6,7 +6,7 @@ use image::{ImageFormat, ImageReader, Limits};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use worker::d1::D1Type;
-use worker::{Bucket, D1Database, Error, HttpMetadata};
+use worker::{Bucket, D1Database, Error, HttpMetadata, Include};
 
 pub const MAX_MEDIA_ASSET_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_MEDIA_ASSET_COUNT: u64 = 1_000;
@@ -14,6 +14,8 @@ pub const MAX_MEDIA_LIBRARY_BYTES: u64 = 512 * 1024 * 1024;
 
 const MEDIA_LIST_LIMIT: i32 = 1_000;
 const MEDIA_QUERY_ID_LIMIT: usize = 100;
+const MEDIA_OBJECT_LIST_PAGE_LIMIT: u32 = 50;
+const MEDIA_OBJECT_LIST_PAGE_BUDGET: usize = 30;
 const MEDIA_UPLOAD_LEASE_SECONDS: i32 = 300;
 const MAX_IMAGE_DIMENSION: u32 = 4_096;
 const MAX_DECODE_ALLOCATION: u64 = 64 * 1024 * 1024;
@@ -200,6 +202,56 @@ impl<'a> MediaAssetRepository<'a> {
         }
         records.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(records)
+    }
+
+    pub async fn get_many_ready_with_objects(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<Vec<MediaAssetRecord>, MediaAssetError> {
+        let ready = self.get_many_ready(asset_ids).await?;
+        if ready.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pending = ready
+            .into_iter()
+            .map(|record| (format!("media/{}", record.sha256), record))
+            .collect::<HashMap<_, _>>();
+        let mut verified = Vec::with_capacity(pending.len());
+        let mut cursor = None;
+        for _ in 0..MEDIA_OBJECT_LIST_PAGE_BUDGET {
+            let mut list = self
+                .bucket
+                .list()
+                .prefix("media/")
+                .limit(MEDIA_OBJECT_LIST_PAGE_LIMIT)
+                .include(vec![Include::HttpMetadata]);
+            if let Some(cursor) = cursor.take() {
+                list = list.cursor(cursor);
+            }
+            let objects = list.execute().await.map_err(MediaAssetError::ObjectStore)?;
+            for object in objects.objects() {
+                let key = object.key();
+                let Some(record) = pending.remove(&key) else {
+                    continue;
+                };
+                let metadata = object.http_metadata();
+                if object.size() != record.size_bytes
+                    || metadata.content_type.as_deref() != Some(record.mime.as_str())
+                {
+                    return Err(MediaAssetError::IntegrityFailure);
+                }
+                verified.push(record);
+            }
+            if pending.is_empty() || !objects.truncated() {
+                verified.sort_by(|left, right| left.id.cmp(&right.id));
+                return Ok(verified);
+            }
+            cursor = objects.cursor();
+            if cursor.is_none() {
+                return Err(MediaAssetError::IntegrityFailure);
+            }
+        }
+        Err(MediaAssetError::IntegrityFailure)
     }
 
     pub async fn upload(
