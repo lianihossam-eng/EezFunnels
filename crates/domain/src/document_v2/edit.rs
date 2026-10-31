@@ -3,9 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::model::{
-    BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FaqItem, FieldId,
-    FormField, FormId, FormPresentation, FormResult, FormV2, OfferPriceV2, PageId, PageV2,
-    PublicLanguage, SectionId, SectionKind, SectionV2, StepItem, TextPresentation, ValidationRange,
+    BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, EvidenceImage,
+    EvidenceKind, EvidenceStatus, FaqItem, FieldId, FormField, FormId, FormPresentation,
+    FormResult, FormV2, OfferPriceV2, PageId, PageV2, PublicLanguage, SectionId, SectionKind,
+    SectionV2, StepItem, TextPresentation, ValidationRange,
 };
 use super::theme::ThemeOverrides;
 use crate::ThemePreset;
@@ -62,6 +63,14 @@ pub enum NewBlock {
     },
     OfferComparison {
         offer_ids: Vec<BlockId>,
+    },
+    Evidence {
+        evidence_kind: EvidenceKind,
+        title: String,
+        content: String,
+        status: EvidenceStatus,
+        limitation: String,
+        image: Option<EvidenceImage>,
     },
 }
 
@@ -725,6 +734,22 @@ impl NewBlock {
                 conditions,
             },
             Self::OfferComparison { offer_ids } => BlockV2::OfferComparison { id, offer_ids },
+            Self::Evidence {
+                evidence_kind,
+                title,
+                content,
+                status,
+                limitation,
+                image,
+            } => BlockV2::Evidence {
+                id,
+                evidence_kind,
+                title,
+                content,
+                status,
+                limitation,
+                image,
+            },
         }
     }
 }
@@ -981,6 +1006,23 @@ fn duplicate_block_with_id(
                 .into_iter()
                 .map(|offer_id| copied_block_ids.get(&offer_id).cloned().unwrap_or(offer_id))
                 .collect(),
+        },
+        BlockV2::Evidence {
+            evidence_kind,
+            title,
+            content,
+            status,
+            limitation,
+            image,
+            ..
+        } => BlockV2::Evidence {
+            id,
+            evidence_kind,
+            title,
+            content,
+            status,
+            limitation,
+            image,
         },
     })
 }

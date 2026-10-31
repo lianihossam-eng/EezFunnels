@@ -196,6 +196,7 @@ pub enum BlockKind {
     Steps,
     OfferCard,
     OfferComparison,
+    Evidence,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -210,6 +211,31 @@ pub struct FaqItem {
 pub struct StepItem {
     pub title: String,
     pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceKind {
+    Testimonial,
+    CaseStudy,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EvidenceStatus {
+    Demonstration,
+    Real {
+        attribution: String,
+        date_or_period: String,
+        scope: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceImage {
+    pub asset_id: AssetId,
+    pub alt: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -348,6 +374,10 @@ pub const MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES: usize = 2048;
 pub const MAX_FUNCTIONAL_BLOCK_TEXT_BYTES: usize = 16_384;
 pub const MAX_OFFER_TEXT_BYTES: usize = 8192;
 pub const MAX_OFFER_UNIT_BYTES: usize = 80;
+pub const MAX_EVIDENCE_TITLE_BYTES: usize = 512;
+pub const MAX_EVIDENCE_TEXT_BYTES: usize = 8192;
+pub const MAX_EVIDENCE_CONTEXT_BYTES: usize = 2048;
+pub const MAX_EVIDENCE_IMAGE_ALT_BYTES: usize = 512;
 pub const MIN_OFFER_COMPARISON_ITEMS: usize = 2;
 pub const MAX_OFFER_COMPARISON_ITEMS: usize = 4;
 
@@ -405,6 +435,20 @@ pub enum BlockV2 {
         id: BlockId,
         offer_ids: Vec<BlockId>,
     },
+    Evidence {
+        id: BlockId,
+        evidence_kind: EvidenceKind,
+        title: String,
+        content: String,
+        status: EvidenceStatus,
+        limitation: String,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        image: Option<EvidenceImage>,
+    },
 }
 
 impl BlockV2 {
@@ -419,7 +463,8 @@ impl BlockV2 {
             | Self::Faq { id, .. }
             | Self::Steps { id, .. }
             | Self::OfferCard { id, .. }
-            | Self::OfferComparison { id, .. } => id,
+            | Self::OfferComparison { id, .. }
+            | Self::Evidence { id, .. } => id,
         }
     }
 
@@ -435,6 +480,7 @@ impl BlockV2 {
             Self::Steps { .. } => BlockKind::Steps,
             Self::OfferCard { .. } => BlockKind::OfferCard,
             Self::OfferComparison { .. } => BlockKind::OfferComparison,
+            Self::Evidence { .. } => BlockKind::Evidence,
         }
     }
 }

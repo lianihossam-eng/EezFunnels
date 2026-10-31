@@ -184,6 +184,33 @@ fn block_contains_text(data: &DocumentData, block: &BlockV2, expected_text: &str
                 })
         }
         BlockV2::OfferComparison { .. } => false,
+        BlockV2::Evidence {
+            title,
+            content,
+            status,
+            limitation,
+            image,
+            ..
+        } => {
+            title.contains(expected_text)
+                || content.contains(expected_text)
+                || limitation.contains(expected_text)
+                || match status {
+                    super::EvidenceStatus::Demonstration => false,
+                    super::EvidenceStatus::Real {
+                        attribution,
+                        date_or_period,
+                        scope,
+                    } => {
+                        attribution.contains(expected_text)
+                            || date_or_period.contains(expected_text)
+                            || scope.contains(expected_text)
+                    }
+                }
+                || image
+                    .as_ref()
+                    .is_some_and(|image| image.alt.contains(expected_text))
+        }
         BlockV2::Image {
             alt: ImageAlt::Text { value },
             ..

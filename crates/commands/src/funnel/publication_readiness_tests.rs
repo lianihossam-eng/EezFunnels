@@ -431,6 +431,120 @@ fn v2_readiness_blocks_incomplete_offer_details_and_accepts_complete_exact_price
 }
 
 #[test]
+fn v2_readiness_blocks_uncontextualized_evidence_and_accepts_completed_demonstrations() {
+    let service = stored_v2(FunnelBlueprint::LeadGen);
+    let mut document_json: Value = serde_json::from_str(&service.data_json).expect("starter JSON");
+    let blocks = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks");
+    blocks.push(json!({
+        "id":"evidence-example",
+        "kind":"evidence",
+        "evidence_kind":"case_study",
+        "title":" ",
+        "content":"An illustrative scenario.",
+        "status":{"kind":"demonstration"},
+        "limitation":"Demonstration only; no client result is claimed.",
+        "image":{"asset_id":"asset-reference","alt":" "}
+    }));
+    let incomplete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("incomplete evidence JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("incomplete evidence remains an editable draft");
+    let readiness = publication_readiness::for_v2(&service.id, &incomplete);
+    let findings = serde_json::to_value(&readiness).expect("readiness serializes");
+    assert!(!readiness.can_publish());
+    assert!(findings["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["code"] == "publication/evidence_incomplete"
+                && finding["severity"] == "blocking"
+                && finding["action"] == "complete_evidence_details"
+                && finding["target"]["block_id"] == "evidence-example"
+        }));
+
+    let evidence = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks")
+        .last_mut()
+        .expect("evidence block");
+    evidence["title"] = json!("Service planning example");
+    evidence["image"]["alt"] = json!("Example of a service planning board");
+    let complete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("completed evidence JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("completed evidence decodes");
+    let readiness = publication_readiness::for_v2(&service.id, &complete);
+    assert!(readiness.can_publish());
+    assert!(serde_json::to_value(readiness).unwrap()["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|finding| finding["code"] != "publication/evidence_incomplete"));
+}
+
+#[test]
+fn v2_readiness_requires_nonempty_context_for_real_evidence() {
+    let service = stored_v2(FunnelBlueprint::LeadGen);
+    let mut document_json: Value = serde_json::from_str(&service.data_json).expect("starter JSON");
+    document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks")
+        .push(json!({
+            "id":"evidence-real",
+            "kind":"evidence",
+            "evidence_kind":"testimonial",
+            "title":"A client account",
+            "content":"The planning was clear.",
+            "status":{"kind":"real","attribution":" ","date_or_period":" ","scope":" "},
+            "limitation":"One team's account; no measured outcome."
+        }));
+
+    let incomplete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("incomplete real evidence JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("empty context can be corrected in a draft");
+    let readiness = publication_readiness::for_v2(&service.id, &incomplete);
+    let findings = serde_json::to_value(&readiness).expect("readiness serializes");
+    assert!(findings["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["code"] == "publication/evidence_incomplete"
+                && finding["target"]["block_id"] == "evidence-real"
+        }));
+
+    let evidence = document_json["pages"][0]["sections"][0]["blocks"]
+        .as_array_mut()
+        .expect("hero blocks")
+        .last_mut()
+        .expect("real evidence block");
+    evidence["status"]["attribution"] = json!("Northstar Studio, operations lead");
+    evidence["status"]["date_or_period"] = json!("February 2026");
+    evidence["status"]["scope"] = json!("Two workshops for a five-person team.");
+    let complete = DocumentV2::decode(
+        serde_json::to_vec(&document_json)
+            .expect("completed real evidence JSON")
+            .as_slice(),
+        &service.funnel_id,
+    )
+    .expect("real evidence context is complete");
+    assert!(publication_readiness::for_v2(&service.id, &complete).can_publish());
+}
+
+#[test]
 fn v2_readiness_exposes_page_metadata_placeholder_targets() {
     let generated = FunnelCreateCommandV2::from_json(
         &json!({"name":"Readiness metadata target","blueprint":"tripwire"}).to_string(),

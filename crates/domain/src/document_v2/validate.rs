@@ -8,7 +8,8 @@ use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
     FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
     FormSubmissionValue, FormV2, OfferPriceV2, PageId, TextPresentation, ValidatedFormSubmission,
-    MAX_FUNCTIONAL_BLOCK_ITEMS, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES,
+    MAX_EVIDENCE_CONTEXT_BYTES, MAX_EVIDENCE_IMAGE_ALT_BYTES, MAX_EVIDENCE_TEXT_BYTES,
+    MAX_EVIDENCE_TITLE_BYTES, MAX_FUNCTIONAL_BLOCK_ITEMS, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES,
     MAX_FUNCTIONAL_BLOCK_TEXT_BYTES, MAX_OFFER_COMPARISON_ITEMS, MAX_OFFER_TEXT_BYTES,
     MAX_OFFER_UNIT_BYTES, MIN_OFFER_COMPARISON_ITEMS,
 };
@@ -469,6 +470,47 @@ fn validate_block(block: &mut BlockV2) -> Result<(), DocumentError> {
                     "validation/offer_comparison_duplicate",
                     "blocks.offer_ids",
                 ));
+            }
+        }
+        BlockV2::Evidence {
+            title,
+            content,
+            status,
+            limitation,
+            image,
+            ..
+        } => {
+            validate_text(title, MAX_EVIDENCE_TITLE_BYTES, "blocks.evidence.title")?;
+            validate_text(content, MAX_EVIDENCE_TEXT_BYTES, "blocks.evidence.content")?;
+            validate_text(
+                limitation,
+                MAX_EVIDENCE_CONTEXT_BYTES,
+                "blocks.evidence.limitation",
+            )?;
+            if let super::EvidenceStatus::Real {
+                attribution,
+                date_or_period,
+                scope,
+            } = status
+            {
+                validate_text(
+                    attribution,
+                    MAX_EVIDENCE_TITLE_BYTES,
+                    "blocks.evidence.attribution",
+                )?;
+                validate_text(
+                    date_or_period,
+                    MAX_EVIDENCE_TITLE_BYTES,
+                    "blocks.evidence.date_or_period",
+                )?;
+                validate_text(scope, MAX_EVIDENCE_CONTEXT_BYTES, "blocks.evidence.scope")?;
+            }
+            if let Some(image) = image {
+                validate_text(
+                    &image.alt,
+                    MAX_EVIDENCE_IMAGE_ALT_BYTES,
+                    "blocks.evidence.image.alt",
+                )?;
             }
         }
     }

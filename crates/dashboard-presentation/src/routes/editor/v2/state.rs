@@ -184,6 +184,7 @@ pub(super) enum V2NewBlockKind {
     Steps,
     OfferCard,
     OfferComparison,
+    Evidence,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -194,7 +195,7 @@ pub(super) enum V2SavePhase {
 }
 
 impl V2NewBlockKind {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::Heading,
         Self::Text,
         Self::List,
@@ -203,6 +204,7 @@ impl V2NewBlockKind {
         Self::Steps,
         Self::OfferCard,
         Self::OfferComparison,
+        Self::Evidence,
     ];
 
     pub(super) const fn id(self) -> &'static str {
@@ -215,6 +217,7 @@ impl V2NewBlockKind {
             Self::Steps => "steps",
             Self::OfferCard => "offer_card",
             Self::OfferComparison => "offer_comparison",
+            Self::Evidence => "evidence",
         }
     }
 
@@ -228,6 +231,7 @@ impl V2NewBlockKind {
             Self::Steps => "Steps",
             Self::OfferCard => "Offer card",
             Self::OfferComparison => "Offer comparison",
+            Self::Evidence => "Evidence",
         }
     }
 
@@ -274,6 +278,22 @@ impl V2NewBlockKind {
             },
             Self::OfferComparison => NewBlock::OfferComparison {
                 offer_ids: Vec::new(),
+            },
+            Self::Evidence => NewBlock::Evidence {
+                evidence_kind: EvidenceKind::CaseStudy,
+                title: public_default_text(language, "Service example", "Exemple de service"),
+                content: public_default_text(
+                    language,
+                    "Describe an illustrative service scenario without presenting it as a client result.",
+                    "Décrivez un scénario illustratif sans le présenter comme un résultat client.",
+                ),
+                status: EvidenceStatus::Demonstration,
+                limitation: public_default_text(
+                    language,
+                    "Demonstration only; no client or measured result is represented.",
+                    "Démonstration uniquement : aucun client ni résultat mesuré n’est présenté.",
+                ),
+                image: None,
             },
         }
     }
@@ -646,6 +666,37 @@ impl V2EditorState {
                             };
                             Some(active)
                         }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+            }
+            if let Some(rest) = key.strip_prefix("evidence:") {
+                let mut parts = rest.split(':');
+                let Some(block_id) = parts.next() else {
+                    return false;
+                };
+                let Some(field) = parts.next() else {
+                    return false;
+                };
+                if parts.next().is_some() {
+                    return false;
+                }
+                return document
+                    .pages()
+                    .iter()
+                    .flat_map(|page| page.sections())
+                    .flat_map(|section| section.blocks())
+                    .find_map(|block| match block {
+                        BlockV2::Evidence {
+                            id, status, image, ..
+                        } if id.as_str() == block_id => Some(match field {
+                            "title" | "content" | "limitation" => true,
+                            "attribution" | "date_or_period" | "scope" => {
+                                matches!(status, EvidenceStatus::Real { .. })
+                            }
+                            "image_alt" => image.is_some(),
+                            _ => false,
+                        }),
                         _ => None,
                     })
                     .unwrap_or(false);
@@ -1493,6 +1544,55 @@ mod tests {
         .expect("valid offer document")
     }
 
+    fn document_with_evidence() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document().canonical_bytes()).expect("starter document JSON");
+        value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks")
+            .push(serde_json::json!({
+                "id":"evidence-example",
+                "kind":"evidence",
+                "evidence_kind":"case_study",
+                "title":"Planning example",
+                "content":"A bounded illustrative scenario.",
+                "status":{
+                    "kind":"real",
+                    "attribution":"Service team",
+                    "date_or_period":"February 2026",
+                    "scope":"Two planning workshops"
+                },
+                "limitation":"Preparation only; no financial result measured.",
+                "image":{"asset_id":"asset-evidence","alt":"Planning board"}
+            }));
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid evidence document")
+    }
+
+    fn document_with_demonstration_without_evidence_image() -> DocumentV2 {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(document_with_evidence().canonical_bytes())
+                .expect("evidence document JSON");
+        let evidence = value["pages"][0]["sections"][0]["blocks"]
+            .as_array_mut()
+            .expect("hero blocks")
+            .last_mut()
+            .expect("evidence block");
+        evidence["status"] = serde_json::json!({ "kind": "demonstration" });
+        evidence
+            .as_object_mut()
+            .expect("evidence object")
+            .remove("image");
+        DocumentV2::decode(
+            &serde_json::to_vec(&value).expect("document JSON"),
+            "funnel-a",
+        )
+        .expect("valid demonstration without evidence image")
+    }
+
     fn document_with_offer_comparison() -> DocumentV2 {
         let mut value: serde_json::Value =
             serde_json::from_slice(document_with_offer().canonical_bytes())
@@ -2044,6 +2144,51 @@ mod tests {
         assert!(!state.form_input_errors.contains_key(&key));
         assert!(!state.form_input_drafts.contains_key(&recurring_key));
         assert!(!state.form_input_errors.contains_key(&recurring_key));
+        assert!(!state.has_uncommitted_editor_inputs());
+    }
+
+    #[test]
+    fn evidence_input_drafts_survive_edits_and_prune_when_their_fields_become_inactive() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        let active_fields = [
+            "title",
+            "content",
+            "limitation",
+            "attribution",
+            "date_or_period",
+            "scope",
+            "image_alt",
+        ];
+        for field in active_fields {
+            let key = format!("evidence:evidence-example:{field}");
+            state
+                .form_input_drafts
+                .insert(key.clone(), "pending value".to_owned());
+            state
+                .form_input_errors
+                .insert(key, "field needs correction".to_owned());
+        }
+
+        state.prune_form_ui_state(&document_with_evidence());
+        assert_eq!(state.form_input_drafts.len(), active_fields.len());
+        assert_eq!(state.form_input_errors.len(), active_fields.len());
+        assert!(state.has_uncommitted_editor_inputs());
+
+        state.prune_form_ui_state(&document_with_demonstration_without_evidence_image());
+        for field in ["title", "content", "limitation"] {
+            let key = format!("evidence:evidence-example:{field}");
+            assert!(state.form_input_drafts.contains_key(&key));
+            assert!(state.form_input_errors.contains_key(&key));
+        }
+        for field in ["attribution", "date_or_period", "scope", "image_alt"] {
+            let key = format!("evidence:evidence-example:{field}");
+            assert!(!state.form_input_drafts.contains_key(&key));
+            assert!(!state.form_input_errors.contains_key(&key));
+        }
+
+        state.prune_form_ui_state(&document());
+        assert!(state.form_input_drafts.is_empty());
+        assert!(state.form_input_errors.is_empty());
         assert!(!state.has_uncommitted_editor_inputs());
     }
 
@@ -2689,6 +2834,24 @@ mod tests {
             panic!("offer comparison kind creates an editable source selection");
         };
         assert!(offer_ids.is_empty());
+
+        let NewBlock::Evidence {
+            evidence_kind,
+            title,
+            content,
+            status,
+            limitation,
+            image,
+        } = V2NewBlockKind::Evidence.create(PublicLanguage::French)
+        else {
+            panic!("evidence kind creates a labeled demonstration draft");
+        };
+        assert_eq!(evidence_kind, EvidenceKind::CaseStudy);
+        assert_eq!(title, "Exemple de service");
+        assert!(content.contains("scénario illustratif"));
+        assert_eq!(status, EvidenceStatus::Demonstration);
+        assert!(limitation.contains("aucun client ni résultat mesuré"));
+        assert!(image.is_none());
     }
 
     #[test]

@@ -96,6 +96,41 @@ fn document_with_offers() -> DocumentV2 {
         .expect("valid offer document")
 }
 
+fn document_with_evidence() -> DocumentV2 {
+    let asset_id = "a".repeat(64);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["language"] = serde_json::json!("fr");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {
+            "id":"evidence-demo",
+            "kind":"evidence",
+            "evidence_kind":"testimonial",
+            "title":"Une démonstration",
+            "content":"Texte d’exemple <script>alert(1)</script>.",
+            "status":{"kind":"demonstration"},
+            "limitation":"Exemple illustratif, sans client ni résultat mesuré."
+        },
+        {
+            "id":"evidence-real",
+            "kind":"evidence",
+            "evidence_kind":"case_study",
+            "title":"Préparation de migration",
+            "content":"Deux ateliers de cadrage.",
+            "status":{
+                "kind":"real",
+                "attribution":"Atelier Nord, responsable des opérations",
+                "date_or_period":"Février 2026",
+                "scope":"Deux ateliers pour une équipe de cinq personnes."
+            },
+            "limitation":"Le récit porte sur la préparation, pas sur le chiffre d’affaires.",
+            "image":{"asset_id":asset_id,"alt":"Planification sur un tableau blanc"}
+        }
+    ]);
+    DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
+        .expect("valid evidence document")
+}
+
 fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String {
     let mut manifest: serde_json::Value =
         serde_json::from_str(manifest_json).expect("serialized manifest");
@@ -114,7 +149,7 @@ fn renderer_v10_profile_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v12");
     let renderer_v10 =
         manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
     assert_eq!(
@@ -237,7 +272,7 @@ fn renderer_v8_keeps_the_historical_section_markup() {
 fn renderer_v10_renders_accessible_native_faq_and_steps_with_escaped_text() {
     let document = document_with_functional_blocks();
     let prepared = prepare_revision(&document, "revision-functional-blocks").expect("revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v12");
     let renderer_v10 =
         manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
     let html = render_published(
@@ -267,13 +302,15 @@ fn renderer_v10_renders_accessible_native_faq_and_steps_with_escaped_text() {
 fn renderer_v11_reuses_exact_offer_values_in_cards_and_a_mobile_readable_comparison() {
     let document = document_with_offers();
     let prepared = prepare_revision(&document, "revision-offers").expect("offer revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v12");
+    let renderer_v11 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v11");
     let html = render_published(
         2,
         "funnel-01",
         "revision-offers",
         &prepared.data_json,
-        &prepared.render_manifest_json,
+        &renderer_v11,
     )
     .expect("renderer-v11 supports offer pricing");
     let preview = render_owner_preview(&document, document.entry_page_id()).expect("preview");
@@ -308,6 +345,72 @@ fn renderer_v11_reuses_exact_offer_values_in_cards_and_a_mobile_readable_compari
         )
         .expect_err("renderer-v10 does not support offers"),
         V2RenderError::OfferPricingNotEnabled
+    );
+}
+
+#[test]
+fn renderer_v12_labels_demonstrations_and_contextualizes_real_evidence() {
+    let document = document_with_evidence();
+    let asset_id = "a".repeat(64);
+    let assets = [AssetDigestRecord {
+        asset_id: asset_id.clone(),
+        sha256: asset_id.clone(),
+    }];
+    let prepared = prepare_revision_with_assets(&document, "revision-evidence", &assets)
+        .expect("asset-backed evidence revision");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v12");
+    let preview = render_owner_preview_with_assets(&document, document.entry_page_id(), &assets)
+        .expect("evidence owner preview");
+    let published = render_published_route_with_assets(
+        PublishedRevisionInput {
+            schema_version: 2,
+            funnel_id: "funnel-01",
+            revision_id: "revision-evidence",
+            data_json: &prepared.data_json,
+            render_manifest_json: &prepared.render_manifest_json,
+        },
+        "services",
+        None,
+        &assets,
+    )
+    .expect("evidence public page");
+
+    for rendered in [&preview, &published] {
+        assert!(rendered.contains("<p class=\"v2-evidence-status\">Démonstration</p>"));
+        assert!(rendered.contains("<p class=\"v2-evidence-type\">Témoignage</p>"));
+        assert!(rendered.contains("Texte d’exemple &lt;script&gt;alert(1)&lt;/script&gt;."));
+        assert!(!rendered.contains("<script>alert(1)</script>"));
+        assert!(rendered.contains("<p class=\"v2-evidence-status\">Élément réel · attribué</p>"));
+        assert!(rendered.contains("Atelier Nord, responsable des opérations"));
+        assert!(rendered.contains("Date ou période</dt><dd>Février 2026</dd>"));
+        assert!(
+            rendered.contains("Périmètre</dt><dd>Deux ateliers pour une équipe de cinq personnes.")
+        );
+        assert!(
+            rendered.contains("Le récit porte sur la préparation, pas sur le chiffre d’affaires.")
+        );
+        assert!(rendered.contains(&format!("src=\"/media/{asset_id}\"")));
+        assert!(rendered.contains("alt=\"Planification sur un tableau blanc\""));
+        assert!(rendered.contains(".v2-evidence-context{display:grid"));
+    }
+
+    let renderer_v11 =
+        manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v11");
+    assert_eq!(
+        validate_revision_v2(
+            2,
+            "funnel-01",
+            "revision-evidence",
+            &prepared.data_json,
+            &renderer_v11,
+        )
+        .expect_err("renderer-v11 cannot render evidence"),
+        V2RenderError::EvidenceNotEnabled
+    );
+    assert_eq!(
+        prepare_revision_with_assets(&document, "revision-evidence-no-media", &[])
+            .expect_err("evidence image must reference a retained asset"),
+        V2RenderError::ImagesNotEnabled
     );
 }
 
@@ -446,7 +549,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v11", "renderer-v11-next");
+        .replace("renderer-v12", "renderer-v12-next");
     assert!(matches!(
         render_published(
             2,
@@ -1069,7 +1172,7 @@ fn renderer_v10_metadata_escapes_title_and_attributes_in_preview_and_public_html
     let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
         .expect("metadata document");
     let prepared = prepare_revision(&document, "revision-seo").expect("metadata revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v11");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v12");
     let renderer_v10 =
         manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v10");
     let published = render_published(
