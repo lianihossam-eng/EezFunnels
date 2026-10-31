@@ -192,7 +192,27 @@ pub enum BlockKind {
     Button,
     Image,
     Form,
+    Faq,
+    Steps,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FaqItem {
+    pub question: String,
+    pub answer: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepItem {
+    pub title: String,
+    pub detail: String,
+}
+
+pub const MAX_FUNCTIONAL_BLOCK_ITEMS: usize = 12;
+pub const MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES: usize = 2048;
+pub const MAX_FUNCTIONAL_BLOCK_TEXT_BYTES: usize = 16_384;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -224,6 +244,14 @@ pub enum BlockV2 {
         id: BlockId,
         form_id: FormId,
     },
+    Faq {
+        id: BlockId,
+        items: Vec<FaqItem>,
+    },
+    Steps {
+        id: BlockId,
+        items: Vec<StepItem>,
+    },
 }
 
 impl BlockV2 {
@@ -234,7 +262,9 @@ impl BlockV2 {
             | Self::List { id, .. }
             | Self::Button { id, .. }
             | Self::Image { id, .. }
-            | Self::Form { id, .. } => id,
+            | Self::Form { id, .. }
+            | Self::Faq { id, .. }
+            | Self::Steps { id, .. } => id,
         }
     }
 
@@ -246,6 +276,8 @@ impl BlockV2 {
             Self::Button { .. } => BlockKind::Button,
             Self::Image { .. } => BlockKind::Image,
             Self::Form { .. } => BlockKind::Form,
+            Self::Faq { .. } => BlockKind::Faq,
+            Self::Steps { .. } => BlockKind::Steps,
         }
     }
 }

@@ -159,6 +159,12 @@ fn block_contains_text(data: &DocumentData, block: &BlockV2, expected_text: &str
         BlockV2::Heading { text, .. } | BlockV2::Text { text, .. } => text.contains(expected_text),
         BlockV2::List { items, .. } => items.iter().any(|item| item.contains(expected_text)),
         BlockV2::Button { label, .. } => label.contains(expected_text),
+        BlockV2::Faq { items, .. } => items.iter().any(|item| {
+            item.question.contains(expected_text) || item.answer.contains(expected_text)
+        }),
+        BlockV2::Steps { items, .. } => items
+            .iter()
+            .any(|item| item.title.contains(expected_text) || item.detail.contains(expected_text)),
         BlockV2::Image {
             alt: ImageAlt::Text { value },
             ..

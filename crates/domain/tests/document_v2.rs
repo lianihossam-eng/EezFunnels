@@ -22,6 +22,17 @@ fn decode(source: &str) -> DocumentV2 {
     DocumentV2::decode(source.as_bytes(), "funnel-01").expect("fixture is a valid V2 document")
 }
 
+fn decode_with_blocks(
+    blocks: serde_json::Value,
+) -> Result<DocumentV2, eez_domain::document_v2::DocumentError> {
+    let mut value: serde_json::Value = serde_json::from_str(MINIMAL).expect("minimal document");
+    value["pages"][0]["sections"][0]["blocks"] = blocks;
+    DocumentV2::decode(
+        &serde_json::to_vec(&value).expect("document serialization"),
+        "funnel-01",
+    )
+}
+
 fn document_with_lead_form() -> DocumentV2 {
     document_with_lead_form_with_name_limit(40)
 }
@@ -833,6 +844,81 @@ fn v2_decoder_rejects_duplicate_unknown_and_conflicting_fields() {
 }
 
 #[test]
+fn faq_and_steps_decode_as_bounded_structured_content() {
+    let document = decode_with_blocks(serde_json::json!([
+        {
+            "id": "block-faq",
+            "kind": "faq",
+            "items": [{"question": "How does it work?", "answer": "We explain the process."}]
+        },
+        {
+            "id": "block-steps",
+            "kind": "steps",
+            "items": [{"title": "First step", "detail": "Describe the first step."}]
+        }
+    ]))
+    .expect("valid FAQ and steps blocks");
+    let blocks = document.pages()[0].sections()[0].blocks();
+    assert!(matches!(
+        &blocks[0],
+        BlockV2::Faq { items, .. }
+            if items[0].question == "How does it work?" && items[0].answer == "We explain the process."
+    ));
+    assert!(matches!(
+        &blocks[1],
+        BlockV2::Steps { items, .. }
+            if items[0].title == "First step" && items[0].detail == "Describe the first step."
+    ));
+
+    for items in [
+        serde_json::json!([]),
+        serde_json::json!((0..13)
+            .map(|index| {
+                serde_json::json!({"question": format!("Question {index}"), "answer": "Answer"})
+            })
+            .collect::<Vec<_>>()),
+    ] {
+        let error = decode_with_blocks(serde_json::json!([{
+            "id": "block-faq",
+            "kind": "faq",
+            "items": items
+        }]))
+        .expect_err("FAQ item count is bounded");
+        assert_eq!(error.code(), "validation/functional_block_item_count");
+    }
+
+    let empty_question = decode_with_blocks(serde_json::json!([{
+        "id": "block-faq",
+        "kind": "faq",
+        "items": [{"question": "", "answer": "Answer"}]
+    }]))
+    .expect_err("FAQ questions must not be empty");
+    assert_eq!(empty_question.code(), "validation/text_empty");
+
+    let overlong_step = decode_with_blocks(serde_json::json!([{
+        "id": "block-steps",
+        "kind": "steps",
+        "items": [{"title": "Step", "detail": "x".repeat(2049)}]
+    }]))
+    .expect_err("step descriptions are bounded");
+    assert_eq!(overlong_step.code(), "validation/text_length");
+
+    let aggregate_overflow = decode_with_blocks(serde_json::json!([{
+        "id": "block-faq",
+        "kind": "faq",
+        "items": (0..5).map(|_| serde_json::json!({
+            "question": "q".repeat(2048),
+            "answer": "a".repeat(2048)
+        })).collect::<Vec<_>>()
+    }]))
+    .expect_err("total structured content is bounded");
+    assert_eq!(
+        aggregate_overflow.code(),
+        "validation/functional_block_text_length"
+    );
+}
+
+#[test]
 fn canonical_bytes_are_independent_of_input_whitespace_and_property_order() {
     let document = decode(MINIMAL);
     let reordered = MINIMAL
@@ -1266,7 +1352,7 @@ fn optional_fields_reject_null_and_closed_node_shapes_reject_extra_fields() {
     );
     assert!(DocumentV2::decode(extra_variant_field.as_bytes(), "funnel-01").is_err());
 
-    let too_deep = format!("{}{}{}", "{".repeat(8), "null", "}".repeat(8));
+    let too_deep = format!("{}{}{}", "{".repeat(10), "null", "}".repeat(10));
     assert!(DocumentV2::decode(too_deep.as_bytes(), "funnel-01").is_err());
 }
 
