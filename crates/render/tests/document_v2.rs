@@ -27,6 +27,31 @@ fn document() -> DocumentV2 {
     .expect("valid markerless historical document")
 }
 
+fn document_with_functional_blocks() -> DocumentV2 {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
+    value["pages"][0]["sections"][0]["blocks"] = serde_json::json!([
+        {
+            "id": "block-faq",
+            "kind": "faq",
+            "items": [{
+                "question": "How does <script>alert(1)</script> work?",
+                "answer": "Use <img src=x onerror=alert(1)> safely."
+            }]
+        },
+        {
+            "id": "block-steps",
+            "kind": "steps",
+            "items": [{
+                "title": "First <step>",
+                "detail": "Describe <what> happens."
+            }]
+        }
+    ]);
+    DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
+        .expect("valid functional blocks")
+}
+
 fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String {
     let mut manifest: serde_json::Value =
         serde_json::from_str(manifest_json).expect("serialized manifest");
@@ -36,7 +61,7 @@ fn manifest_with_renderer_version(manifest_json: &str, version: &str) -> String 
 }
 
 #[test]
-fn exact_renderer_v9_manifest_binds_row_document_theme_and_assets() {
+fn exact_renderer_v10_manifest_binds_row_document_theme_and_assets() {
     let document = DocumentV2::starter(
         "funnel-01",
         BlueprintId::Launch,
@@ -45,7 +70,7 @@ fn exact_renderer_v9_manifest_binds_row_document_theme_and_assets() {
     .expect("valid V2 starter");
     let prepared = prepare_revision(&document, "revision-v2-01").expect("revision preparation");
 
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v9");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
     assert!(prepared
         .render_manifest_json
         .contains("\"manifest_version\":2"));
@@ -159,6 +184,75 @@ fn renderer_v8_keeps_the_historical_section_markup() {
 }
 
 #[test]
+fn renderer_v10_renders_accessible_native_faq_and_steps_with_escaped_text() {
+    let document = document_with_functional_blocks();
+    let prepared = prepare_revision(&document, "revision-functional-blocks").expect("revision");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
+    let html = render_published(
+        2,
+        "funnel-01",
+        "revision-functional-blocks",
+        &prepared.data_json,
+        &prepared.render_manifest_json,
+    )
+    .expect("renderer-v10 supports functional blocks");
+    let preview = render_owner_preview(&document, document.entry_page_id())
+        .expect("owner preview supports functional blocks");
+
+    for rendered in [&html, &preview] {
+        assert!(rendered.contains(
+            "<details class=\"v2-faq-item\"><summary>How does &lt;script&gt;alert(1)&lt;/script&gt; work?</summary><p class=\"v2-faq-answer\">Use &lt;img src=x onerror=alert(1)&gt; safely.</p></details>"
+        ));
+        assert!(rendered.contains(
+            "<ol class=\"v2-steps\"><li class=\"v2-step\"><h3 class=\"v2-step-title\">First &lt;step&gt;</h3><p class=\"v2-step-detail\">Describe &lt;what&gt; happens.</p></li></ol>"
+        ));
+        assert!(rendered.contains(".v2-faq-item>summary:focus-visible"));
+        assert!(!rendered.contains("<script"));
+    }
+}
+
+#[test]
+fn renderer_v3_to_v9_rejects_documents_with_faq_or_steps() {
+    let document = document_with_functional_blocks();
+    let prepared = prepare_revision(&document, "revision-functional-blocks-legacy")
+        .expect("renderer-v10 revision");
+
+    for version in ["renderer-v3", "renderer-v7", "renderer-v8", "renderer-v9"] {
+        let manifest = manifest_with_renderer_version(&prepared.render_manifest_json, version);
+        assert_eq!(
+            validate_revision_v2(
+                2,
+                "funnel-01",
+                "revision-functional-blocks-legacy",
+                &prepared.data_json,
+                &manifest,
+            )
+            .expect_err("older renderer manifest must fail closed"),
+            V2RenderError::FunctionalBlocksNotEnabled,
+            "{version} must reject the new block family"
+        );
+    }
+}
+
+#[test]
+fn renderer_v9_keeps_its_existing_profile_without_v10_styles() {
+    let document = document();
+    let prepared = prepare_revision(&document, "revision-v9-profile").expect("revision");
+    let renderer_v9 = manifest_with_renderer_version(&prepared.render_manifest_json, "renderer-v9");
+    let html = render_published(
+        2,
+        "funnel-01",
+        "revision-v9-profile",
+        &prepared.data_json,
+        &renderer_v9,
+    )
+    .expect("renderer-v9 keeps its existing capabilities");
+
+    assert!(html.contains("id=\"section-section-hero\" data-section-id=\"section-hero\""));
+    assert!(!html.contains(".v2-faq-item"));
+}
+
+#[test]
 fn page_theme_background_spans_full_width_with_bounded_inner_content() {
     let document = DocumentV2::starter(
         "funnel-01",
@@ -252,7 +346,7 @@ fn version_identity_digest_and_noncanonical_rows_fail_closed() {
 
     let wrong_renderer = prepared
         .render_manifest_json
-        .replace("renderer-v9", "renderer-v9-next");
+        .replace("renderer-v10", "renderer-v10-next");
     assert!(matches!(
         render_published(
             2,
@@ -866,7 +960,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn renderer_v9_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
+fn renderer_v10_metadata_escapes_title_and_attributes_in_preview_and_public_html() {
     let mut value: serde_json::Value =
         serde_json::from_slice(document().canonical_bytes()).expect("document JSON");
     value["pages"][0]["seo_title"] = serde_json::json!("Offer <sale> & \"launch\"");
@@ -875,7 +969,7 @@ fn renderer_v9_metadata_escapes_title_and_attributes_in_preview_and_public_html(
     let document = DocumentV2::decode(&serde_json::to_vec(&value).expect("JSON"), "funnel-01")
         .expect("metadata document");
     let prepared = prepare_revision(&document, "revision-seo").expect("metadata revision");
-    assert_eq!(prepared.manifest.renderer_version(), "renderer-v9");
+    assert_eq!(prepared.manifest.renderer_version(), "renderer-v10");
     let published = render_published(
         2,
         "funnel-01",

@@ -6,6 +6,10 @@ use super::orchestration::*;
 use super::state::*;
 use super::*;
 use eez_domain::document_v2::{PageId, SectionId};
+#[cfg(feature = "browser")]
+use eez_domain::document_v2::{
+    MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES, MAX_FUNCTIONAL_BLOCK_TEXT_BYTES,
+};
 
 fn section_kind_label(kind: SectionKind) -> &'static str {
     match kind {
@@ -36,6 +40,8 @@ fn block_kind_label(block: &BlockV2) -> &'static str {
         BlockV2::Button { .. } => "Button",
         BlockV2::Image { .. } => "Image",
         BlockV2::Form { .. } => "Form",
+        BlockV2::Faq { .. } => "FAQ",
+        BlockV2::Steps { .. } => "Steps",
     }
 }
 
@@ -46,6 +52,16 @@ fn block_text(block: &BlockV2) -> String {
         BlockV2::Button { label, .. } => label.clone(),
         BlockV2::Image { .. } => "Image assets are added in the media library phase.".to_owned(),
         BlockV2::Form { .. } => "Form editing is added in the forms phase.".to_owned(),
+        BlockV2::Faq { items, .. } => items
+            .iter()
+            .map(|item| item.question.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        BlockV2::Steps { items, .. } => items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
@@ -70,7 +86,43 @@ fn block_value_with_text(block: &BlockV2, text: String) -> Option<NewBlock> {
         BlockV2::Form { form_id, .. } => Some(NewBlock::Form {
             form_id: form_id.clone(),
         }),
+        BlockV2::Faq { .. } | BlockV2::Steps { .. } => None,
     }
+}
+
+fn block_value_with_faq_items(block: &BlockV2, items: Vec<FaqItem>) -> Option<NewBlock> {
+    matches!(block, BlockV2::Faq { .. }).then_some(NewBlock::Faq { items })
+}
+
+fn block_value_with_step_items(block: &BlockV2, items: Vec<StepItem>) -> Option<NewBlock> {
+    matches!(block, BlockV2::Steps { .. }).then_some(NewBlock::Steps { items })
+}
+
+fn item_after_add<T: Clone>(items: &[T], item: T) -> Option<Vec<T>> {
+    (items.len() < MAX_FUNCTIONAL_BLOCK_ITEMS).then(|| {
+        let mut next = items.to_vec();
+        next.push(item);
+        next
+    })
+}
+
+fn item_after_remove<T: Clone>(items: &[T], index: usize) -> Option<Vec<T>> {
+    if items.len() <= 1 || index >= items.len() {
+        return None;
+    }
+    let mut next = items.to_vec();
+    next.remove(index);
+    Some(next)
+}
+
+fn items_after_move<T: Clone>(items: &[T], index: usize, offset: isize) -> Option<Vec<T>> {
+    let destination = index.checked_add_signed(offset)?;
+    if index >= items.len() || destination >= items.len() || destination == index {
+        return None;
+    }
+    let mut next = items.to_vec();
+    next.swap(index, destination);
+    Some(next)
 }
 
 fn block_value_with_action(block: &BlockV2, action: ActionV2) -> Option<NewBlock> {
@@ -1771,6 +1823,300 @@ fn block_value_with_image(block: &BlockV2, asset_id: AssetId, alt: ImageAlt) -> 
 
 #[cfg(feature = "browser")]
 #[component]
+fn V2FaqBlockEditor(state: Signal<V2EditorState>, block: BlockV2, locked: bool) -> Element {
+    let BlockV2::Faq { id, items } = block else {
+        return rsx! {};
+    };
+    let block_count = items.len();
+    let text_bytes = items
+        .iter()
+        .map(|item| item.question.len() + item.answer.len())
+        .sum::<usize>();
+    let block_for_add = BlockV2::Faq {
+        id: id.clone(),
+        items: items.clone(),
+    };
+    let items_for_add = items.clone();
+    rsx! {
+        fieldset { class: "editor-setting-group",
+            legend { "FAQ entries" }
+            p { class: "editor-keyboard-help",
+                "{text_bytes} / {MAX_FUNCTIONAL_BLOCK_TEXT_BYTES} UTF-8 bytes in this block. Each question and answer is limited to {MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES} UTF-8 bytes."
+            }
+            for (index, item) in items.iter().enumerate() {
+                {
+                    let item_number = index + 1;
+                    let items_for_question = items.clone();
+                    let items_for_answer = items.clone();
+                    let items_for_move_up = items.clone();
+                    let items_for_move_down = items.clone();
+                    let items_for_remove = items.clone();
+                    let faq_for_question = BlockV2::Faq { id: id.clone(), items: items.clone() };
+                    let faq_for_answer = BlockV2::Faq { id: id.clone(), items: items.clone() };
+                    let faq_for_move_up = BlockV2::Faq { id: id.clone(), items: items.clone() };
+                    let faq_for_move_down = BlockV2::Faq { id: id.clone(), items: items.clone() };
+                    let faq_for_remove = BlockV2::Faq { id: id.clone(), items: items.clone() };
+                    let block_for_question = id.clone();
+                    let block_for_answer = id.clone();
+                    let block_for_move_up = id.clone();
+                    let block_for_move_down = id.clone();
+                    let block_for_remove = id.clone();
+                    rsx! {
+                        fieldset { class: "editor-setting-group",
+                            legend { "FAQ entry {item_number}" }
+                            label { class: "editor-setting-control",
+                                "Question"
+                                input {
+                                    r#type: "text",
+                                    value: "{item.question}",
+                                    disabled: locked,
+                                    "aria-label": "FAQ question {item_number}",
+                                    onchange: move |event| {
+                                        let mut next = items_for_question.clone();
+                                        if let Some(item) = next.get_mut(index) {
+                                            item.question = event.value();
+                                            if let Some(value) = block_value_with_faq_items(&faq_for_question, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_question.clone(), value });
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                            label { class: "editor-setting-control",
+                                "Answer"
+                                textarea {
+                                    rows: "3",
+                                    value: "{item.answer}",
+                                    disabled: locked,
+                                    "aria-label": "FAQ answer {item_number}",
+                                    onchange: move |event| {
+                                        let mut next = items_for_answer.clone();
+                                        if let Some(item) = next.get_mut(index) {
+                                            item.answer = event.value();
+                                            if let Some(value) = block_value_with_faq_items(&faq_for_answer, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_answer.clone(), value });
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "editor-section-actions",
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || index == 0,
+                                    "aria-label": "Move FAQ entry {item_number} up",
+                                    onclick: move |_| {
+                                        if let Some(next) = items_after_move(&items_for_move_up, index, -1) {
+                                            if let Some(value) = block_value_with_faq_items(&faq_for_move_up, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_move_up.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Move up"
+                                }
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || index + 1 >= block_count,
+                                    "aria-label": "Move FAQ entry {item_number} down",
+                                    onclick: move |_| {
+                                        if let Some(next) = items_after_move(&items_for_move_down, index, 1) {
+                                            if let Some(value) = block_value_with_faq_items(&faq_for_move_down, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_move_down.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Move down"
+                                }
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || block_count <= 1,
+                                    "aria-label": "Remove FAQ entry {item_number}",
+                                    onclick: move |_| {
+                                        if let Some(next) = item_after_remove(&items_for_remove, index) {
+                                            if let Some(value) = block_value_with_faq_items(&faq_for_remove, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_remove.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Remove entry"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            button {
+                class: "secondary-button",
+                r#type: "button",
+                disabled: locked || block_count >= MAX_FUNCTIONAL_BLOCK_ITEMS,
+                onclick: move |_| {
+                    let language = state.with(|state| {
+                        state.document.as_ref().map(DocumentV2::public_language).unwrap_or(PublicLanguage::English)
+                    });
+                    if let Some(next) = item_after_add(&items_for_add, new_faq_item(language)) {
+                        if let Some(value) = block_value_with_faq_items(&block_for_add, next) {
+                            dispatch_v2_edit(state, Edit::SetBlock { block: id.clone(), value });
+                        }
+                    }
+                },
+                "Add FAQ entry"
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
+fn V2StepsBlockEditor(state: Signal<V2EditorState>, block: BlockV2, locked: bool) -> Element {
+    let BlockV2::Steps { id, items } = block else {
+        return rsx! {};
+    };
+    let block_count = items.len();
+    let text_bytes = items
+        .iter()
+        .map(|item| item.title.len() + item.detail.len())
+        .sum::<usize>();
+    let block_for_add = BlockV2::Steps {
+        id: id.clone(),
+        items: items.clone(),
+    };
+    let items_for_add = items.clone();
+    rsx! {
+        fieldset { class: "editor-setting-group",
+            legend { "Steps" }
+            p { class: "editor-keyboard-help",
+                "{text_bytes} / {MAX_FUNCTIONAL_BLOCK_TEXT_BYTES} UTF-8 bytes in this block. Each step title and description is limited to {MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES} UTF-8 bytes."
+            }
+            for (index, item) in items.iter().enumerate() {
+                {
+                    let item_number = index + 1;
+                    let items_for_title = items.clone();
+                    let items_for_detail = items.clone();
+                    let items_for_move_up = items.clone();
+                    let items_for_move_down = items.clone();
+                    let items_for_remove = items.clone();
+                    let steps_for_title = BlockV2::Steps { id: id.clone(), items: items.clone() };
+                    let steps_for_detail = BlockV2::Steps { id: id.clone(), items: items.clone() };
+                    let steps_for_move_up = BlockV2::Steps { id: id.clone(), items: items.clone() };
+                    let steps_for_move_down = BlockV2::Steps { id: id.clone(), items: items.clone() };
+                    let steps_for_remove = BlockV2::Steps { id: id.clone(), items: items.clone() };
+                    let block_for_title = id.clone();
+                    let block_for_detail = id.clone();
+                    let block_for_move_up = id.clone();
+                    let block_for_move_down = id.clone();
+                    let block_for_remove = id.clone();
+                    rsx! {
+                        fieldset { class: "editor-setting-group",
+                            legend { "Step {item_number}" }
+                            label { class: "editor-setting-control",
+                                "Title"
+                                input {
+                                    r#type: "text",
+                                    value: "{item.title}",
+                                    disabled: locked,
+                                    "aria-label": "Step {item_number} title",
+                                    onchange: move |event| {
+                                        let mut next = items_for_title.clone();
+                                        if let Some(item) = next.get_mut(index) {
+                                            item.title = event.value();
+                                            if let Some(value) = block_value_with_step_items(&steps_for_title, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_title.clone(), value });
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                            label { class: "editor-setting-control",
+                                "Description"
+                                textarea {
+                                    rows: "3",
+                                    value: "{item.detail}",
+                                    disabled: locked,
+                                    "aria-label": "Step {item_number} description",
+                                    onchange: move |event| {
+                                        let mut next = items_for_detail.clone();
+                                        if let Some(item) = next.get_mut(index) {
+                                            item.detail = event.value();
+                                            if let Some(value) = block_value_with_step_items(&steps_for_detail, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_detail.clone(), value });
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "editor-section-actions",
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || index == 0,
+                                    "aria-label": "Move step {item_number} up",
+                                    onclick: move |_| {
+                                        if let Some(next) = items_after_move(&items_for_move_up, index, -1) {
+                                            if let Some(value) = block_value_with_step_items(&steps_for_move_up, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_move_up.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Move up"
+                                }
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || index + 1 >= block_count,
+                                    "aria-label": "Move step {item_number} down",
+                                    onclick: move |_| {
+                                        if let Some(next) = items_after_move(&items_for_move_down, index, 1) {
+                                            if let Some(value) = block_value_with_step_items(&steps_for_move_down, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_move_down.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Move down"
+                                }
+                                button {
+                                    class: "editor-move-button",
+                                    r#type: "button",
+                                    disabled: locked || block_count <= 1,
+                                    "aria-label": "Remove step {item_number}",
+                                    onclick: move |_| {
+                                        if let Some(next) = item_after_remove(&items_for_remove, index) {
+                                            if let Some(value) = block_value_with_step_items(&steps_for_remove, next) {
+                                                dispatch_v2_edit(state, Edit::SetBlock { block: block_for_remove.clone(), value });
+                                            }
+                                        }
+                                    },
+                                    "Remove step"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            button {
+                class: "secondary-button",
+                r#type: "button",
+                disabled: locked || block_count >= MAX_FUNCTIONAL_BLOCK_ITEMS,
+                onclick: move |_| {
+                    let language = state.with(|state| {
+                        state.document.as_ref().map(DocumentV2::public_language).unwrap_or(PublicLanguage::English)
+                    });
+                    if let Some(next) = item_after_add(&items_for_add, new_step_item(language)) {
+                        if let Some(value) = block_value_with_step_items(&block_for_add, next) {
+                            dispatch_v2_edit(state, Edit::SetBlock { block: id.clone(), value });
+                        }
+                    }
+                },
+                "Add a step"
+            }
+        }
+    }
+}
+
+#[cfg(feature = "browser")]
+#[component]
 fn V2BlockEditor(
     state: Signal<V2EditorState>,
     page_options: Vec<(String, String)>,
@@ -1826,6 +2172,10 @@ fn V2BlockEditor(
                 V2ImageBlockEditor { state, block: block.clone(), locked }
             } else if let Some(form) = form {
                 V2FormEditor { state, form, locked }
+            } else if matches!(block, BlockV2::Faq { .. }) {
+                V2FaqBlockEditor { state, block: block.clone(), locked }
+            } else if matches!(block, BlockV2::Steps { .. }) {
+                V2StepsBlockEditor { state, block: block.clone(), locked }
             } else {
                 label { class: "editor-setting-control",
                     "{control_label}"
@@ -2295,6 +2645,88 @@ mod tests {
         );
         assert_eq!(button_action_for_kind("section", &pages, &[]), None);
         assert_eq!(button_action_for_kind("unknown", &pages, &sections), None);
+    }
+
+    #[test]
+    fn structured_block_controls_edit_add_move_and_remove_items() {
+        use eez_domain::document_v2::BlockId;
+
+        let faq = BlockV2::Faq {
+            id: BlockId::parse("faq-block").expect("block ID"),
+            items: vec![
+                FaqItem {
+                    question: "First question".to_owned(),
+                    answer: "First answer".to_owned(),
+                },
+                FaqItem {
+                    question: "Second question".to_owned(),
+                    answer: "Second answer".to_owned(),
+                },
+            ],
+        };
+        let BlockV2::Faq { items, .. } = &faq else {
+            unreachable!("FAQ fixture remains an FAQ");
+        };
+        let mut edited_items = items.clone();
+        edited_items[0].answer = "Updated answer".to_owned();
+        assert_eq!(
+            block_value_with_faq_items(&faq, edited_items),
+            Some(NewBlock::Faq {
+                items: vec![
+                    FaqItem {
+                        question: "First question".to_owned(),
+                        answer: "Updated answer".to_owned(),
+                    },
+                    FaqItem {
+                        question: "Second question".to_owned(),
+                        answer: "Second answer".to_owned(),
+                    },
+                ],
+            })
+        );
+        let moved = items_after_move(items, 1, -1).expect("second item moves before first");
+        assert_eq!(moved[0].question, "Second question");
+        assert_eq!(moved[1].question, "First question");
+        let removed = item_after_remove(&moved, 0).expect("one of two entries can be removed");
+        assert_eq!(removed, [items[0].clone()]);
+        let added = item_after_add(
+            &removed,
+            FaqItem {
+                question: "Third question".to_owned(),
+                answer: "Third answer".to_owned(),
+            },
+        )
+        .expect("entry can be added below the maximum");
+        assert_eq!(added[1].question, "Third question");
+        assert_eq!(item_after_remove(&added[..1], 0), None);
+        assert_eq!(items_after_move(items, 0, -1), None);
+
+        let at_limit = vec![items[0].clone(); MAX_FUNCTIONAL_BLOCK_ITEMS];
+        assert_eq!(
+            item_after_add(
+                &at_limit,
+                FaqItem {
+                    question: "Overflow".to_owned(),
+                    answer: "Overflow".to_owned(),
+                }
+            ),
+            None
+        );
+
+        let steps = BlockV2::Steps {
+            id: BlockId::parse("steps-block").expect("block ID"),
+            items: vec![StepItem {
+                title: "First step".to_owned(),
+                detail: "Explain the step".to_owned(),
+            }],
+        };
+        let BlockV2::Steps { items, .. } = steps.clone() else {
+            unreachable!("steps fixture remains steps");
+        };
+        assert_eq!(
+            block_value_with_step_items(&steps, items.clone()),
+            Some(NewBlock::Steps { items })
+        );
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::model::{
-    BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FieldId, FormField,
-    FormId, FormPresentation, FormResult, FormV2, PageId, PageV2, PublicLanguage, SectionId,
-    SectionKind, SectionV2, TextPresentation, ValidationRange,
+    BlockId, BlockV2, ConsentCopy, DocumentData, DocumentError, DocumentV2, FaqItem, FieldId,
+    FormField, FormId, FormPresentation, FormResult, FormV2, PageId, PageV2, PublicLanguage,
+    SectionId, SectionKind, SectionV2, StepItem, TextPresentation, ValidationRange,
 };
 use super::theme::ThemeOverrides;
 use crate::ThemePreset;
@@ -47,6 +47,12 @@ pub enum NewBlock {
     },
     Form {
         form_id: FormId,
+    },
+    Faq {
+        items: Vec<FaqItem>,
+    },
+    Steps {
+        items: Vec<StepItem>,
     },
 }
 
@@ -688,6 +694,8 @@ impl NewBlock {
             Self::Button { label, action } => BlockV2::Button { id, label, action },
             Self::Image { asset_id, alt } => BlockV2::Image { id, asset_id, alt },
             Self::Form { form_id } => BlockV2::Form { id, form_id },
+            Self::Faq { items } => BlockV2::Faq { id, items },
+            Self::Steps { items } => BlockV2::Steps { id, items },
         }
     }
 }
@@ -907,6 +915,8 @@ fn duplicate_block_with_id(
                 form_id: copied_id,
             }
         }
+        BlockV2::Faq { items, .. } => BlockV2::Faq { id, items },
+        BlockV2::Steps { items, .. } => BlockV2::Steps { id, items },
     })
 }
 

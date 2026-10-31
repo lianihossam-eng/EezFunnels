@@ -3,8 +3,9 @@ use super::*;
 use crate::routes::RouteView;
 use eez_domain::document_v2::PublicLanguage;
 use eez_domain::document_v2::{
-    is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FocusTarget, FormField, FormResult,
-    IdKind, IdSource, NewBlock, SectionKind, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
+    is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FaqItem, FocusTarget, FormField,
+    FormResult, IdKind, IdSource, NewBlock, SectionKind, StepItem, MAX_FUNCTIONAL_BLOCK_ITEMS,
+    SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
 };
 #[cfg(feature = "browser")]
 use eez_domain::document_v2::{AssetId, BlockId, ImageAlt};
@@ -48,6 +49,28 @@ fn public_default_text(
         PublicLanguage::French => french,
     }
     .to_owned()
+}
+
+fn new_faq_item(language: PublicLanguage) -> FaqItem {
+    FaqItem {
+        question: public_default_text(language, "Common question", "Question fréquente"),
+        answer: public_default_text(
+            language,
+            "Write an answer for your visitors.",
+            "Rédigez une réponse pour vos visiteurs.",
+        ),
+    }
+}
+
+fn new_step_item(language: PublicLanguage) -> StepItem {
+    StepItem {
+        title: public_default_text(language, "Step title", "Titre de l’étape"),
+        detail: public_default_text(
+            language,
+            "Describe what happens in this step.",
+            "Décrivez ce qui se passe à cette étape.",
+        ),
+    }
 }
 
 #[cfg(feature = "browser")]

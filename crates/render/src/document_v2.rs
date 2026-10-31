@@ -9,7 +9,8 @@ use eez_domain::document_v2::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v9";
+pub const RENDERER_VERSION_V2: &str = "renderer-v10";
+const RENDERER_V9_VERSION: &str = "renderer-v9";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -48,6 +49,7 @@ enum RendererFeature {
     FormPresentation,
     MultilineText,
     ActionDestinations,
+    FunctionalBlocks,
 }
 
 #[derive(Clone, Copy)]
@@ -96,6 +98,17 @@ const RENDERER_V9_FEATURES: &[RendererFeature] = &[
     RendererFeature::MultilineText,
     RendererFeature::ActionDestinations,
 ];
+const RENDERER_V10_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+    RendererFeature::Metadata,
+    RendererFeature::PublicLanguage,
+    RendererFeature::FormPresentation,
+    RendererFeature::MultilineText,
+    RendererFeature::ActionDestinations,
+    RendererFeature::FunctionalBlocks,
+];
 const RENDERER_PROFILES: &[RendererProfile] = &[
     RendererProfile {
         version: "renderer-v3",
@@ -122,8 +135,12 @@ const RENDERER_PROFILES: &[RendererProfile] = &[
         features: RENDERER_V8_FEATURES,
     },
     RendererProfile {
-        version: RENDERER_VERSION_V2,
+        version: RENDERER_V9_VERSION,
         features: RENDERER_V9_FEATURES,
+    },
+    RendererProfile {
+        version: RENDERER_VERSION_V2,
+        features: RENDERER_V10_FEATURES,
     },
 ];
 
@@ -148,6 +165,7 @@ pub enum V2RenderError {
     FormPresentationNotEnabled,
     MultilineTextNotEnabled,
     ActionDestinationsNotEnabled,
+    FunctionalBlocksNotEnabled,
     SerializationFailed,
 }
 
@@ -166,6 +184,7 @@ impl Display for V2RenderError {
             Self::FormPresentationNotEnabled => "validation/v2_form_presentation_not_enabled",
             Self::MultilineTextNotEnabled => "validation/v2_multiline_text_not_enabled",
             Self::ActionDestinationsNotEnabled => "validation/v2_action_destinations_not_enabled",
+            Self::FunctionalBlocksNotEnabled => "validation/v2_functional_blocks_not_enabled",
             Self::SerializationFailed => "internal/unexpected",
         };
         formatter.write_str(code)
@@ -580,6 +599,18 @@ fn validate_manifest(
     {
         return Err(V2RenderError::ActionDestinationsNotEnabled);
     }
+    if !profile.supports(RendererFeature::FunctionalBlocks)
+        && document.pages().iter().any(|page| {
+            page.sections().iter().any(|section| {
+                section
+                    .blocks()
+                    .iter()
+                    .any(|block| matches!(block, BlockV2::Faq { .. } | BlockV2::Steps { .. }))
+            })
+        })
+    {
+        return Err(V2RenderError::FunctionalBlocksNotEnabled);
+    }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let assets = canonical_asset_records(document, assets)?;
@@ -735,6 +766,9 @@ fn render_page(
         html.push_str(".v2-form-errors{max-width:40rem;margin:0 auto 1.25rem;padding:1rem;border:2px solid var(--color-primary);border-radius:var(--radius-card);background:var(--color-surface)}.v2-form-errors :focus-visible,.v2-form-errors a:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-form-error{margin:0;color:var(--color-text);font-weight:600}.v2-form [aria-invalid=\"true\"]{outline:2px solid var(--color-primary);outline-offset:2px}");
     }
     html.push_str(".v2-image{display:block;max-width:100%;height:auto}");
+    if renderer.supports(RendererFeature::FunctionalBlocks) {
+        html.push_str(".v2-faq{display:grid;gap:.75rem}.v2-faq-item{padding:.75rem 1rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface)}.v2-faq-item>summary{cursor:pointer;font-weight:700}.v2-faq-item>summary:focus-visible{outline:3px solid var(--color-primary);outline-offset:4px;border-radius:var(--radius-button)}.v2-faq-answer{margin:.75rem 0 0;white-space:pre-wrap;overflow-wrap:anywhere}.v2-steps{display:grid;gap:1rem;padding-inline-start:1.5rem}.v2-step{padding-inline-start:.25rem}.v2-step-title{margin:0 0 .25rem}.v2-step-detail{white-space:pre-wrap;overflow-wrap:anywhere}");
+    }
     html.push_str("#funnel{--color-background:");
     html.push_str(&theme_profile.desktop["color-background"]);
     html.push_str(";--color-border:");
@@ -823,6 +857,28 @@ fn render_page(
                         html.push_str("</li>");
                     }
                     html.push_str("</ul>");
+                }
+                BlockV2::Faq { items, .. } => {
+                    html.push_str("<div class=\"v2-faq\">");
+                    for item in items {
+                        html.push_str("<details class=\"v2-faq-item\"><summary>");
+                        html.push_str(&crate::escape_html_text(&item.question));
+                        html.push_str("</summary><p class=\"v2-faq-answer\">");
+                        html.push_str(&crate::escape_html_text_preserving_whitespace(&item.answer));
+                        html.push_str("</p></details>");
+                    }
+                    html.push_str("</div>");
+                }
+                BlockV2::Steps { items, .. } => {
+                    html.push_str("<ol class=\"v2-steps\">");
+                    for item in items {
+                        html.push_str("<li class=\"v2-step\"><h3 class=\"v2-step-title\">");
+                        html.push_str(&crate::escape_html_text(&item.title));
+                        html.push_str("</h3><p class=\"v2-step-detail\">");
+                        html.push_str(&crate::escape_html_text_preserving_whitespace(&item.detail));
+                        html.push_str("</p></li>");
+                    }
+                    html.push_str("</ol>");
                 }
                 BlockV2::Button { label, action, .. } => match action {
                     ActionV2::ExternalHttps { url }

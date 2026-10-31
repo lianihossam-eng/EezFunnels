@@ -8,6 +8,8 @@ use super::model::{
     is_valid_stable_id, ActionV2, BlockV2, DocumentData, DocumentError, FormField, FormResult,
     FormSubmissionError, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget,
     FormSubmissionValue, FormV2, PageId, TextPresentation, ValidatedFormSubmission,
+    MAX_FUNCTIONAL_BLOCK_ITEMS, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES,
+    MAX_FUNCTIONAL_BLOCK_TEXT_BYTES,
 };
 use super::placeholders::target_contains_text;
 
@@ -419,6 +421,48 @@ fn validate_block(block: &mut BlockV2) -> Result<(), DocumentError> {
             }
         }
         BlockV2::Form { .. } => {}
+        BlockV2::Faq { items, .. } => validate_functional_block_items(
+            items.len(),
+            items.iter().flat_map(|item| {
+                [
+                    (item.question.as_str(), "blocks.items.question"),
+                    (item.answer.as_str(), "blocks.items.answer"),
+                ]
+            }),
+        )?,
+        BlockV2::Steps { items, .. } => validate_functional_block_items(
+            items.len(),
+            items.iter().flat_map(|item| {
+                [
+                    (item.title.as_str(), "blocks.items.title"),
+                    (item.detail.as_str(), "blocks.items.detail"),
+                ]
+            }),
+        )?,
+    }
+    Ok(())
+}
+
+fn validate_functional_block_items<'a>(
+    count: usize,
+    texts: impl IntoIterator<Item = (&'a str, &'static str)>,
+) -> Result<(), DocumentError> {
+    if !(1..=MAX_FUNCTIONAL_BLOCK_ITEMS).contains(&count) {
+        return Err(DocumentError::at(
+            "validation/functional_block_item_count",
+            "blocks.items",
+        ));
+    }
+    let mut total_bytes = 0usize;
+    for (text, path) in texts {
+        validate_nonempty_text(text, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES, path)?;
+        total_bytes += text.len();
+    }
+    if total_bytes > MAX_FUNCTIONAL_BLOCK_TEXT_BYTES {
+        return Err(DocumentError::at(
+            "validation/functional_block_text_length",
+            "blocks.items",
+        ));
     }
     Ok(())
 }

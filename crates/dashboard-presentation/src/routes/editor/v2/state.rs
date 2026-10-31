@@ -180,6 +180,8 @@ pub(super) enum V2NewBlockKind {
     Text,
     List,
     Button,
+    Faq,
+    Steps,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -190,7 +192,14 @@ pub(super) enum V2SavePhase {
 }
 
 impl V2NewBlockKind {
-    pub(super) const ALL: [Self; 4] = [Self::Heading, Self::Text, Self::List, Self::Button];
+    pub(super) const ALL: [Self; 6] = [
+        Self::Heading,
+        Self::Text,
+        Self::List,
+        Self::Button,
+        Self::Faq,
+        Self::Steps,
+    ];
 
     pub(super) const fn id(self) -> &'static str {
         match self {
@@ -198,6 +207,8 @@ impl V2NewBlockKind {
             Self::Text => "text",
             Self::List => "list",
             Self::Button => "button",
+            Self::Faq => "faq",
+            Self::Steps => "steps",
         }
     }
 
@@ -207,6 +218,8 @@ impl V2NewBlockKind {
             Self::Text => "Text",
             Self::List => "List",
             Self::Button => "Button",
+            Self::Faq => "FAQ",
+            Self::Steps => "Steps",
         }
     }
 
@@ -238,6 +251,12 @@ impl V2NewBlockKind {
                 action: ActionV2::ExternalHttps {
                     url: "https://example.invalid".to_owned(),
                 },
+            },
+            Self::Faq => NewBlock::Faq {
+                items: vec![new_faq_item(language)],
+            },
+            Self::Steps => NewBlock::Steps {
+                items: vec![new_step_item(language)],
             },
         }
     }
@@ -752,9 +771,25 @@ impl V2EditorState {
         let outcome = match document.apply(edit.clone(), &mut ids) {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.error = Some(match error.code() {
-                    "validation/page_unreachable" => "This page cannot be deleted because it is the only route to a later step. Reconnect those steps before deleting it.".to_owned(),
-                    _ => format!("This change cannot be applied yet ({})", error.code()),
+                self.error = Some(match (&edit, error.code()) {
+                    (
+                        Edit::SetBlock {
+                            value: NewBlock::Faq { .. } | NewBlock::Steps { .. },
+                            ..
+                        },
+                        "validation/text_length",
+                    ) => {
+                        "Each FAQ or step text field has a 2,048-byte UTF-8 limit.".to_owned()
+                    }
+                    (
+                        Edit::SetBlock {
+                            value: NewBlock::Faq { .. } | NewBlock::Steps { .. },
+                            ..
+                        },
+                        "validation/functional_block_text_length",
+                    ) => "This FAQ or steps block exceeds 16 KiB of UTF-8 text. Shorten an entry or remove one before continuing.".to_owned(),
+                    (_, "validation/page_unreachable") => "This page cannot be deleted because it is the only route to a later step. Reconnect those steps before deleting it.".to_owned(),
+                    (_, code) => format!("This change cannot be applied yet ({code})"),
                 });
                 self.status = None;
                 return None;
@@ -1694,6 +1729,161 @@ mod tests {
     }
 
     #[test]
+    fn faq_block_edits_and_addition_are_restored_through_editor_history() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document(), Some(stage_capacity()))),
+        );
+
+        state
+            .apply_local_edit(
+                Edit::AddBlock {
+                    section: SectionId::parse("section-hero").expect("section ID"),
+                    after: None,
+                    block: V2NewBlockKind::Faq.create(PublicLanguage::English),
+                },
+                "add-faq-block".to_owned(),
+            )
+            .expect("FAQ block can be added");
+        state.pending = false;
+        let faq = state.document.as_ref().expect("edited document").pages()[0].sections()[0]
+            .blocks()
+            .iter()
+            .find(|block| matches!(block, BlockV2::Faq { .. }))
+            .expect("new FAQ block exists")
+            .clone();
+        let faq_id = faq.id().clone();
+
+        state
+            .apply_local_edit(
+                Edit::SetBlock {
+                    block: faq_id.clone(),
+                    value: NewBlock::Faq {
+                        items: vec![
+                            FaqItem {
+                                question: "Can I edit the content?".to_owned(),
+                                answer: "Yes, every entry is editable.".to_owned(),
+                            },
+                            FaqItem {
+                                question: "Can I add another question?".to_owned(),
+                                answer: "Add another entry in the editor.".to_owned(),
+                            },
+                        ],
+                    },
+                },
+                "edit-faq-block".to_owned(),
+            )
+            .expect("FAQ content can be edited");
+        let edited = state.document.as_ref().expect("updated document").pages()[0].sections()[0]
+            .blocks()
+            .iter()
+            .find(|block| block.id() == &faq_id)
+            .expect("edited FAQ block exists");
+        assert!(matches!(
+            edited,
+            BlockV2::Faq { items, .. }
+                if items.len() == 2 && items[0].answer == "Yes, every entry is editable."
+        ));
+
+        state.pending = false;
+        state
+            .apply_history(-1)
+            .expect("undo restores the original FAQ entry");
+        let restored = state.document.as_ref().expect("restored document").pages()[0].sections()[0]
+            .blocks()
+            .iter()
+            .find(|block| block.id() == &faq_id)
+            .expect("FAQ block remains after undo");
+        assert!(matches!(
+            restored,
+            BlockV2::Faq { items, .. }
+                if items.len() == 1 && items[0].question == "Common question"
+        ));
+
+        state
+            .apply_history(-1)
+            .expect("second undo removes the added block");
+        assert!(!state
+            .document
+            .as_ref()
+            .expect("restored original document")
+            .pages()[0]
+            .sections()[0]
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, BlockV2::Faq { .. })));
+    }
+
+    #[test]
+    fn faq_limit_errors_explain_utf8_field_and_block_budgets() {
+        let mut state = V2EditorState::for_route("funnel-a".to_owned());
+        state.finish_load(
+            0,
+            "funnel-a",
+            Ok(loaded_editor(document(), Some(stage_capacity()))),
+        );
+        state
+            .apply_local_edit(
+                Edit::AddBlock {
+                    section: SectionId::parse("section-hero").expect("section ID"),
+                    after: None,
+                    block: V2NewBlockKind::Faq.create(PublicLanguage::English),
+                },
+                "add-faq-for-limit-test".to_owned(),
+            )
+            .expect("FAQ block can be added");
+        state.pending = false;
+        let faq_id = state.document.as_ref().expect("edited document").pages()[0].sections()[0]
+            .blocks()
+            .iter()
+            .find(|block| matches!(block, BlockV2::Faq { .. }))
+            .expect("FAQ block exists")
+            .id()
+            .clone();
+
+        let aggregate_error = state.apply_local_edit(
+            Edit::SetBlock {
+                block: faq_id.clone(),
+                value: NewBlock::Faq {
+                    items: (0..5)
+                        .map(|_| FaqItem {
+                            question: "q".repeat(2048),
+                            answer: "a".repeat(2048),
+                        })
+                        .collect(),
+                },
+            },
+            "faq-aggregate-limit-test".to_owned(),
+        );
+        assert!(aggregate_error.is_none());
+        assert_eq!(
+            state.error.as_deref(),
+            Some("This FAQ or steps block exceeds 16 KiB of UTF-8 text. Shorten an entry or remove one before continuing.")
+        );
+
+        state.error = None;
+        let field_error = state.apply_local_edit(
+            Edit::SetBlock {
+                block: faq_id,
+                value: NewBlock::Faq {
+                    items: vec![FaqItem {
+                        question: "é".repeat(1025),
+                        answer: "A clear answer.".to_owned(),
+                    }],
+                },
+            },
+            "faq-field-limit-test".to_owned(),
+        );
+        assert!(field_error.is_none());
+        assert_eq!(
+            state.error.as_deref(),
+            Some("Each FAQ or step text field has a 2,048-byte UTF-8 limit.")
+        );
+    }
+
+    #[test]
     fn editing_a_form_preserves_the_current_page_in_the_preview_capture() {
         let mut loaded = loaded_editor(document_with_secondary_page(), Some(stage_capacity()));
         loaded.selected_page = "page-thanks".to_owned();
@@ -2190,6 +2380,18 @@ mod tests {
             panic!("button kind creates a button block");
         };
         assert_eq!(label, "Continuer");
+
+        let NewBlock::Faq { items } = V2NewBlockKind::Faq.create(PublicLanguage::French) else {
+            panic!("FAQ kind creates a structured FAQ block");
+        };
+        assert_eq!(items[0].question, "Question fréquente");
+        assert_eq!(items[0].answer, "Rédigez une réponse pour vos visiteurs.");
+
+        let NewBlock::Steps { items } = V2NewBlockKind::Steps.create(PublicLanguage::French) else {
+            panic!("steps kind creates a structured steps block");
+        };
+        assert_eq!(items[0].title, "Titre de l’étape");
+        assert_eq!(items[0].detail, "Décrivez ce qui se passe à cette étape.");
     }
 
     #[test]
