@@ -2,17 +2,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
 use eez_domain::document_v2::{
-    ActionV2, BlockId, BlockV2, CurrencyCode, DocumentV2, ExactPriceAmount, FormField, FormId,
-    FormResult, FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormV2,
-    OfferPriceV2, PageId, PricePeriod, PublicLanguage, SectionKind, TextPresentation,
-    MAX_OFFER_COMPARISON_RENDER_BYTES,
+    ActionV2, BlockId, BlockV2, CurrencyCode, DocumentV2, EvidenceKind, EvidenceStatus,
+    ExactPriceAmount, FormField, FormId, FormResult, FormSubmissionIssue, FormSubmissionIssueCode,
+    FormSubmissionIssueTarget, FormV2, OfferPriceV2, PageId, PricePeriod, PublicLanguage,
+    SectionKind, TextPresentation, MAX_OFFER_COMPARISON_RENDER_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const RENDERER_VERSION_V2: &str = "renderer-v11";
+pub const RENDERER_VERSION_V2: &str = "renderer-v12";
 const RENDERER_V9_VERSION: &str = "renderer-v9";
 const RENDERER_V10_VERSION: &str = "renderer-v10";
+const RENDERER_V11_VERSION: &str = "renderer-v11";
 pub const PUBLIC_FORM_SUBMISSION_KEY_MARKER: &str = "EEZ_FORM_SUBMISSION_KEY";
 pub const DOCUMENT_VALIDATOR_VERSION_V2: &str = "funnel-document-v2-validator-v1";
 pub const CANONICALIZER_PROFILE_V2: &str = "rfc8785-jcs-v1";
@@ -53,6 +54,7 @@ enum RendererFeature {
     ActionDestinations,
     FunctionalBlocks,
     OfferPricing,
+    Evidence,
 }
 
 #[derive(Clone, Copy)]
@@ -124,6 +126,19 @@ const RENDERER_V11_FEATURES: &[RendererFeature] = &[
     RendererFeature::FunctionalBlocks,
     RendererFeature::OfferPricing,
 ];
+const RENDERER_V12_FEATURES: &[RendererFeature] = &[
+    RendererFeature::Multipage,
+    RendererFeature::Forms,
+    RendererFeature::Images,
+    RendererFeature::Metadata,
+    RendererFeature::PublicLanguage,
+    RendererFeature::FormPresentation,
+    RendererFeature::MultilineText,
+    RendererFeature::ActionDestinations,
+    RendererFeature::FunctionalBlocks,
+    RendererFeature::OfferPricing,
+    RendererFeature::Evidence,
+];
 const RENDERER_PROFILES: &[RendererProfile] = &[
     RendererProfile {
         version: "renderer-v3",
@@ -158,8 +173,12 @@ const RENDERER_PROFILES: &[RendererProfile] = &[
         features: RENDERER_V10_FEATURES,
     },
     RendererProfile {
-        version: RENDERER_VERSION_V2,
+        version: RENDERER_V11_VERSION,
         features: RENDERER_V11_FEATURES,
+    },
+    RendererProfile {
+        version: RENDERER_VERSION_V2,
+        features: RENDERER_V12_FEATURES,
     },
 ];
 
@@ -186,6 +205,7 @@ pub enum V2RenderError {
     ActionDestinationsNotEnabled,
     FunctionalBlocksNotEnabled,
     OfferPricingNotEnabled,
+    EvidenceNotEnabled,
     OfferComparisonRenderLimitExceeded,
     SerializationFailed,
 }
@@ -207,6 +227,7 @@ impl Display for V2RenderError {
             Self::ActionDestinationsNotEnabled => "validation/v2_action_destinations_not_enabled",
             Self::FunctionalBlocksNotEnabled => "validation/v2_functional_blocks_not_enabled",
             Self::OfferPricingNotEnabled => "validation/v2_offer_pricing_not_enabled",
+            Self::EvidenceNotEnabled => "validation/v2_evidence_not_enabled",
             Self::OfferComparisonRenderLimitExceeded => "validation/offer_comparison_render_budget",
             Self::SerializationFailed => "internal/unexpected",
         };
@@ -648,6 +669,18 @@ fn validate_manifest(
     {
         return Err(V2RenderError::OfferPricingNotEnabled);
     }
+    if !profile.supports(RendererFeature::Evidence)
+        && document.pages().iter().any(|page| {
+            page.sections().iter().any(|section| {
+                section
+                    .blocks()
+                    .iter()
+                    .any(|block| matches!(block, BlockV2::Evidence { .. }))
+            })
+        })
+    {
+        return Err(V2RenderError::EvidenceNotEnabled);
+    }
     let theme_bytes = serde_json_canonicalizer::to_vec(&document.resolved_theme_profile())
         .map_err(|_| V2RenderError::SerializationFailed)?;
     let assets = canonical_asset_records(document, assets)?;
@@ -707,8 +740,16 @@ pub fn referenced_asset_ids(document: &DocumentV2) -> Vec<String> {
     for page in document.pages() {
         for section in page.sections() {
             for block in section.blocks() {
-                if let BlockV2::Image { asset_id, .. } = block {
-                    asset_ids.insert(asset_id.as_str().to_owned());
+                match block {
+                    BlockV2::Image { asset_id, .. } => {
+                        asset_ids.insert(asset_id.as_str().to_owned());
+                    }
+                    BlockV2::Evidence {
+                        image: Some(image), ..
+                    } => {
+                        asset_ids.insert(image.asset_id.as_str().to_owned());
+                    }
+                    _ => {}
                 }
             }
         }
@@ -811,6 +852,9 @@ fn render_page(
     }
     if renderer.supports(RendererFeature::OfferPricing) {
         html.push_str(".v2-offer-card{display:grid;gap:.75rem;padding:1.25rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface)}.v2-offer-title{margin:0}.v2-offer-scope,.v2-offer-conditions{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.v2-offer-prices{display:grid;gap:.4rem;margin:0}.v2-offer-price-row{display:grid;grid-template-columns:minmax(7rem,auto) minmax(0,1fr);gap:.25rem .75rem;overflow-wrap:anywhere}.v2-offer-price-row dt{font-weight:700}.v2-offer-price-row dd{margin:0;font-variant-numeric:tabular-nums}.v2-offer-comparison-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;border:1px solid var(--color-border);border-radius:var(--radius-card)}.v2-offer-comparison-scroll:focus-visible{outline:3px solid var(--color-primary);outline-offset:3px}.v2-offer-comparison{width:max-content;min-width:100%;border-collapse:collapse}.v2-offer-comparison caption{padding:.75rem 1rem;text-align:start;font-weight:700}.v2-offer-comparison th,.v2-offer-comparison td{min-width:9rem;padding:.75rem 1rem;border-top:1px solid var(--color-border);text-align:start;vertical-align:top;overflow-wrap:anywhere}.v2-offer-comparison td{max-width:24rem}.v2-offer-comparison th[scope=col]{background:var(--color-surface)}.v2-offer-comparison th[scope=row]{width:8rem}");
+    }
+    if renderer.supports(RendererFeature::Evidence) {
+        html.push_str(".v2-evidence{display:grid;gap:.85rem;max-width:56rem;margin:1.5rem auto;padding:1.25rem;border:1px solid var(--color-border);border-radius:var(--radius-card);background:var(--color-surface)}.v2-evidence-status{width:fit-content;margin:0;padding:.2rem .55rem;border:1px solid var(--color-border);border-radius:999px;font-size:.875rem;font-weight:700}.v2-evidence-type{margin:0;color:var(--color-muted);font-size:.95rem}.v2-evidence-title{margin:0}.v2-evidence-content{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.v2-evidence-image{display:block;max-width:100%;height:auto;border-radius:var(--radius-card)}.v2-evidence-context{display:grid;grid-template-columns:minmax(7rem,max-content) minmax(0,1fr);gap:.35rem .75rem;margin:0;overflow-wrap:anywhere}.v2-evidence-context dt{font-weight:700}.v2-evidence-context dd{margin:0;white-space:pre-wrap}.v2-evidence-limitation{margin:0;padding-top:.75rem;border-top:1px solid var(--color-border);overflow-wrap:anywhere}.v2-evidence-limitation strong{display:block}");
     }
     html.push_str("#funnel{--color-background:");
     html.push_str(&theme_profile.desktop["color-background"]);
@@ -942,6 +986,74 @@ fn render_page(
                 }
                 BlockV2::OfferComparison { offer_ids, .. } => {
                     push_offer_comparison(&mut html, document, offer_ids, language)?;
+                }
+                BlockV2::Evidence {
+                    evidence_kind,
+                    title,
+                    content,
+                    status,
+                    limitation,
+                    image,
+                    ..
+                } => {
+                    html.push_str(
+                        "<article class=\"v2-evidence\"><p class=\"v2-evidence-status\">",
+                    );
+                    html.push_str(evidence_status_label(status, language));
+                    html.push_str("</p><p class=\"v2-evidence-type\">");
+                    html.push_str(evidence_kind_label(*evidence_kind, language));
+                    html.push_str("</p><h2 class=\"v2-evidence-title\">");
+                    html.push_str(&crate::escape_html_text(title));
+                    html.push_str("</h2>");
+                    if let Some(image) = image {
+                        let asset_id = image.asset_id.as_str();
+                        if !assets.iter().any(|asset| asset.asset_id == asset_id) {
+                            return Err(V2RenderError::ImagesNotEnabled);
+                        }
+                        html.push_str("<img class=\"v2-evidence-image\" src=\"/media/");
+                        html.push_str(&crate::escape_html_attribute(asset_id));
+                        html.push_str("\" alt=\"");
+                        html.push_str(&crate::escape_html_attribute(&image.alt));
+                        html.push_str("\" loading=\"lazy\" decoding=\"async\">");
+                    }
+                    match evidence_kind {
+                        EvidenceKind::Testimonial => {
+                            html.push_str("<blockquote class=\"v2-evidence-content\">")
+                        }
+                        EvidenceKind::CaseStudy => {
+                            html.push_str("<p class=\"v2-evidence-content\">")
+                        }
+                    }
+                    html.push_str(&crate::escape_html_text_preserving_whitespace(content));
+                    match evidence_kind {
+                        EvidenceKind::Testimonial => html.push_str("</blockquote>"),
+                        EvidenceKind::CaseStudy => html.push_str("</p>"),
+                    }
+                    if let EvidenceStatus::Real {
+                        attribution,
+                        date_or_period,
+                        scope,
+                    } = status
+                    {
+                        html.push_str("<dl class=\"v2-evidence-context\"><dt>");
+                        html.push_str(localized(language, "Attribution", "Attribution"));
+                        html.push_str("</dt><dd>");
+                        html.push_str(&crate::escape_html_text(attribution));
+                        html.push_str("</dd><dt>");
+                        html.push_str(localized(language, "Date or period", "Date ou période"));
+                        html.push_str("</dt><dd>");
+                        html.push_str(&crate::escape_html_text(date_or_period));
+                        html.push_str("</dd><dt>");
+                        html.push_str(localized(language, "Scope", "Périmètre"));
+                        html.push_str("</dt><dd>");
+                        html.push_str(&crate::escape_html_text_preserving_whitespace(scope));
+                        html.push_str("</dd></dl>");
+                    }
+                    html.push_str("<p class=\"v2-evidence-limitation\"><strong>");
+                    html.push_str(localized(language, "Limitations", "Limites"));
+                    html.push_str("</strong>");
+                    html.push_str(&crate::escape_html_text_preserving_whitespace(limitation));
+                    html.push_str("</p></article>");
                 }
                 BlockV2::Button { label, action, .. } => match action {
                     ActionV2::ExternalHttps { url }
@@ -1203,6 +1315,24 @@ fn localized(
     match language {
         PublicLanguage::English => english,
         PublicLanguage::French => french,
+    }
+}
+
+fn evidence_kind_label(kind: EvidenceKind, language: PublicLanguage) -> &'static str {
+    match (language, kind) {
+        (PublicLanguage::English, EvidenceKind::Testimonial) => "Testimonial",
+        (PublicLanguage::French, EvidenceKind::Testimonial) => "Témoignage",
+        (PublicLanguage::English, EvidenceKind::CaseStudy) => "Case study",
+        (PublicLanguage::French, EvidenceKind::CaseStudy) => "Étude de cas",
+    }
+}
+
+fn evidence_status_label(status: &EvidenceStatus, language: PublicLanguage) -> &'static str {
+    match (language, status) {
+        (PublicLanguage::English, EvidenceStatus::Demonstration) => "Demonstration",
+        (PublicLanguage::French, EvidenceStatus::Demonstration) => "Démonstration",
+        (PublicLanguage::English, EvidenceStatus::Real { .. }) => "Real evidence · attributed",
+        (PublicLanguage::French, EvidenceStatus::Real { .. }) => "Élément réel · attribué",
     }
 }
 

@@ -1,5 +1,6 @@
 use eez_domain::document_v2::{
-    BlockV2, DocumentV2, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget, OfferPriceV2,
+    BlockV2, DocumentV2, EvidenceStatus, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget,
+    OfferPriceV2,
 };
 use eez_storage::repository::RevisionRecord;
 use serde::Serialize;
@@ -42,6 +43,7 @@ enum ReadinessAction {
     ReplaceActionDestination,
     AddSearchDescription,
     CompleteOfferDetails,
+    CompleteEvidenceDetails,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -161,6 +163,20 @@ pub(super) fn for_v2(revision_id: &str, document: &DocumentV2) -> PublicationRea
                         },
                     });
                 }
+                if matches!(block, BlockV2::Evidence { title, content, status, limitation, image, .. }
+                    if !evidence_is_complete(title, content, status, limitation, image.as_ref().map(|image| image.alt.as_str())))
+                {
+                    findings.push(ReadinessFinding {
+                        code: "publication/evidence_incomplete",
+                        severity: ReadinessSeverity::Blocking,
+                        action: ReadinessAction::CompleteEvidenceDetails,
+                        target: ReadinessTarget::V2Block {
+                            page_id: page.id().as_str().to_owned(),
+                            section_id: section.id().as_str().to_owned(),
+                            block_id: block.id().as_str().to_owned(),
+                        },
+                    });
+                }
             }
         }
     }
@@ -208,5 +224,30 @@ fn offer_is_complete(
             ..
         }) => !unit.trim().is_empty(),
         Some(OfferPriceV2::OneTime { .. }) | Some(OfferPriceV2::Recurring { .. }) | None => false,
+    }
+}
+
+fn evidence_is_complete(
+    title: &str,
+    content: &str,
+    status: &EvidenceStatus,
+    limitation: &str,
+    image_alt: Option<&str>,
+) -> bool {
+    let required_text_is_present = [title, content, limitation]
+        .into_iter()
+        .all(|value| !value.trim().is_empty());
+    if !required_text_is_present || image_alt.is_some_and(|alt| alt.trim().is_empty()) {
+        return false;
+    }
+    match status {
+        EvidenceStatus::Demonstration => true,
+        EvidenceStatus::Real {
+            attribution,
+            date_or_period,
+            scope,
+        } => [attribution, date_or_period, scope]
+            .into_iter()
+            .all(|value| !value.trim().is_empty()),
     }
 }

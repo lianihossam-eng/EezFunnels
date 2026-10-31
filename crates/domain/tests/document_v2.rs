@@ -1,10 +1,10 @@
 use eez_domain::document_v2::{
     validate_form_submission, ActionV2, BlockV2, BlueprintId, ContentWidth, CurrencyCode,
-    DocumentV2, Edit, ExactPriceAmount, FontFamily, FormField, FormId, FormPresentation,
-    FormResult, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
-    GeneratedPlaceholderPageField, GeneratedPlaceholderTarget, IdKind, IdSource, NewBlock,
-    PublicLanguage, SectionId, SectionKind, TextPresentation, ThemeColors, ThemeOverrides,
-    TypeScale,
+    DocumentV2, Edit, EvidenceStatus, ExactPriceAmount, FontFamily, FormField, FormId,
+    FormPresentation, FormResult, FormSubmissionIssueCode, FormSubmissionIssueTarget,
+    FormSubmissionValue, GeneratedPlaceholderPageField, GeneratedPlaceholderTarget, IdKind,
+    IdSource, NewBlock, PublicLanguage, SectionId, SectionKind, TextPresentation, ThemeColors,
+    ThemeOverrides, TypeScale,
 };
 use eez_domain::ThemePreset;
 
@@ -171,6 +171,111 @@ fn absent_offer_price_stays_omitted_and_explicit_null_is_rejected() {
     }]))
     .expect_err("explicit null must not be accepted as an omitted field");
     assert_eq!(error.code(), "validation/document_invalid");
+}
+
+#[test]
+fn evidence_blocks_preserve_provenance_context_limits_and_existing_image_references() {
+    let document = decode_with_blocks(serde_json::json!([
+        {
+            "id":"evidence-demo",
+            "kind":"evidence",
+            "evidence_kind":"testimonial",
+            "title":"A clearly marked example",
+            "content":"Illustrative words, not a client statement.",
+            "status":{"kind":"demonstration"},
+            "limitation":"Demonstration only; no client or measured result is represented."
+        },
+        {
+            "id":"evidence-real",
+            "kind":"evidence",
+            "evidence_kind":"case_study",
+            "title":"Migration planning",
+            "content":"The team mapped the move in two workshops.",
+            "status":{
+                "kind":"real",
+                "attribution":"Northstar Studio, operations lead",
+                "date_or_period":"February 2026",
+                "scope":"Two planning workshops for a five-person team."
+            },
+            "limitation":"This describes planning work, not a measured revenue result.",
+            "image":{"asset_id":"asset-case-study","alt":"Workshop plan on a whiteboard"}
+        }
+    ]))
+    .expect("valid evidence is accepted");
+
+    let [BlockV2::Evidence {
+        status: demo_status,
+        image: None,
+        ..
+    }, BlockV2::Evidence {
+        status: real_status,
+        image: Some(image),
+        ..
+    }] = document.pages()[0].sections()[0].blocks()
+    else {
+        panic!("both evidence blocks retain their typed provenance");
+    };
+    assert_eq!(demo_status, &EvidenceStatus::Demonstration);
+    assert_eq!(
+        real_status,
+        &EvidenceStatus::Real {
+            attribution: "Northstar Studio, operations lead".to_owned(),
+            date_or_period: "February 2026".to_owned(),
+            scope: "Two planning workshops for a five-person team.".to_owned(),
+        }
+    );
+    assert_eq!(image.asset_id.as_str(), "asset-case-study");
+    assert_eq!(image.alt, "Workshop plan on a whiteboard");
+
+    let canonical = String::from_utf8(document.canonical_bytes().to_vec()).expect("canonical JSON");
+    assert!(canonical.contains("\"kind\":\"demonstration\""));
+    assert!(canonical.contains("\"date_or_period\":\"February 2026\""));
+    assert!(canonical.contains("\"limitation\":\"This describes planning work"));
+    assert!(!canonical.contains("\"image\":null"));
+}
+
+#[test]
+fn evidence_status_requires_real_attribution_date_and_scope_and_omits_legacy_fields() {
+    let incomplete_real = decode_with_blocks(serde_json::json!([{
+        "id":"evidence-real-incomplete",
+        "kind":"evidence",
+        "evidence_kind":"testimonial",
+        "title":"A client statement",
+        "content":"The work was clear.",
+        "status":{"kind":"real","attribution":"A client"},
+        "limitation":"One person's experience."
+    }]))
+    .expect_err("real evidence cannot omit its period or scope");
+    assert_eq!(incomplete_real.code(), "validation/document_invalid");
+
+    let explicit_null = decode_with_blocks(serde_json::json!([{
+        "id":"evidence-null-image",
+        "kind":"evidence",
+        "evidence_kind":"case_study",
+        "title":"Example",
+        "content":"An illustrative case.",
+        "status":{"kind":"demonstration"},
+        "limitation":"No client result is claimed.",
+        "image":null
+    }]))
+    .expect_err("image is omitted rather than serialized as null");
+    assert_eq!(explicit_null.code(), "validation/document_invalid");
+
+    let oversized_title = decode_with_blocks(serde_json::json!([{
+        "id":"evidence-long-title",
+        "kind":"evidence",
+        "evidence_kind":"case_study",
+        "title":"x".repeat(513),
+        "content":"An illustrative case.",
+        "status":{"kind":"demonstration"},
+        "limitation":"No client result is claimed."
+    }]))
+    .expect_err("evidence text has a bounded persisted size");
+    assert_eq!(oversized_title.code(), "validation/text_length");
+
+    let legacy = decode(MINIMAL);
+    let canonical = String::from_utf8(legacy.canonical_bytes().to_vec()).expect("canonical JSON");
+    assert!(!canonical.contains("evidence"));
 }
 
 #[test]

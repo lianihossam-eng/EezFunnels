@@ -1,7 +1,6 @@
 use super::*;
 #[cfg(feature = "browser")]
 use crate::routes::RouteView;
-use eez_domain::document_v2::PublicLanguage;
 use eez_domain::document_v2::{
     is_valid_page_slug, ActionV2, BlockV2, DocumentV2, Edit, FaqItem, FocusTarget, FormField,
     FormResult, IdKind, IdSource, NewBlock, OfferPriceV2, SectionKind, StepItem,
@@ -9,19 +8,23 @@ use eez_domain::document_v2::{
 };
 #[cfg(feature = "browser")]
 use eez_domain::document_v2::{
-    AssetId, BlockId, CurrencyCode, ExactPriceAmount, ImageAlt, PricePeriod,
-    MAX_OFFER_COMPARISON_ITEMS,
+    AssetId, BlockId, CurrencyCode, EvidenceImage, ExactPriceAmount, ImageAlt, PricePeriod,
+    MAX_EVIDENCE_CONTEXT_BYTES, MAX_EVIDENCE_IMAGE_ALT_BYTES, MAX_EVIDENCE_TEXT_BYTES,
+    MAX_EVIDENCE_TITLE_BYTES, MAX_OFFER_COMPARISON_ITEMS,
 };
 #[cfg(any(feature = "browser", test))]
 use eez_domain::document_v2::{
     ButtonShape, ContentWidth, CornerScale, FontFamily, ResolvedThemeProfile, Shadow, SpacingScale,
     ThemeColors, ThemeOverrides, TypeScale,
 };
+use eez_domain::document_v2::{EvidenceKind, EvidenceStatus, PublicLanguage};
 #[cfg(any(feature = "browser", test))]
 use eez_domain::ThemePreset;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[cfg(feature = "browser")]
+mod evidence;
 #[cfg(feature = "browser")]
 mod form_builder;
 #[cfg(feature = "browser")]

@@ -363,6 +363,75 @@ try {
   await offerComparison.getByText("EUR 3500.00 par project").waitFor();
   await assertCriticalAxeFindingsAbsent(page, "Offer editor and preview");
 
+  async function addEvidence() {
+    await page.getByLabel("Block type").selectOption("evidence");
+    const responsePromise = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.url().includes("/edit-v2"),
+    );
+    await page.getByRole("button", { name: "Add block" }).focus();
+    await pressKeyboard(page, "Enter");
+    assert.equal((await responsePromise).status(), 200);
+    return page.locator(".editor-block-row").filter({ hasText: "Evidence content" }).last();
+  }
+
+  const demoEvidence = await addEvidence();
+  assert.equal(
+    await demoEvidence.getByLabel(/^Evidence status for /).inputValue(),
+    "demonstration",
+  );
+  const demoTitle = demoEvidence.getByLabel(/^Evidence title for /);
+  await editV2Field(demoTitle, () => demoTitle.fill("Exemple de planification"));
+  const demoContent = demoEvidence.getByLabel(/^Evidence content for /);
+  await editV2Field(demoContent, () => demoContent.fill("Scénario de service illustratif."));
+  const demoLimitations = demoEvidence.getByLabel(/^Evidence limitations for /);
+  await editV2Field(demoLimitations, () =>
+    demoLimitations.fill("Démonstration uniquement, sans client ni résultat mesuré."),
+  );
+
+  const realEvidence = await addEvidence();
+  const evidenceStatus = realEvidence.getByLabel(/^Evidence status for /);
+  await editV2Field(evidenceStatus, () => evidenceStatus.selectOption("real"));
+  const realTitle = realEvidence.getByLabel(/^Evidence title for /);
+  await editV2Field(realTitle, () => realTitle.fill("Étude de migration"));
+  const realContent = realEvidence.getByLabel(/^Evidence content for /);
+  await editV2Field(realContent, () => realContent.fill("Deux ateliers ont cadré la migration."));
+  const attribution = realEvidence.getByLabel(/^Evidence attribution for /);
+  await editV2Field(attribution, () => attribution.fill("Atelier Nord, responsable des opérations"));
+  const dateOrPeriod = realEvidence.getByLabel(/^Evidence date or period for /);
+  await editV2Field(dateOrPeriod, () => dateOrPeriod.fill("Février 2026"));
+  const evidenceScope = realEvidence.getByLabel(/^Evidence scope for /);
+  await editV2Field(evidenceScope, () =>
+    evidenceScope.fill("Deux ateliers pour une équipe de cinq personnes."),
+  );
+  const realLimitations = realEvidence.getByLabel(/^Evidence limitations for /);
+  await editV2Field(realLimitations, () =>
+    realLimitations.fill("Préparation uniquement, sans résultat financier mesuré."),
+  );
+
+  const evidenceImageBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const evidenceImageUpload = page.waitForResponse(
+    (response) => response.url().endsWith("/api/media") && response.request().method() === "POST",
+  );
+  await page.locator("#v2-media-upload").setInputFiles({
+    name: "evidence-one-pixel.png",
+    mimeType: "image/png",
+    buffer: evidenceImageBytes,
+  });
+  const evidenceAsset = await responseJson(await evidenceImageUpload, 201, "Upload evidence image");
+  const evidenceImageSelector = realEvidence.getByLabel(/^Evidence image for /);
+  await editV2Field(evidenceImageSelector, () => evidenceImageSelector.selectOption(evidenceAsset.asset.id));
+  const evidenceImageAlt = realEvidence.getByLabel(/^Evidence image alternative text for /);
+  assert.equal(await evidenceImageAlt.inputValue(), "");
+  await editV2Field(evidenceImageAlt, () => evidenceImageAlt.fill("Schéma illustratif des étapes de préparation."));
+
+  await frenchPreview.getByText("Démonstration", { exact: true }).waitFor({ state: "attached" });
+  await frenchPreview.getByText("Élément réel · attribué", { exact: true }).waitFor({ state: "attached" });
+  assert.equal(await frenchPreview.getByText("Limites", { exact: true }).count(), 2);
+  await assertCriticalAxeFindingsAbsent(page, "Evidence editor and preview");
+
   const v2StagePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && response.url().endsWith(`/api/funnels/${createdV2FunnelId}/stages-v2`),
   );
@@ -387,6 +456,17 @@ try {
   assert.equal(publicOffersResponse?.status(), 200);
   await publishedOffers.getByRole("heading", { name: "Starter support" }).waitFor();
   await publishedOffers.getByRole("table", { name: "Comparaison des offres" }).waitFor();
+  await publishedOffers.getByText("Démonstration", { exact: true }).waitFor();
+  await publishedOffers.getByText("Élément réel · attribué", { exact: true }).waitFor();
+  const realEvidenceLimitation = publishedOffers
+    .locator(".v2-evidence-limitation")
+    .filter({ hasText: "Préparation uniquement, sans résultat financier mesuré." });
+  await realEvidenceLimitation.waitFor();
+  assert.ok(
+    (await realEvidenceLimitation.innerText()).includes(
+      "Préparation uniquement, sans résultat financier mesuré.",
+    ),
+  );
   const comparisonScroll = publishedOffers.locator(".v2-offer-comparison-scroll");
   const scrollDimensions = await comparisonScroll.evaluate((element) => ({
     clientWidth: element.clientWidth,

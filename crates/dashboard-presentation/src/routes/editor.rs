@@ -84,6 +84,9 @@ impl PublicationReadinessFinding {
             "publication/offer_incomplete" => {
                 "Complete the offer name, included scope, currency, price unit, required amount, and conditions before publishing."
             }
+            "publication/evidence_incomplete" => {
+                "Complete the evidence title, content, limitations, and image alternative; real evidence also needs attribution, date or period, and scope before publishing."
+            }
             "editorial/search_description_missing" => {
                 "Add a search description when it is useful for this page."
             }
@@ -2900,6 +2903,24 @@ mod tests {
         assert_eq!(
             finding.message(),
             "Complete the offer name, included scope, currency, price unit, required amount, and conditions before publishing."
+        );
+    }
+
+    #[test]
+    fn incomplete_evidence_readiness_explains_which_context_is_required() {
+        let finding = PublicationReadinessFinding {
+            code: "publication/evidence_incomplete".to_owned(),
+            severity: PublicationReadinessSeverity::Blocking,
+            target: PublicationReadinessTarget::V2Block {
+                page_id: "page-home".to_owned(),
+                section_id: "section-proof".to_owned(),
+                block_id: "evidence-client".to_owned(),
+            },
+        };
+
+        assert_eq!(
+            finding.message(),
+            "Complete the evidence title, content, limitations, and image alternative; real evidence also needs attribution, date or period, and scope before publishing."
         );
     }
 

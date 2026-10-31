@@ -19,6 +19,7 @@ These recordings show the current dashboard creating a webinar funnel, editing i
 - Build multi-page funnels: add steps, edit each page title and URL slug, connect pages with buttons, and preview at mobile, tablet, and desktop widths. See [Pages and steps](docs/pages.md) for the editor behavior.
 - Edit typed sections, supported content blocks, actions, and theme settings in the dashboard.
 - Describe service offers with exact decimal prices, stated units and conditions, and reusable side-by-side comparisons. An announced total is entered explicitly; it is not calculated and no order is created.
+- Add testimonials and case studies as contextualized evidence. Demonstrations are labeled, real claims carry attribution, date or period, scope, and limitations, and only existing media-library images can be attached.
 - Upload PNG, JPEG, and WebP images to the R2-backed media library, add them to typed pages, and set meaningful or decorative alternative text. Uploaded images have public, content-addressed URLs; do not upload private images.
 - Preview conversion of existing version 1 funnels before saving a typed revision. The editor reports unsupported content before conversion.
 - Review revision history, save immutable revisions, and publish or unpublish them. Public V2 pages use `/f/:slug/:page_slug`; `/f/:slug` remains the entry page.

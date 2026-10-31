@@ -1,6 +1,8 @@
 #[cfg(feature = "browser")]
 use super::drafts::*;
 #[cfg(feature = "browser")]
+use super::evidence::V2EvidenceBlockEditor;
+#[cfg(feature = "browser")]
 use super::offers::{offer_choices, V2OfferCardEditor, V2OfferComparisonEditor};
 #[cfg(feature = "browser")]
 use super::orchestration::*;
@@ -46,6 +48,7 @@ fn block_kind_label(block: &BlockV2) -> &'static str {
         BlockV2::Steps { .. } => "Steps",
         BlockV2::OfferCard { .. } => "Offer card",
         BlockV2::OfferComparison { .. } => "Offer comparison",
+        BlockV2::Evidence { .. } => "Evidence",
     }
 }
 
@@ -76,6 +79,7 @@ fn block_text(block: &BlockV2) -> String {
         BlockV2::OfferComparison { offer_ids, .. } => {
             format!("Compares {} offers", offer_ids.len())
         }
+        BlockV2::Evidence { title, .. } => title.clone(),
     }
 }
 
@@ -103,7 +107,8 @@ fn block_value_with_text(block: &BlockV2, text: String) -> Option<NewBlock> {
         BlockV2::Faq { .. }
         | BlockV2::Steps { .. }
         | BlockV2::OfferCard { .. }
-        | BlockV2::OfferComparison { .. } => None,
+        | BlockV2::OfferComparison { .. }
+        | BlockV2::Evidence { .. } => None,
     }
 }
 
@@ -1847,7 +1852,7 @@ fn V2ImageBlockEditor(state: Signal<V2EditorState>, block: BlockV2, locked: bool
 }
 
 #[cfg(feature = "browser")]
-fn media_size_label(size_bytes: u64) -> String {
+pub(super) fn media_size_label(size_bytes: u64) -> String {
     if size_bytes >= 1024 * 1024 {
         format!("{:.1} MiB", size_bytes as f64 / (1024.0 * 1024.0))
     } else {
@@ -2219,6 +2224,8 @@ fn V2BlockEditor(
                 V2OfferCardEditor { state, block: block.clone(), locked }
             } else if matches!(block, BlockV2::OfferComparison { .. }) {
                 V2OfferComparisonEditor { state, block: block.clone(), locked }
+            } else if matches!(block, BlockV2::Evidence { .. }) {
+                V2EvidenceBlockEditor { state, block: block.clone(), locked }
             } else {
                 label { class: "editor-setting-control",
                     "{control_label}"

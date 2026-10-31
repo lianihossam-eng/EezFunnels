@@ -37,6 +37,12 @@ A total amount explicitly stated by the owner for an offer. It is not calculated
 **Offer comparison**:
 A side-by-side presentation of selected offers that shows their existing scope, price, and conditions together. It does not recommend a choice or create an order.
 
+**Evidence item**:
+A testimonial or case study presented with a real or demonstration status, context, and limitations.
+
+**Demonstration evidence**:
+A fictional example labeled as a demonstration and not presented as a client statement or measured result.
+
 **Form definition**:
 A description of a form's purpose, fields, and completion result.
 

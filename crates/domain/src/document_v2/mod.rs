@@ -8,15 +8,17 @@ mod validate;
 pub use edit::{Edit, EditOutcome, FocusTarget, IdKind, IdSource, NewBlock, NewFormField};
 pub use model::{
     ActionV2, AssetId, BlockId, BlockKind, BlockV2, BlueprintId, ConsentCopy, CurrencyCode,
-    DocumentError, DocumentV2, ExactPriceAmount, FaqItem, FieldId, FormField, FormId,
-    FormPresentation, FormResult, FormSubmissionError, FormSubmissionIssue,
-    FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue, FormV2, ImageAlt,
-    OfferPriceV2, PageId, PageV2, PricePeriod, PublicLanguage, RevisionIdV2, SectionId,
-    SectionKind, SectionV2, StableDocumentId, StepItem, TextPresentation, V2FunnelId,
-    ValidatedFormSubmission, ValidationRange, MAX_FUNCTIONAL_BLOCK_ITEMS,
-    MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES, MAX_FUNCTIONAL_BLOCK_TEXT_BYTES,
-    MAX_OFFER_COMPARISON_ITEMS, MAX_OFFER_TEXT_BYTES, MAX_OFFER_UNIT_BYTES,
-    MIN_OFFER_COMPARISON_ITEMS, SAMPLE_EMAIL_ADDRESS, SAMPLE_TELEPHONE_NUMBER,
+    DocumentError, DocumentV2, EvidenceImage, EvidenceKind, EvidenceStatus, ExactPriceAmount,
+    FaqItem, FieldId, FormField, FormId, FormPresentation, FormResult, FormSubmissionError,
+    FormSubmissionIssue, FormSubmissionIssueCode, FormSubmissionIssueTarget, FormSubmissionValue,
+    FormV2, ImageAlt, OfferPriceV2, PageId, PageV2, PricePeriod, PublicLanguage, RevisionIdV2,
+    SectionId, SectionKind, SectionV2, StableDocumentId, StepItem, TextPresentation, V2FunnelId,
+    ValidatedFormSubmission, ValidationRange, MAX_EVIDENCE_CONTEXT_BYTES,
+    MAX_EVIDENCE_IMAGE_ALT_BYTES, MAX_EVIDENCE_TEXT_BYTES, MAX_EVIDENCE_TITLE_BYTES,
+    MAX_FUNCTIONAL_BLOCK_ITEMS, MAX_FUNCTIONAL_BLOCK_ITEM_TEXT_BYTES,
+    MAX_FUNCTIONAL_BLOCK_TEXT_BYTES, MAX_OFFER_COMPARISON_ITEMS, MAX_OFFER_TEXT_BYTES,
+    MAX_OFFER_UNIT_BYTES, MIN_OFFER_COMPARISON_ITEMS, SAMPLE_EMAIL_ADDRESS,
+    SAMPLE_TELEPHONE_NUMBER,
 };
 pub use placeholders::{
     GeneratedPlaceholderCode, GeneratedPlaceholderMarker, GeneratedPlaceholderPageField,
