@@ -362,9 +362,235 @@ async function main() {
     );
     assert.ok(outboundRequests.length >= callsBeforeConcurrent + 1);
 
+    const recipeScenarios = [
+      {
+        recipe: "contact",
+        fieldName: "project_details",
+        value: "Discuss a service project",
+        fields: { project_details: "Discuss a service project" },
+      },
+      {
+        recipe: "quote_request",
+        fieldName: "quote_scope",
+        value: "Estimate a workspace project",
+        fields: {
+          quote_scope: "Estimate a workspace project",
+          quote_timeline: "Before the next planning cycle",
+        },
+      },
+      {
+        recipe: "diagnostic_application",
+        fieldName: "diagnostic_goal",
+        value: "Clarify which intake process to improve first",
+        fields: {
+          current_situation: "Several intake processes are disconnected",
+          diagnostic_goal: "Clarify which intake process to improve first",
+        },
+      },
+    ];
+
+    const destinationReadResponse = await mf.dispatchFetch(
+      `http://127.0.0.1:${port}/api/webhook-delivery`,
+    );
+    assert.equal(destinationReadResponse.status, 200, await destinationReadResponse.clone().text());
+    const destinationBefore = await destinationReadResponse.json();
+    const destinationSaveKey = crypto.randomUUID();
+    const destinationSaveResponse = await mf.dispatchFetch(
+      `http://127.0.0.1:${port}/api/webhook-delivery`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": destinationSaveKey,
+        },
+        body: JSON.stringify({
+          expected_version_id: destinationBefore.destination_version_id,
+          expected_enabled: destinationBefore.enabled,
+          destination_url: DESTINATION,
+          enabled: true,
+        }),
+      },
+    );
+    assert.equal(destinationSaveResponse.status, 200, await destinationSaveResponse.clone().text());
+    const destination = await destinationSaveResponse.json();
+    assert.equal(destination.enabled, true);
+    assert.equal(destination.destination_version_id, destinationSaveKey);
+    assert.equal("signing_secret" in destination, false);
+
+    const recipeTasks = [];
+    for (const scenario of recipeScenarios) {
+      const recipeCreateResponse = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}/api/funnels/v2`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `pub019-recipe-${scenario.recipe}`,
+          },
+          body: JSON.stringify({
+            name: `PUB-019 ${scenario.recipe}`,
+            blueprint: "lead_gen",
+            service_recipe: scenario.recipe,
+          }),
+        },
+      );
+      assert.equal(recipeCreateResponse.status, 201, await recipeCreateResponse.clone().text());
+      const recipeCreated = await recipeCreateResponse.json();
+      const recipeFunnelId = recipeCreated.funnel.id;
+      const recipeRevisionId = recipeCreated.initial_revision.id;
+      const publishResponse = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}/api/funnels/${recipeFunnelId}/publish`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify({
+            revision_id: recipeRevisionId,
+            expected_published_revision_id: null,
+          }),
+        },
+      );
+      assert.equal(publishResponse.status, 200, await publishResponse.clone().text());
+
+      const recipeDocumentResponse = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}/api/funnels/${recipeFunnelId}/document`,
+      );
+      assert.equal(recipeDocumentResponse.status, 200, await recipeDocumentResponse.clone().text());
+      const recipeDocument = await recipeDocumentResponse.json();
+      const recipePage = recipeDocument.pages.find((candidate) =>
+        candidate.sections.some((section) =>
+          section.blocks.some((block) => block.kind === "form"),
+        ),
+      );
+      const recipeFormBlock = recipePage.sections.flatMap((section) => section.blocks).find(
+        (block) => block.kind === "form",
+      );
+      const recipeForm = recipeDocument.forms.find((candidate) => candidate.id === recipeFormBlock.form_id);
+      const selectedField = recipeForm.fields.find((field) => field.name === scenario.fieldName);
+      assert.ok(selectedField, `${scenario.recipe} must expose its selected delivery field`);
+
+      const recipeDeliveryRead = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}/api/funnels/${recipeFunnelId}/webhook-delivery`,
+      );
+      assert.equal(recipeDeliveryRead.status, 200, await recipeDeliveryRead.clone().text());
+      const recipeDelivery = await recipeDeliveryRead.json();
+      const mappedForm = recipeDelivery.forms.find((candidate) => candidate.form_id === recipeForm.id);
+      assert.ok(mappedForm, `${scenario.recipe} must be available for delivery configuration`);
+      const emailField = recipeForm.fields.find((field) => field.kind === "email");
+      assert.ok(emailField, `${scenario.recipe} must require an email field`);
+      const selectedFieldPairs = [
+        { id: emailField.id, name: emailField.name },
+        { id: selectedField.id, name: selectedField.name },
+      ].sort((left, right) => left.id.localeCompare(right.id));
+      const selectedFields = selectedFieldPairs.map(({ id }) => id);
+      const recipeMappingKey = crypto.randomUUID();
+      const recipeMappingResponse = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}/api/funnels/${recipeFunnelId}/webhook-delivery`,
+        {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": recipeMappingKey,
+          },
+          body: JSON.stringify({
+            form_id: recipeForm.id,
+            expected_published_revision_id: recipeRevisionId,
+            destination_version_id: destination.destination_version_id,
+            expected_mapping_version_id: mappedForm.mapping_version_id,
+            enabled: true,
+            selected_field_ids: selectedFields,
+          }),
+        },
+      );
+      assert.equal(recipeMappingResponse.status, 200, await recipeMappingResponse.clone().text());
+      const savedMapping = await recipeMappingResponse.json();
+      const savedForm = savedMapping.forms.find((candidate) => candidate.form_id === recipeForm.id);
+      assert.equal(savedForm.enabled, true);
+      assert.equal(savedForm.mapping_compatible, true);
+      assert.deepEqual(savedForm.selected_field_ids, selectedFields);
+
+      const submissionKey = crypto.randomUUID();
+      const actionQuery = new URLSearchParams({
+        key: submissionKey,
+        revision_id: recipeRevisionId,
+        channel: "unattributed",
+      });
+      const submissionPath =
+        `/api/public/funnels/${recipeCreated.funnel.slug}/pages/${recipePage.id}` +
+        `/forms/${recipeForm.id}/submissions?${actionQuery}`;
+      const recipeValues = Object.fromEntries(
+        recipeForm.fields.map((field) => [
+          field.name,
+          field.name === "name"
+            ? "Example service request"
+            : field.name === "email"
+              ? `${scenario.recipe}@example.test`
+              : scenario.fields[field.name] ?? "Additional fictional context",
+        ]),
+      );
+      const submitResponse = await mf.dispatchFetch(
+        `http://127.0.0.1:${port}${submissionPath}`,
+        {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "text/html",
+            origin: `http://127.0.0.1:${port}`,
+          },
+          body: new URLSearchParams({ ...recipeValues, _request_consent: "on" }).toString(),
+        },
+      );
+      assert.equal(submitResponse.status, 303, await submitResponse.clone().text());
+      assert.match(submitResponse.headers.get("location") ?? "", /\/request-received$/);
+
+      const storedSubmission = await query(
+        db,
+        "SELECT submission_id FROM public_form_submissions WHERE funnel_id = ? AND json_extract(field_values_json, '$.email') = ?",
+        recipeFunnelId,
+        `${scenario.recipe}@example.test`,
+      ).first();
+      assert.ok(storedSubmission, `${scenario.recipe} public POST must create an inbox submission`);
+      const recipeSubmissionId = storedSubmission.submission_id;
+      const recipeOutbox = await query(
+        db,
+        "SELECT task_id, source_submission_id, revision_id, destination_version_id, mapping_version_id FROM public_submission_delivery_outbox WHERE source_submission_id = ?",
+        recipeSubmissionId,
+      ).first();
+      assert.ok(recipeOutbox, `${scenario.recipe} public POST must create a delivery task`);
+      assert.equal(recipeOutbox.source_submission_id, recipeSubmissionId);
+      assert.equal(recipeOutbox.revision_id, recipeRevisionId);
+      assert.equal(recipeOutbox.destination_version_id, destination.destination_version_id);
+      assert.equal(recipeOutbox.mapping_version_id, recipeMappingKey);
+      recipeTasks.push({
+        recipe: scenario.recipe,
+        taskId: recipeOutbox.task_id,
+        selectedFieldPairs,
+        fieldValues: recipeValues,
+      });
+    }
+
+    responsePlans.push({ status: 202 }, { status: 202 }, { status: 202 });
+    await triggerCron();
+    for (const recipeTask of recipeTasks) {
+      assert.equal((await stateFor(recipeTask.taskId)).status, "accepted", recipeTask.recipe);
+      const deliveredRequest = outboundRequests.find(
+        (request) => request.deliveryId === recipeTask.taskId,
+      );
+      assert.ok(deliveredRequest, `${recipeTask.recipe} must reach the local receiver`);
+      const expectedFields = Object.fromEntries(
+        recipeTask.selectedFieldPairs.map(({ id, name }) => [id, recipeTask.fieldValues[name]]),
+      );
+      assert.deepEqual(deliveredRequest.payload.submission.fields, expectedFields);
+      assert.equal(receiverEffects.get(recipeTask.taskId), 1, `${recipeTask.recipe} has one accepted receiver effect`);
+    }
+
     console.log(
       "PUB-009 Worker/D1: HMAC, selected payload, 429/503/timeout retry, manual redirect, uncertain response dedupe, and concurrent claim passed",
     );
+    console.log("PUB-019 recipes: contact, estimate, and diagnostic requests were signed and delivered locally");
   } finally {
     await mf.dispose();
   }

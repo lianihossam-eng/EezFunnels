@@ -179,6 +179,7 @@ try {
   );
   for (let index = 0; index < 4; index += 1) await pressKeyboard(page, "ArrowDown");
   assert.equal(await page.locator('input[name="blueprint"]:checked').inputValue(), "lead_gen");
+  assert.equal(await page.locator('input[name="service_recipe"]:checked').inputValue(), "contact");
   await tabUntil(
     page,
     (active) => active.tag === "BUTTON" && hasName(active, "Create funnel"),
@@ -197,6 +198,7 @@ try {
   ]);
   assert.equal(createRequest.postDataJSON()?.language, "fr");
   assert.equal(createRequest.postDataJSON()?.blueprint, "lead_gen");
+  assert.equal(createRequest.postDataJSON()?.service_recipe, "contact");
   const created = await responseJson(createResponse, 201, "Create funnel");
   const createdV2FunnelId = created.funnel?.id;
   assert.equal(typeof createdV2FunnelId, "string");
