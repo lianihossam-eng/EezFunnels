@@ -185,6 +185,229 @@ fn v2_create_accepts_french_language_and_localizes_generated_public_copy() {
 }
 
 #[test]
+fn v2_service_recipes_build_distinct_localized_forms_without_changing_the_blueprint_contract() {
+    let cases = [
+        (
+            "contact",
+            "Service inquiry",
+            "project_details",
+            "Describe your project",
+            "Your request has been received.",
+            "Demande de service",
+            "project_details",
+            "Décrivez votre besoin",
+            "Votre demande a bien été reçue.",
+        ),
+        (
+            "quote_request",
+            "Estimate request",
+            "quote_scope",
+            "Describe the scope for an estimate",
+            "This confirms receipt only; no price or response date is promised.",
+            "Demande de devis",
+            "quote_scope",
+            "Décrivez le périmètre du devis",
+            "Ce message confirme seulement la réception ; aucun prix ni délai de réponse n’est promis.",
+        ),
+        (
+            "diagnostic_application",
+            "Diagnostic request",
+            "current_situation",
+            "Describe the current situation",
+            "This does not book a session or provide a diagnosis.",
+            "Demande de diagnostic",
+            "current_situation",
+            "Décrivez la situation actuelle",
+            "Cette confirmation ne réserve pas de séance et ne fournit pas de diagnostic.",
+        ),
+    ];
+
+    for (
+        service_recipe,
+        english_purpose,
+        english_field,
+        english_label,
+        english_boundary,
+        french_purpose,
+        french_field,
+        french_label,
+        french_boundary,
+    ) in cases
+    {
+        let parameters = serde_json::json!({
+            "name": "Service request",
+            "blueprint": "lead_gen",
+            "service_recipe": service_recipe,
+            "language": "en",
+        })
+        .to_string();
+        let prepared = FunnelCreateCommandV2::from_json(&parameters)
+            .expect("known service recipe")
+            .prepare(
+                format!("funnel-{service_recipe}"),
+                format!("revision-{service_recipe}"),
+            )
+            .expect("service recipe revision");
+        let document: Value =
+            serde_json::from_str(&prepared.revision().data_json).expect("V2 document JSON");
+        assert_eq!(document["blueprint_id"], "lead_gen");
+        assert!(document.get("service_recipe").is_none());
+        let form = &document["forms"][0];
+        assert_eq!(form["purpose"], english_purpose);
+        assert_eq!(form["marketing_opt_in"], Value::Null);
+        assert_eq!(form["fields"][1]["name"], "email");
+        assert_eq!(form["fields"][1]["required"], true);
+        assert_eq!(form["fields"][2]["name"], english_field);
+        assert_eq!(form["fields"][2]["label"], english_label);
+        assert_eq!(form["fields"][2]["required"], true);
+        assert_eq!(
+            form["request_consent"]["copy"],
+            "I have read and understood the information about this request."
+        );
+
+        let english_html = eez_render::document_v2::render_published(
+            prepared.revision().schema_version,
+            prepared.funnel().id.as_str(),
+            prepared.revision().id.as_str(),
+            &prepared.revision().data_json,
+            &prepared.revision().render_manifest_json,
+        )
+        .expect("English service recipe renders");
+        assert!(english_html.contains(english_label));
+        assert!(!english_html.contains("example.com"));
+        let english_record = RevisionRecord {
+            id: prepared.revision().id.clone(),
+            funnel_id: prepared.revision().funnel_id.clone(),
+            schema_version: prepared.revision().schema_version,
+            data_json: prepared.revision().data_json.clone(),
+            render_manifest_json: prepared.revision().render_manifest_json.clone(),
+            created_at: "2026-10-30T00:00:00Z".to_owned(),
+        };
+        let english_confirmation = render_published_revision(
+            &english_record,
+            prepared.funnel().id.as_str(),
+            prepared.funnel().slug.as_str(),
+            Some("request-received"),
+        )
+        .expect("English confirmation page renders");
+        assert!(english_confirmation.contains(english_boundary));
+
+        let french_parameters = serde_json::json!({
+            "name": "Demande de service",
+            "blueprint": "lead_gen",
+            "service_recipe": service_recipe,
+            "language": "fr",
+        })
+        .to_string();
+        let french_prepared = FunnelCreateCommandV2::from_json(&french_parameters)
+            .expect("known French service recipe")
+            .prepare(
+                format!("funnel-fr-{service_recipe}"),
+                format!("revision-fr-{service_recipe}"),
+            )
+            .expect("French service recipe revision");
+        let french_document: Value = serde_json::from_str(&french_prepared.revision().data_json)
+            .expect("French V2 document JSON");
+        let french_form = &french_document["forms"][0];
+        assert_eq!(french_form["purpose"], french_purpose);
+        assert_eq!(french_form["fields"][2]["name"], french_field);
+        assert_eq!(french_form["fields"][2]["label"], french_label);
+        assert_eq!(
+            french_form["request_consent"]["copy_version"],
+            "request-ack-service-fr"
+        );
+
+        let french_record = RevisionRecord {
+            id: french_prepared.revision().id.clone(),
+            funnel_id: french_prepared.revision().funnel_id.clone(),
+            schema_version: french_prepared.revision().schema_version,
+            data_json: french_prepared.revision().data_json.clone(),
+            render_manifest_json: french_prepared.revision().render_manifest_json.clone(),
+            created_at: "2026-10-30T00:00:00Z".to_owned(),
+        };
+        let french_confirmation = render_published_revision(
+            &french_record,
+            french_prepared.funnel().id.as_str(),
+            french_prepared.funnel().slug.as_str(),
+            Some("request-received"),
+        )
+        .expect("localized confirmation page renders");
+        assert!(french_confirmation.contains(french_boundary));
+    }
+}
+
+#[test]
+fn contact_recipe_preserves_the_existing_lead_gen_document_and_other_blueprints_reject_recipes() {
+    let current = FunnelCreateCommandV2::from_json(
+        r#"{"name":"Service request","blueprint":"lead_gen","language":"fr"}"#,
+    )
+    .expect("existing V2 request remains valid")
+    .prepare("funnel-contact", "revision-contact")
+    .expect("existing lead-gen starter");
+    let contact = FunnelCreateCommandV2::from_json(
+        r#"{"name":"Service request","blueprint":"lead_gen","language":"fr","service_recipe":"contact"}"#,
+    )
+    .expect("contact recipe remains valid")
+    .prepare("funnel-contact", "revision-contact")
+    .expect("contact recipe starter");
+
+    assert_eq!(current.revision().data_json, contact.revision().data_json);
+    assert!(FunnelCreateCommandV2::from_json(
+        r#"{"name":"Outline","blueprint":"tripwire","service_recipe":"contact"}"#
+    )
+    .is_err());
+    assert!(FunnelCreateCommandV2::from_json(
+        r#"{"name":"Unknown recipe","blueprint":"lead_gen","service_recipe":"quiz"}"#
+    )
+    .is_err());
+}
+
+#[test]
+fn v2_creation_recipe_parser_handles_deterministic_untrusted_inputs_without_panicking() {
+    let recipes = [
+        serde_json::json!("contact"),
+        serde_json::json!("quote_request"),
+        serde_json::json!("diagnostic_application"),
+        serde_json::json!("unknown"),
+        serde_json::Value::Null,
+        serde_json::json!(3),
+        serde_json::json!({"unexpected": true}),
+        serde_json::json!(["contact"]),
+    ];
+    let blueprints = [
+        serde_json::json!("lead_gen"),
+        serde_json::json!("tripwire"),
+        serde_json::Value::Null,
+        serde_json::json!(false),
+        serde_json::json!("unknown"),
+    ];
+    let names = [
+        serde_json::json!("A service request"),
+        serde_json::json!(""),
+        serde_json::json!(12),
+        serde_json::json!("😀".repeat(40)),
+    ];
+    let mut state = 0x19d0_19d0_5eed_u64;
+
+    for case_number in 0..10_000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let parameters = serde_json::json!({
+            "name": names[(state as usize) % names.len()],
+            "blueprint": blueprints[((state >> 8) as usize) % blueprints.len()],
+            "service_recipe": recipes[((state >> 16) as usize) % recipes.len()],
+        })
+        .to_string();
+
+        assert!(
+            std::panic::catch_unwind(|| FunnelCreateCommandV2::from_json(&parameters)).is_ok(),
+            "recipe parser panicked for case {case_number}: {parameters}"
+        );
+    }
+}
+
+#[test]
 fn service_starter_confirmation_uses_its_internal_page_route() {
     let prepared = FunnelCreateCommandV2::from_json(
         r#"{"name":"Service request","blueprint":"lead_gen","language":"en"}"#,

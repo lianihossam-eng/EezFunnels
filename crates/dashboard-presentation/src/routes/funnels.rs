@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use eez_domain::{document_v2::PublicLanguage, FunnelBlueprint};
+use eez_domain::{document_v2::PublicLanguage, FunnelBlueprint, ServiceRecipe};
 #[cfg(any(feature = "browser", test))]
 use std::future::Future;
 
@@ -85,6 +85,7 @@ pub(super) fn Funnels() -> Element {
     let mut create_open = use_signal(|| false);
     let mut funnel_name = use_signal(String::new);
     let mut blueprint = use_signal(|| FunnelBlueprint::Tripwire);
+    let mut service_recipe = use_signal(|| ServiceRecipe::Contact);
     let mut language = use_signal(|| PublicLanguage::English);
     let mut create_pending = use_signal(|| false);
     let mut create_error = use_signal(|| None::<String>);
@@ -240,13 +241,22 @@ pub(super) fn Funnels() -> Element {
                     #[cfg(feature = "browser")]
                     let request_blueprint = blueprint();
                     #[cfg(feature = "browser")]
+                    let request_service_recipe = service_recipe();
+                    #[cfg(feature = "browser")]
                     let request_language = language();
                     #[cfg(feature = "browser")]
-                    let request_body = serde_json::json!({
+                    let mut request_body = serde_json::json!({
                         "name": request_name.clone(),
                         "blueprint": request_blueprint.id(),
                         "language": request_language.as_str(),
-                    }).to_string();
+                    });
+                    #[cfg(feature = "browser")]
+                    if request_blueprint == FunnelBlueprint::LeadGen {
+                        request_body["service_recipe"] =
+                            serde_json::json!(request_service_recipe.as_str());
+                    }
+                    #[cfg(feature = "browser")]
+                    let request_body = request_body.to_string();
                     #[cfg(feature = "browser")]
                     let prepared_key = match prepare_idempotency_key(
                         "POST",
@@ -281,6 +291,7 @@ pub(super) fn Funnels() -> Element {
                                 create_open.set(false);
                                 funnel_name.set(String::new());
                                 blueprint.set(FunnelBlueprint::Tripwire);
+                                service_recipe.set(ServiceRecipe::Contact);
                                 language.set(PublicLanguage::English);
                                 create_idempotency_key.set(None);
                             },
@@ -298,6 +309,7 @@ pub(super) fn Funnels() -> Element {
                 CreateFields {
                     name: funnel_name(),
                     blueprint: blueprint(),
+                    service_recipe: service_recipe(),
                     language: language(),
                     pending: create_pending(),
                     on_name_change: move |value| {
@@ -308,6 +320,12 @@ pub(super) fn Funnels() -> Element {
                     on_blueprint_change: move |value| {
                         if create_pending() { return; }
                         blueprint.set(value);
+                        service_recipe.set(ServiceRecipe::Contact);
+                        create_idempotency_key.set(None);
+                    },
+                    on_service_recipe_change: move |value| {
+                        if create_pending() { return; }
+                        service_recipe.set(value);
                         create_idempotency_key.set(None);
                     },
                     on_language_change: move |value| {
@@ -494,10 +512,12 @@ fn can_create_funnel(name: &str) -> bool {
 fn CreateFields(
     name: String,
     blueprint: FunnelBlueprint,
+    service_recipe: ServiceRecipe,
     language: PublicLanguage,
     pending: bool,
     on_name_change: EventHandler<String>,
     on_blueprint_change: EventHandler<FunnelBlueprint>,
+    on_service_recipe_change: EventHandler<ServiceRecipe>,
     on_language_change: EventHandler<PublicLanguage>,
 ) -> Element {
     rsx! {
@@ -552,6 +572,51 @@ fn CreateFields(
                 }
             }
         }
+        if blueprint == FunnelBlueprint::LeadGen {
+            fieldset {
+                class: "blueprint-options service-recipe-options",
+                "aria-describedby": "service-recipe-description",
+                legend { "Choose a service recipe" }
+                p { id: "service-recipe-description", "These recipes create a new starting document; later recipe updates do not change funnels already created." }
+                for item in ServiceRecipe::ALL {
+                    label { class: "blueprint-option",
+                        "data-service-recipe": item.as_str(),
+                        input {
+                            r#type: "radio",
+                            name: "service_recipe",
+                            value: item.as_str(),
+                            checked: service_recipe == item,
+                            disabled: pending,
+                            onchange: move |_| on_service_recipe_change.call(item),
+                        }
+                        span { class: "blueprint-copy",
+                            strong { "{service_recipe_label(item)}" }
+                            span { "{service_recipe_description(item)}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn service_recipe_label(recipe: ServiceRecipe) -> &'static str {
+    match recipe {
+        ServiceRecipe::Contact => "Contact",
+        ServiceRecipe::QuoteRequest => "Quote request",
+        ServiceRecipe::DiagnosticApplication => "Diagnostic application",
+    }
+}
+
+fn service_recipe_description(recipe: ServiceRecipe) -> &'static str {
+    match recipe {
+        ServiceRecipe::Contact => "Collect an email and a message for a direct inquiry.",
+        ServiceRecipe::QuoteRequest => {
+            "Collect work scope and an optional timeline; no price or response date is promised."
+        }
+        ServiceRecipe::DiagnosticApplication => {
+            "Collect context for review; no session is booked and no score is assigned."
+        }
     }
 }
 
@@ -566,10 +631,12 @@ mod tests {
                 CreateFields {
                     name: "Offer".to_owned(),
                     blueprint: FunnelBlueprint::Tripwire,
+                    service_recipe: ServiceRecipe::Contact,
                     language: PublicLanguage::English,
                     pending: true,
                     on_name_change: move |_| {},
                     on_blueprint_change: move |_| {},
+                    on_service_recipe_change: move |_| {},
                     on_language_change: move |_| {},
                 }
             }
@@ -581,6 +648,37 @@ mod tests {
         assert_eq!(html.matches("disabled").count(), 7, "{html}");
         assert!(html.contains("Page outline only; checkout and payment are not included."));
         assert!(html.contains("Working service inquiry form with an offer page and confirmation."));
+    }
+
+    #[test]
+    fn service_recipes_are_available_only_for_the_service_blueprint() {
+        let mut virtual_dom = VirtualDom::new(|| {
+            rsx! {
+                CreateFields {
+                    name: "Consulting".to_owned(),
+                    blueprint: FunnelBlueprint::LeadGen,
+                    service_recipe: ServiceRecipe::QuoteRequest,
+                    language: PublicLanguage::English,
+                    pending: false,
+                    on_name_change: move |_| {},
+                    on_blueprint_change: move |_| {},
+                    on_service_recipe_change: move |_| {},
+                    on_language_change: move |_| {},
+                }
+            }
+        });
+        virtual_dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&virtual_dom);
+
+        assert!(html.contains("name=\"service_recipe\""), "{html}");
+        assert!(html.contains("value=\"contact\""), "{html}");
+        assert!(html.contains("value=\"quote_request\""), "{html}");
+        assert!(html.contains("value=\"diagnostic_application\""), "{html}");
+        assert!(html.contains("value=\"quote_request\" checked"), "{html}");
+        assert!(
+            html.contains("no price or response date is promised"),
+            "{html}"
+        );
     }
 
     #[test]
@@ -598,10 +696,12 @@ mod tests {
                 CreateFields {
                     name: "😀".repeat(31),
                     blueprint: FunnelBlueprint::Tripwire,
+                    service_recipe: ServiceRecipe::Contact,
                     language: PublicLanguage::English,
                     pending: false,
                     on_name_change: move |_| {},
                     on_blueprint_change: move |_| {},
+                    on_service_recipe_change: move |_| {},
                     on_language_change: move |_| {},
                 }
             }

@@ -213,6 +213,30 @@ pub enum FunnelBlueprint {
     LeadGen,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceRecipe {
+    Contact,
+    QuoteRequest,
+    DiagnosticApplication,
+}
+
+impl ServiceRecipe {
+    pub const ALL: [Self; 3] = [
+        Self::Contact,
+        Self::QuoteRequest,
+        Self::DiagnosticApplication,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Contact => "contact",
+            Self::QuoteRequest => "quote_request",
+            Self::DiagnosticApplication => "diagnostic_application",
+        }
+    }
+}
+
 impl FunnelBlueprint {
     pub const ALL: [Self; 5] = [
         Self::Tripwire,

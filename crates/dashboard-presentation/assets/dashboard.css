@@ -529,6 +529,23 @@ h1 {
   font-weight: 700;
 }
 
+.service-recipe-options {
+  margin-top: 0;
+  padding-top: 14px;
+  border-top: 1px solid #e5e9f1;
+}
+
+.service-recipe-options legend {
+  margin-bottom: 4px;
+}
+
+.service-recipe-options > p {
+  margin: 0 0 4px;
+  color: #5d687d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .blueprint-option {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);

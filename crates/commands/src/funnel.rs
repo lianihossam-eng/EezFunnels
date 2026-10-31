@@ -11,7 +11,7 @@ use eez_domain::{
     },
     DomainError, FormCompletionPeriod, FormSubmissionChannel, FormSubmissionStatus, Funnel,
     FunnelBlueprint, FunnelId, InteractionReportPeriod, RenderManifest, Revision, RevisionId,
-    Section, ThemePreset,
+    Section, ServiceRecipe, ThemePreset,
 };
 use eez_render::{
     content_config_hash, document_v2 as render_v2, FeatureItem, FooterLink, RenderError, Renderer,
@@ -180,6 +180,8 @@ pub struct FunnelCreateCommandV2 {
     blueprint: FunnelBlueprint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<PublicLanguage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service_recipe: Option<ServiceRecipe>,
 }
 
 impl FunnelCreateCommandV2 {
@@ -195,6 +197,9 @@ impl FunnelCreateCommandV2 {
         }
         let mut command: Self = serde_json::from_str(parameters)?;
         command.name = validate_name(&command.name)?.to_owned();
+        if command.service_recipe.is_some() && command.blueprint != FunnelBlueprint::LeadGen {
+            return Err(FunnelCommandError::InvalidParameters);
+        }
         Ok(command)
     }
 
@@ -212,11 +217,12 @@ impl FunnelCreateCommandV2 {
             &self.name,
             slug_from_name_and_id(&self.name, &funnel_id),
         )?;
-        let document = DocumentV2::starter_with_language(
+        let document = DocumentV2::starter_with_service_recipe(
             &funnel_id,
             blueprint_id(self.blueprint),
             ThemePreset::Minimal,
             self.language,
+            self.service_recipe,
         )
         .map_err(|_| FunnelCommandError::InvalidParameters)?;
         let prepared = render_v2::prepare_revision(&document, &revision_id)

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
+use crate::ServiceRecipe;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::starter::{service_request_confirmation, service_request_form, starter_section};
@@ -935,6 +936,21 @@ impl DocumentV2 {
         preset: crate::ThemePreset,
         language: Option<PublicLanguage>,
     ) -> Result<Self, DocumentError> {
+        Self::starter_with_service_recipe(funnel_id, blueprint_id, preset, language, None)
+    }
+
+    pub fn starter_with_service_recipe(
+        funnel_id: &str,
+        blueprint_id: BlueprintId,
+        preset: crate::ThemePreset,
+        language: Option<PublicLanguage>,
+        service_recipe: Option<ServiceRecipe>,
+    ) -> Result<Self, DocumentError> {
+        if service_recipe.is_some() && blueprint_id != BlueprintId::LeadGen {
+            return Err(DocumentError::new(
+                "validation/service_recipe_requires_lead_gen",
+            ));
+        }
         let funnel_id = V2FunnelId::parse(funnel_id.to_owned())?;
         let effective_language = language.unwrap_or(PublicLanguage::English);
         let section_types = match blueprint_id {
@@ -969,7 +985,14 @@ impl DocumentV2 {
         let sections = section_types
             .iter()
             .copied()
-            .map(|section_type| starter_section(section_type, blueprint_id, effective_language))
+            .map(|section_type| {
+                starter_section(
+                    section_type,
+                    blueprint_id,
+                    effective_language,
+                    service_recipe,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let page_id = PageId::parse("page-home")?;
         let mut pages = vec![PageV2 {
@@ -987,8 +1010,11 @@ impl DocumentV2 {
         }];
         let mut forms = Vec::new();
         if blueprint_id == BlueprintId::LeadGen {
-            forms.push(service_request_form(effective_language)?);
-            pages.push(service_request_confirmation(effective_language)?);
+            forms.push(service_request_form(effective_language, service_recipe)?);
+            pages.push(service_request_confirmation(
+                effective_language,
+                service_recipe,
+            )?);
         }
         let mut data = build_data_from_parts(
             funnel_id,

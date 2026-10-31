@@ -16,6 +16,12 @@ An owner can add a testimonial or case study as an evidence item. Each item has 
 
 Evidence images reuse assets already in the funnel's media library and require alternative text. The document stores an asset reference rather than a copy; missing media blocks rendering. Remote image URLs, video, and third-party media embeds are not supported by this block. Existing testimonial sections and old V2 documents remain readable. Evidence is an additive V2 block rendered by renderer-v12; older renderer profiles reject it instead of dropping its status or context.
 
+## Service recipes
+
+V2 funnel creation offers contact, estimate-request, and diagnostic-request recipes. Each recipe creates a fresh V2 document from the existing `lead_gen` blueprint with purpose-specific copy and form fields; the selected recipe is baked into that document and does not add a new blueprint ID or stored schema field. Existing documents and the five established blueprint IDs remain unchanged. Updating a recipe affects only funnels created afterward.
+
+Contact asks for a message, estimate requests collect scope and an optional timeline, and diagnostic requests collect the current situation and a goal to clarify. Request acknowledgement remains required and marketing consent remains off. An estimate request does not promise a price or response date. A diagnostic request does not book a session, score the applicant, or provide a diagnosis.
+
 ## Capability snapshot
 
 This table records the capabilities on the series baseline, commit 65feaeee, and the boundaries maintained by the public improvement series. It is a baseline snapshot; issue 82 is the live source for delivery progress.
